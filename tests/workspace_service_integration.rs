@@ -44,6 +44,25 @@ fn git_repo(root: &Path) -> std::path::PathBuf {
     repo
 }
 
+fn git_repo_with_direnv_runtime_cache(root: &Path) -> std::path::PathBuf {
+    let repo = git_repo(root);
+    // This is the shape that nix-direnv produces for a flake profile. Keep
+    // the fixture network- and Nix-independent so the Rust CI job can still
+    // exercise the real direnv authorization/export lifecycle.
+    let path = std::env::var("PATH").unwrap();
+    std::fs::write(
+        repo.join(".envrc"),
+        format!(
+            "export PATH=\"{path}\"\nmkdir -p .direnv\nln -sfn /nix/store/batey-test-profile .direnv/flake-profile-1-link\nln -sfn flake-profile-1-link .direnv/flake-profile\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(repo.join(".gitignore"), ".direnv/\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "add direnv runtime environment"]);
+    repo
+}
+
 fn hub(root: &Path) -> (Arc<HubService>, Arc<Store>) {
     let (hub, store, _) = hub_with_manager(root);
     (hub, store)
@@ -436,6 +455,47 @@ async fn deleting_clean_managed_chat_removes_worktree_but_preserves_branch() {
 }
 
 #[tokio::test]
+async fn deleting_initialized_managed_chat_removes_only_the_runtime_cache() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git_repo_with_direnv_runtime_cache(tmp.path());
+    let (hub, store, sessions) = hub_with_manager(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let chat = hub.create_chat(&project.id, "codex", None).await.unwrap();
+    let workspace = store.workspace(&chat.chat.id).unwrap().unwrap();
+    let branch = workspace.branch.clone().unwrap();
+    let worktree = Path::new(&workspace.workspace_path);
+    let session = sessions.get_by_id(&chat.chat.id).await.unwrap();
+
+    hub.authorize_chat_environment(&chat.chat.id, false)
+        .await
+        .unwrap();
+    session.ensure_running().await.unwrap();
+
+    assert_eq!(
+        git(
+            worktree,
+            &[
+                "status",
+                "--porcelain",
+                "--untracked-files=all",
+                "--ignored=matching",
+            ],
+        ),
+        "!! .direnv/"
+    );
+    assert!(worktree.join(".direnv/flake-profile").is_symlink());
+    assert!(worktree.join(".direnv/flake-profile-1-link").is_symlink());
+
+    hub.delete_chat(&chat.chat.id).await.unwrap();
+
+    assert!(!worktree.exists());
+    assert!(store.chat(&chat.chat.id).is_err());
+    assert_eq!(git(&repo, &["rev-parse", "--verify", &branch]).len(), 40);
+}
+
+#[tokio::test]
 async fn deleting_dirty_managed_chat_preserves_everything() {
     let tmp = tempfile::tempdir().unwrap();
     let repo = git_repo(tmp.path());
@@ -480,6 +540,30 @@ async fn deleting_untracked_managed_chat_is_refused() {
     assert!(store.chat(&chat.chat.id).is_ok());
     assert!(worktree.join("untracked.txt").is_file());
     assert!(worktree.is_dir());
+}
+
+#[tokio::test]
+async fn deleting_managed_chat_with_an_unrelated_ignored_artifact_is_refused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git_repo(tmp.path());
+    std::fs::write(repo.join(".gitignore"), ".agent-cache/\n").unwrap();
+    git(&repo, &["add", ".gitignore"]);
+    git(&repo, &["commit", "-m", "ignore agent cache"]);
+    let (hub, store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let chat = hub.create_chat(&project.id, "codex", None).await.unwrap();
+    let workspace = store.workspace(&chat.chat.id).unwrap().unwrap();
+    let worktree = Path::new(&workspace.workspace_path);
+    std::fs::create_dir_all(worktree.join(".agent-cache")).unwrap();
+    std::fs::write(worktree.join(".agent-cache/state.json"), "agent state\n").unwrap();
+
+    let error = hub.delete_chat(&chat.chat.id).await.unwrap_err();
+
+    assert!(matches!(error, ServiceError::Conflict(_)));
+    assert!(store.chat(&chat.chat.id).is_ok());
+    assert!(worktree.join(".agent-cache/state.json").is_file());
 }
 
 #[tokio::test]
@@ -770,6 +854,34 @@ async fn deleting_project_cascades_many_managed_chats_and_their_worktrees() {
         assert!(!Path::new(&workspace.workspace_path).exists());
     }
     assert!(repo.is_dir(), "project files must never be deleted");
+}
+
+#[tokio::test]
+async fn project_deletion_preflight_allows_the_same_runtime_cache_as_chat_deletion() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git_repo_with_direnv_runtime_cache(tmp.path());
+    let (hub, store, sessions) = hub_with_manager(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let chat = hub.create_chat(&project.id, "codex", None).await.unwrap();
+    let workspace = store.workspace(&chat.chat.id).unwrap().unwrap();
+    let worktree = Path::new(&workspace.workspace_path);
+    let session = sessions.get_by_id(&chat.chat.id).await.unwrap();
+    hub.authorize_chat_environment(&chat.chat.id, false)
+        .await
+        .unwrap();
+    session.ensure_running().await.unwrap();
+    assert_eq!(
+        git(worktree, &["status", "--porcelain", "--ignored=matching"]),
+        "!! .direnv/"
+    );
+
+    hub.delete_project(&project.id).await.unwrap();
+
+    assert!(hub.get_project(&project.id).is_err());
+    assert!(store.chat(&chat.chat.id).is_err());
+    assert!(!worktree.exists());
 }
 
 #[tokio::test]

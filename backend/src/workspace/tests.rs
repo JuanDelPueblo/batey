@@ -143,6 +143,62 @@ fn managed_recovery_and_removal() {
     ));
 }
 
+#[cfg(unix)]
+#[test]
+fn only_the_generated_nix_direnv_profile_is_disposable() {
+    let td = init_repo();
+    fs::write(td.path().join(".gitignore"), ".direnv/\n").unwrap();
+    git(td.path(), &["add", ".gitignore"]);
+    git(td.path(), &["commit", "-m", "ignore direnv cache"]);
+    let base = resolve_ref(td.path(), "main").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let managed = provision_managed(td.path(), ws.path(), "runtime", &base).unwrap();
+    let cache = managed.worktree.join(".direnv");
+    fs::create_dir(&cache).unwrap();
+    std::os::unix::fs::symlink(
+        "/nix/store/batey-test-profile",
+        cache.join("flake-profile-1-link"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink("flake-profile-1-link", cache.join("flake-profile")).unwrap();
+
+    git(&managed.worktree, &["status", "--porcelain"]);
+    assert!(!worktree_dirty(&managed.worktree).unwrap());
+
+    fs::remove_file(cache.join("flake-profile")).unwrap();
+    std::os::unix::fs::symlink("flake-profile-2-link", cache.join("flake-profile")).unwrap();
+    assert!(worktree_dirty(&managed.worktree).unwrap());
+    fs::remove_file(cache.join("flake-profile")).unwrap();
+    std::os::unix::fs::symlink("flake-profile-1-link", cache.join("flake-profile")).unwrap();
+
+    fs::remove_file(cache.join("flake-profile-1-link")).unwrap();
+    let important = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(important.path(), cache.join("flake-profile-1-link")).unwrap();
+    assert!(worktree_dirty(&managed.worktree).unwrap());
+
+    fs::write(cache.join("agent-note.txt"), "keep\n").unwrap();
+    assert!(worktree_dirty(&managed.worktree).unwrap());
+}
+
+#[test]
+fn unrelated_ignored_runtime_like_content_is_not_disposable() {
+    let td = init_repo();
+    fs::write(td.path().join(".gitignore"), ".agent-cache/\n").unwrap();
+    git(td.path(), &["add", ".gitignore"]);
+    git(td.path(), &["commit", "-m", "ignore agent cache"]);
+    let base = resolve_ref(td.path(), "main").unwrap();
+    let ws = tempfile::tempdir().unwrap();
+    let managed = provision_managed(td.path(), ws.path(), "ignored", &base).unwrap();
+    fs::create_dir_all(managed.worktree.join(".agent-cache")).unwrap();
+    fs::write(
+        managed.worktree.join(".agent-cache/state.json"),
+        "agent state\n",
+    )
+    .unwrap();
+
+    assert!(worktree_dirty(&managed.worktree).unwrap());
+}
+
 #[test]
 fn remove_missing_worktree_preserves_branch() {
     let td = init_repo();

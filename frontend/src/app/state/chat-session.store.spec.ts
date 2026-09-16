@@ -30,6 +30,7 @@ describe('ChatSessionStore', () => {
     clearSavedConfig: ReturnType<typeof vi.fn>;
     deleteChat: ReturnType<typeof vi.fn>;
     promptChat: ReturnType<typeof vi.fn>;
+    respondPermission: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -49,6 +50,7 @@ describe('ChatSessionStore', () => {
       clearSavedConfig: vi.fn(async () => undefined),
       deleteChat: vi.fn(async () => undefined),
       promptChat: vi.fn(async () => undefined),
+      respondPermission: vi.fn(async () => undefined),
     };
     socket = { waitForBaseline: vi.fn(async () => 100) };
     TestBed.configureTestingModule({
@@ -226,6 +228,37 @@ describe('ChatSessionStore', () => {
       process_state: 'RUNNING',
       turn_state: 'PROMPTING',
     });
+  });
+
+  it('resolves a permission locally after API success and stays working on confirmation', async () => {
+    store.chatsByProject.set({ 'project-1': [{ ...chat, turn_state: 'PROMPTING' }] });
+    const event = (seq: number, payload: SessionEvent['payload']): SessionEvent => ({
+      seq,
+      session_id: 'chat-1',
+      agent: 'codex',
+      timestamp: `2026-01-01T00:00:0${seq}Z`,
+      payload,
+    });
+    store.handleIncomingEvent(event(1, {
+      type: 'permission_request',
+      id: 'permission-1',
+      method: 'edit',
+      description: 'Edit',
+      options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+    }));
+
+    await store.respondPermission('chat-1', 'permission-1', 'allow-once');
+    expect(api.respondPermission).toHaveBeenCalledWith('chat-1', 'permission-1', 'allow-once');
+    expect(store.chatActivity('chat-1')).toBe('working');
+    expect(store.reducersByChat()['chat-1'].items()[0]).toMatchObject({
+      entries: [{ responded: true, decision: 'Allow once', decisionOptionId: 'allow-once' }],
+    });
+
+    store.handleIncomingEvent(event(2, {
+      type: 'permission_response', id: 'permission-1', option_id: 'allow-once',
+    }));
+    expect(store.reducersByChat()['chat-1'].items()).toHaveLength(1);
+    expect(store.chatActivity('chat-1')).toBe('working');
   });
 
   it('moves a chat to the newest position when a live user message arrives', () => {

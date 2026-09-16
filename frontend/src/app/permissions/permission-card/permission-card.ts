@@ -17,6 +17,10 @@ export class PermissionCardComponent {
   readonly permission = input.required<TurnEntryPermission>();
   readonly chatId = input('');
   readonly responding = signal(false);
+  readonly responseError = signal<string | null>(null);
+  readonly selectedOptionId = signal<string | null>(null);
+  private readonly resolvedRequestId = signal<string | null>(null);
+  private readonly resolvedDecision = signal<string | null>(null);
   private readonly state = inject(AppStateService);
 
   readonly isPlanApproval = computed(
@@ -28,17 +32,44 @@ export class PermissionCardComponent {
   );
 
   readonly icon = computed(() => (this.isPlanApproval() ? 'assignment_turned_in' : 'shield_person'));
+  readonly isResolved = computed(
+    () => this.permission().responded || this.resolvedRequestId() === this.permission().requestId,
+  );
+  readonly displayDecision = computed(
+    () => this.permission().decision || this.resolvedDecision() || 'Handled',
+  );
 
+  optionScope(option: { kind: string }): string | null {
+    switch (option.kind) {
+      case 'allow_once':
+      case 'reject_once':
+        return 'One time';
+      case 'allow_always':
+      case 'reject_always':
+        return 'Persistent';
+      default:
+        return null;
+    }
+  }
+
+  private optionName(optionId: string): string {
+    return this.permission().options?.find((option) => option.optionId === optionId)?.name ?? optionId;
+  }
 
   async respond(optionId: string): Promise<void> {
-    if (!this.chatId() || !this.permission().requestId) return;
+    if (this.responding() || this.isResolved() || !this.chatId() || !this.permission().requestId) return;
     this.responding.set(true);
+    this.selectedOptionId.set(optionId);
+    this.responseError.set(null);
     try {
       await this.state.respondPermission(this.chatId(), this.permission().requestId, optionId);
+      this.resolvedRequestId.set(this.permission().requestId);
+      this.resolvedDecision.set(this.optionName(optionId));
     } catch (error) {
-      console.error('Failed to respond to permission request', error);
+      this.responseError.set(error instanceof Error ? error.message : 'Could not send the permission response. Try again.');
     } finally {
       this.responding.set(false);
+      this.selectedOptionId.set(null);
     }
   }
 }

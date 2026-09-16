@@ -124,6 +124,7 @@ export function seedActiveTurn(state, chat, seed) {
   const turn = {
     cancelled: false,
     permissionId: seed.kind === 'waiting' ? seed.permission_id : null,
+    permissionOptionIds: new Set(['seed-allow-once', 'seed-reject-once']),
     resolvePermission: null,
     resolveElicitation: null,
     resolveHold: null,

@@ -42,6 +42,48 @@ describe('EventReducer', () => {
     expect((reducer.items()[0] as { entries: Array<{ responded?: boolean; decision?: string }> }).entries[0]).toMatchObject({ responded: true, decision: 'allow-once' });
   });
 
+  it('resolves locally before the streamed confirmation without reopening a turn', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'permission_request', {
+      id: 'permission-1',
+      method: 'edit',
+      description: 'Edit',
+      options: [
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'allow-always', name: 'Always allow', kind: 'allow_always' },
+      ],
+    }));
+
+    expect(reducer.resolvePermission('permission-1', 'allow-always')).toBe(true);
+    expect(reducer.items()).toHaveLength(1);
+    expect((reducer.items()[0] as unknown as { type: string; status: string; entries: Array<Record<string, unknown>> }))
+      .toMatchObject({ type: 'turn', status: 'in_progress' });
+    expect((reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries[0])
+      .toMatchObject({ responded: true, decision: 'Always allow', decisionOptionId: 'allow-always' });
+
+    reducer.ingest(event(2, 'permission_response', { id: 'permission-1', option_id: 'allow-always' }));
+    expect(reducer.items()).toHaveLength(1);
+    expect((reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries[0])
+      .toMatchObject({ responded: true, decision: 'Always allow', decisionOptionId: 'allow-always' });
+  });
+
+  it('keeps a resolved permission resolved during historical replay', () => {
+    const reducer = new EventReducer([
+      event(1, 'permission_request', {
+        id: 'permission-1', method: 'edit', description: 'Edit',
+        options: [{ optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' }],
+      }),
+      event(2, 'permission_response', { id: 'permission-1', option_id: 'allow-once' }),
+      event(3, 'turn_complete', { stop_reason: 'end_turn' }),
+    ]);
+
+    expect(reducer.items()).toHaveLength(1);
+    expect((reducer.items()[0] as unknown as { status: string; entries: Array<Record<string, unknown>> }))
+      .toMatchObject({ status: 'complete' });
+    expect((reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries[0])
+      .toMatchObject({ responded: true, decision: 'Allow once', decisionOptionId: 'allow-once' });
+  });
+
   it.each([
     [true, 'Allowed'],
     [false, 'Denied'],

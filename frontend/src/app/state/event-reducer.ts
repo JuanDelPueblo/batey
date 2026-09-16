@@ -4,6 +4,7 @@ import type {
   DisplayItem,
   DisplayTurn,
   DisplayUserMessage,
+  RichContentBlock,
   SessionEvent,
   TurnEntry,
   TurnEntryTool,
@@ -216,10 +217,14 @@ export class EventReducer {
           (last as { messageId?: string }).messageId === messageId)
       ) {
         // Preserve the ID on the merged entry for later chunks.
+        // Adjacent text blocks are streaming deltas of one Markdown region,
+        // so concatenate them. Non-text blocks always break the run.
+        const previousContent = (last as { content?: RichContentBlock[] }).content;
+        const mergedContent = this.mergeContentBlocks(previousContent, content);
         const merged: TurnEntry = {
           ...last,
           text: (last as { text: string }).text + text,
-          ...(content ? { content: [...((last as { content?: unknown[] }).content ?? []), ...content] } : {}),
+          ...(mergedContent ? { content: mergedContent } : {}),
           ...(messageId != null ? { messageId } : {}),
         } as TurnEntry;
         return { ...turn, entries: [...entries.slice(0, -1), merged] };
@@ -486,11 +491,40 @@ export class EventReducer {
     return -1;
   }
 
-  private contentBlocks(value: unknown): import('../core/api/types').RichContentBlock[] | undefined {
+  private contentBlocks(value: unknown): RichContentBlock[] | undefined {
     if (!Array.isArray(value)) return undefined;
-    return value.filter((block): block is import('../core/api/types').RichContentBlock =>
+    return value.filter((block): block is RichContentBlock =>
       !!block && typeof block === 'object' && typeof (block as { type?: unknown }).type === 'string',
     );
+  }
+
+  /**
+   * Merges streamed rich-content deltas into display regions.
+   *
+   * Real agents send one text fragment per `agent_message_chunk` /
+   * `agent_thought_chunk`. Concatenating adjacent text blocks keeps one
+   * coherent Markdown string per region, so `**bo` + `ld**` renders as bold
+   * instead of two malformed fragments. An image, audio block, embedded
+   * resource or resource link always breaks the run: text A, image, text B
+   * stays three regions. Only the boundary blocks can merge; the rest keep
+   * their order.
+   */
+  private mergeContentBlocks(
+    previous: RichContentBlock[] | undefined,
+    incoming: RichContentBlock[] | undefined,
+  ): RichContentBlock[] | undefined {
+    if (!incoming || incoming.length === 0) return previous;
+    if (!previous || previous.length === 0) return [...incoming];
+    const prevLast = previous[previous.length - 1];
+    const nextFirst = incoming[0];
+    if (prevLast.type === 'text' && nextFirst.type === 'text') {
+      const mergedText: RichContentBlock = {
+        ...prevLast,
+        text: prevLast.text + nextFirst.text,
+      };
+      return [...previous.slice(0, -1), mergedText, ...incoming.slice(1)];
+    }
+    return [...previous, ...incoming];
   }
 
   private stringValue(value: unknown): string | undefined {

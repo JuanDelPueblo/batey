@@ -26,6 +26,7 @@ export function scenarioFor(text) {
   if (lower.includes('modes')) return 'modes';
   if (lower.includes('usage')) return 'usage';
   if (lower.includes('message-id')) return 'message-id';
+  if (lower.includes('streaming-markdown') || lower.includes('markdown') || lower.includes('stream')) return 'streaming-markdown';
   if (lower.includes('plan')) return 'plan';
   if (lower.includes('rich')) return 'rich';
   if (lower.includes('terminal') || lower.includes('task')) return 'terminal';
@@ -388,6 +389,49 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
     await pause(100);
     emit({ type: 'message_chunk', text: 'A new message.', message_id: 'msg-2' });
     await pause(100);
+    emit({ type: 'turn_complete', stop_reason: 'end_turn' });
+    return;
+  }
+
+  if (scenario === 'streaming-markdown') {
+    // Streams the same Markdown a real agent sends as token fragments, so
+    // the display layer must merge adjacent text blocks into one coherent
+    // document instead of parsing each fragment alone. Comparable to Codex,
+    // Claude and OpenCode chunking.
+    const thoughtId = 'thought-stream-1';
+    for (const fragment of ['The plan is **bo', 'ld** and `co', 'de`.']) {
+      if (turn.cancelled) return finishCancelled(emit);
+      emit({ type: 'thought_chunk', text: fragment, message_id: thoughtId, content: [{ type: 'text', text: fragment }] });
+      await pause(60);
+    }
+    const messageId = 'msg-stream-1';
+    const fragments = [
+      '## Summary\n',
+      'This fixes **bo',
+      'ld** and `co',
+      'de`.\n',
+      '```rust\nfn ',
+      'main() {}\n```\n',
+      '- item 1\n- it',
+      'em 2\n',
+    ];
+    for (const fragment of fragments) {
+      if (turn.cancelled) return finishCancelled(emit);
+      emit({ type: 'message_chunk', text: fragment, message_id: messageId, content: [{ type: 'text', text: fragment }] });
+      await pause(60);
+    }
+    if (turn.cancelled) return finishCancelled(emit);
+    // Text, image, text stays three regions; the image breaks text merging.
+    const mixedId = 'msg-stream-2';
+    emit({ type: 'message_chunk', text: 'Before screenshot ', message_id: mixedId, content: [{ type: 'text', text: 'Before screenshot ' }] });
+    await pause(60);
+    emit({
+      type: 'message_chunk', text: '', message_id: mixedId,
+      content: [{ type: 'image', data: RICH_HISTORY_CONTENT[1].data, mimeType: 'image/png' }],
+    });
+    await pause(60);
+    emit({ type: 'message_chunk', text: ' after screenshot.', message_id: mixedId, content: [{ type: 'text', text: ' after screenshot.' }] });
+    await pause(60);
     emit({ type: 'turn_complete', stop_reason: 'end_turn' });
     return;
   }

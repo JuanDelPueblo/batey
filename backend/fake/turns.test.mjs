@@ -25,6 +25,7 @@ describe('fake scripted turns', () => {
     assert.equal(scenarioFor('run a terminal task'), 'terminal');
     assert.equal(scenarioFor('a long answer'), 'long');
     assert.equal(scenarioFor('make it error'), 'error');
+    assert.equal(scenarioFor('streaming-markdown demo'), 'streaming-markdown');
   });
 
   it('creates rich output and a running terminal task through normal events', async () => {
@@ -55,5 +56,28 @@ describe('fake scripted turns', () => {
     const history = historyFor(state, chat.id);
     assert.ok(history.some((event) => event.payload.type === 'error'));
     assert.ok(history.some((event) => event.payload.type === 'turn_complete' && event.payload.stop_reason === 'error'));
+  });
+
+  it('streams split Markdown as text deltas with stable message ids', async () => {
+    const state = new FakeState();
+    const projectId = [...state.projects.values()][0].id;
+    const chat = state.createChat(projectId, 'codex', 'Manual streaming-markdown scenario');
+    startTurn(state, chat, 'streaming-markdown demo', 0);
+    await waitFor(() => !isRunning(chat.id));
+    const history = historyFor(state, chat.id);
+    const thought = history.filter((event) => event.payload.type === 'thought_chunk');
+    assert.ok(thought.length > 1);
+    assert.ok(thought.every((event) => event.payload.message_id === 'thought-stream-1'));
+    assert.ok(thought.every((event) => event.payload.content?.[0]?.type === 'text'));
+    const joined = thought.map((event) => event.payload.content[0].text).join('');
+    assert.ok(joined.includes('**bold**'));
+    const chunks = history.filter((event) => event.payload.type === 'message_chunk' && event.payload.message_id === 'msg-stream-1');
+    assert.ok(chunks.length > 1);
+    assert.equal(chunks.map((event) => event.payload.content[0].text).join(''), '## Summary\nThis fixes **bold** and `code`.\n```rust\nfn main() {}\n```\n- item 1\n- item 2\n');
+    const mixed = history.filter((event) => event.payload.type === 'message_chunk' && event.payload.message_id === 'msg-stream-2');
+    assert.equal(mixed.length, 3);
+    assert.equal(mixed[0].payload.content[0].type, 'text');
+    assert.equal(mixed[1].payload.content[0].type, 'image');
+    assert.equal(mixed[2].payload.content[0].type, 'text');
   });
 });

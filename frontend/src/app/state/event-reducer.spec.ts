@@ -168,4 +168,169 @@ describe('EventReducer', () => {
     reducer.ingest(event(4, 'session_info', { title: 'Hi' }));
     expect(reducer.items()).toHaveLength(0);
   });
+
+  it('merges split emphasis across streamed text content blocks', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '**bo', message_id: 'm1', content: [{ type: 'text', text: '**bo' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'ld**', message_id: 'm1', content: [{ type: 'text', text: 'ld**' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ text: string; content?: Array<{ type: string; text?: string }> }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].text).toBe('**bold**');
+    expect(entries[0].content).toEqual([{ type: 'text', text: '**bold**' }]);
+  });
+
+  it('merges split inline code across streamed chunks', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '`co', message_id: 'm1', content: [{ type: 'text', text: '`co' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'de`', message_id: 'm1', content: [{ type: 'text', text: 'de`' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: Array<{ type: string; text?: string }> }> }).entries;
+    expect(entries[0].content).toEqual([{ type: 'text', text: '`code`' }]);
+  });
+
+  it('merges a fenced code block split across chunks', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '```rust\nfn ', message_id: 'm1', content: [{ type: 'text', text: '```rust\nfn ' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'main() {}\n```', message_id: 'm1', content: [{ type: 'text', text: 'main() {}\n```' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: Array<{ type: string; text?: string }> }> }).entries;
+    expect(entries[0].content).toEqual([{ type: 'text', text: '```rust\nfn main() {}\n```' }]);
+  });
+
+  it('merges a list split across chunks into one Markdown region', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '- item 1\n- it', message_id: 'm1', content: [{ type: 'text', text: '- item 1\n- it' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'em 2\n', message_id: 'm1', content: [{ type: 'text', text: 'em 2\n' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: Array<{ type: string; text?: string }> }> }).entries;
+    expect(entries[0].content).toEqual([{ type: 'text', text: '- item 1\n- item 2\n' }]);
+  });
+
+  it('merges a heading split across chunks', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '## Sum', message_id: 'm1', content: [{ type: 'text', text: '## Sum' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'mary\n', message_id: 'm1', content: [{ type: 'text', text: 'mary\n' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: Array<{ type: string; text?: string }> }> }).entries;
+    expect(entries[0].content).toEqual([{ type: 'text', text: '## Summary\n' }]);
+  });
+
+  it('keeps text/image/text as three regions and never merges across media', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: 'A', message_id: 'm1', content: [{ type: 'text', text: 'A' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: '', message_id: 'm1', content: [{ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }],
+    }));
+    reducer.ingest(event(3, 'message_chunk', {
+      text: 'B', message_id: 'm1', content: [{ type: 'text', text: 'B' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: unknown[] }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toEqual([
+      { type: 'text', text: 'A' },
+      { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+      { type: 'text', text: 'B' },
+    ]);
+  });
+
+  it('never merges text across audio, resource or resource_link blocks', () => {
+    for (const barrier of [
+      { type: 'audio', data: 'SUQz', mimeType: 'audio/mpeg' },
+      { type: 'resource_link', name: 'safe', uri: 'https://example.test' },
+      { type: 'resource', resource: { uri: 'attachment://note.txt', mimeType: 'text/plain', text: 'note' } },
+    ]) {
+      const reducer = new EventReducer();
+      reducer.ingest(event(1, 'message_chunk', {
+        text: 'before', message_id: 'm1', content: [{ type: 'text', text: 'before' }],
+      }));
+      reducer.ingest(event(2, 'message_chunk', { text: '', message_id: 'm1', content: [barrier] }));
+      reducer.ingest(event(3, 'message_chunk', {
+        text: 'after', message_id: 'm1', content: [{ type: 'text', text: 'after' }],
+      }));
+      const entries = (reducer.items()[0] as { entries: Array<{ content?: unknown[] }> }).entries;
+      expect(entries[0].content).toEqual([
+        { type: 'text', text: 'before' },
+        barrier,
+        { type: 'text', text: 'after' },
+      ]);
+    }
+  });
+
+  it('aggregates thought chunks with the same text merging', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'thought_chunk', {
+      text: '**bo', message_id: 't1', content: [{ type: 'text', text: '**bo' }],
+    }));
+    reducer.ingest(event(2, 'thought_chunk', {
+      text: 'ld**', message_id: 't1', content: [{ type: 'text', text: 'ld**' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ type: string; text: string; content?: Array<{ type: string; text?: string }> }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].type).toBe('thought_chunk');
+    expect(entries[0].content).toEqual([{ type: 'text', text: '**bold**' }]);
+  });
+
+  it('keeps thought text/image/text as three regions', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'thought_chunk', {
+      text: 'A', message_id: 't1', content: [{ type: 'text', text: 'A' }],
+    }));
+    reducer.ingest(event(2, 'thought_chunk', {
+      text: '', message_id: 't1', content: [{ type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }],
+    }));
+    reducer.ingest(event(3, 'thought_chunk', {
+      text: 'B', message_id: 't1', content: [{ type: 'text', text: 'B' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: unknown[] }> }).entries;
+    expect(entries[0].content).toEqual([
+      { type: 'text', text: 'A' },
+      { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' },
+      { type: 'text', text: 'B' },
+    ]);
+  });
+
+  it('does not merge text content across different message ids', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '**bo', message_id: 'm1', content: [{ type: 'text', text: '**bo' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'ld**', message_id: 'm2', content: [{ type: 'text', text: 'ld**' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: unknown[] }> }).entries;
+    expect(entries).toHaveLength(2);
+    expect(entries[0].content).toEqual([{ type: 'text', text: '**bo' }]);
+    expect(entries[1].content).toEqual([{ type: 'text', text: 'ld**' }]);
+  });
+
+  it('keeps legacy adjacency merging for agents that omit message ids', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'message_chunk', {
+      text: '**bo', content: [{ type: 'text', text: '**bo' }],
+    }));
+    reducer.ingest(event(2, 'message_chunk', {
+      text: 'ld**', content: [{ type: 'text', text: 'ld**' }],
+    }));
+    const entries = (reducer.items()[0] as { entries: Array<{ content?: unknown[] }> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0].content).toEqual([{ type: 'text', text: '**bold**' }]);
+  });
 });

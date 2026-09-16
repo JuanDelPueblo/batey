@@ -116,6 +116,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [
         { id: 'oauth', name: 'OAuth', type: 'agent', supported: true },
         { id: 'key', name: 'API key', type: 'terminal', supported: true },
@@ -150,6 +151,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authentication_required',
+      freshness: 'cached',
       methods: [],
     });
     let text = fixture.nativeElement.textContent as string;
@@ -174,6 +176,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authenticated',
+      freshness: 'cached',
       methods: [],
     });
     text = fixture.nativeElement.textContent as string;
@@ -192,6 +195,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -209,6 +213,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authenticated',
+      freshness: 'cached',
       methods: [
         { id: 'oauth', name: 'OAuth', type: 'agent', supported: true },
         { id: 'tui', name: 'Terminal', type: 'terminal', supported: true },
@@ -230,6 +235,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authentication_required',
+      freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -244,6 +250,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [
         {
           id: 'interactive',
@@ -270,6 +277,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [{ id: 'tui', name: 'Terminal', type: 'terminal', supported: true }],
     });
     fixture.componentRef.setInput('terminalFlow', {
@@ -294,6 +302,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: false,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -314,6 +323,41 @@ describe('AgentCardComponent', () => {
     expect(retryAuth).toHaveBeenCalled();
   });
 
+  it('truthfully reports a never-checked agent instead of claiming no methods exist', () => {
+    const retryAuth = vi.fn();
+    fixture.componentInstance.retryAuth.subscribe(retryAuth);
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      freshness: 'unknown',
+      methods: [],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Sign-in status has not been checked yet.');
+    expect(text).not.toContain('No sign-in options available.');
+    const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
+      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check')) as HTMLButtonElement;
+    expect(button).toBeDefined();
+    button.click();
+    expect(retryAuth).toHaveBeenCalled();
+  });
+
+  it('shows stale authenticated evidence as historical, never as a fresh check', () => {
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'authenticated',
+      freshness: 'stale',
+      methods: [],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Previously signed in');
+    expect(text).not.toContain('Authenticated');
+  });
+
   it('shows checking sign-in while a protocol flow starts, unless the flow is available', () => {
     fixture.componentRef.setInput('agent', summary('builtin'));
     fixture.componentRef.setInput('auth', {
@@ -321,6 +365,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: false,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     fixture.componentRef.setInput('protocolLoading', true);
@@ -345,6 +390,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const rows = fixture.nativeElement.querySelectorAll('.method') as NodeListOf<HTMLElement>;
@@ -371,6 +417,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [],
     });
     const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
@@ -400,6 +447,7 @@ describe('AgentCardComponent', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')).map(
@@ -420,6 +468,7 @@ describe('AgentCardComponent', () => {
       logout_supported: false,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     fixture.componentRef.setInput('protocolFlow', {

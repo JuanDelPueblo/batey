@@ -502,17 +502,18 @@ async fn zero_exit_succeeds_and_reinitializes_without_authenticate() {
     harness.sessions.shutdown_all().await;
 }
 
-/// Observing `succeeded` guarantees the next authentication read is fresh.
+/// Observing `succeeded` guarantees durable evidence at once, even before
+/// the background re-probe finishes.
 ///
-/// Starting a flow force-probes and caches the pre-login state. The success
-/// must drop that entry inside the transition, so a browser that reacts to
-/// the success immediately never receives the stale pre-login methods.
-///
-/// The agent initializes slowly, so the post-success refresh probe cannot
-/// finish first. A read that hits the stale cache would answer instantly
-/// with the pre-login methods and fail this test.
+/// A plain cache-only read never spawns a process, so the pre-login view
+/// answers `unknown` with no methods until something actually probes this
+/// agent. The success hook records observed `authenticated` synchronously,
+/// inside the transition, so a browser that reacts to the success
+/// immediately sees that evidence without waiting for the slow background
+/// re-probe. The explicit refresh endpoint, once that re-probe lands,
+/// reports the post-login methods.
 #[tokio::test]
-async fn observing_succeeded_guarantees_a_fresh_auth_read() {
+async fn observing_succeeded_guarantees_durable_evidence_at_once() {
     let root_dir = tempfile::tempdir().unwrap();
     let root = root_dir.path();
     let history = root.join("demo");
@@ -531,10 +532,11 @@ async fn observing_succeeded_guarantees_a_fresh_auth_read() {
             .any(|method| method["id"] == "tui")
     };
 
-    // The pre-login view advertises the terminal method.
+    // A plain read never probes: this agent was never checked yet.
     let (status, view) = harness.request("GET", "/api/agents/demo/auth").await;
     assert_eq!(status, 200, "{view}");
-    assert!(advertises_terminal(&view["methods"]), "{view}");
+    assert_eq!(view["freshness"], "unknown");
+    assert!(view["methods"].as_array().unwrap().is_empty(), "{view}");
 
     let flow_id = harness.start_flow("demo").await;
     let mut socket = harness.connect(&flow_id).await;
@@ -542,14 +544,28 @@ async fn observing_succeeded_guarantees_a_fresh_auth_read() {
     send(&mut socket, json!({"type": "input", "data": "ok\n"})).await;
     wait_for_state(&mut socket, "succeeded").await;
 
-    // The browser reacts to the success immediately. The stored credentials
-    // changed, so the agent no longer advertises the terminal method.
+    // The browser reacts to the success immediately: durable evidence is
+    // available at once, from a plain cache read, with no process spawned.
     let (status, view) = harness.request("GET", "/api/agents/demo/auth").await;
     assert_eq!(status, 200, "{view}");
-    assert!(
-        !advertises_terminal(&view["methods"]),
-        "a read after success received the stale pre-login methods: {view}"
-    );
+    assert_eq!(view["observed_state"], "authenticated");
+
+    // The stored credentials changed, so an explicit refresh (each probe is
+    // slow, so a few tries are enough) no longer advertises the terminal
+    // method.
+    let mut refreshed = None;
+    for _ in 0..10 {
+        let (status, view) = harness
+            .request("POST", "/api/agents/demo/auth/refresh")
+            .await;
+        assert_eq!(status, 200, "{view}");
+        if !advertises_terminal(&view["methods"]) {
+            refreshed = Some(view);
+            break;
+        }
+    }
+    let view = refreshed.expect("the post-login methods never arrived");
+    assert!(!advertises_terminal(&view["methods"]), "{view}");
     harness.auth.shutdown();
     harness.sessions.shutdown_all().await;
 }
@@ -911,9 +927,11 @@ async fn legacy_opencode_runs_the_advertised_login_command() {
     )
     .await;
 
+    // Never probed yet: a plain cache-only read is truthfully unknown.
     let (status, view) = harness.request("GET", "/api/agents/legacy/auth").await;
     assert_eq!(status, 200, "{view}");
-    assert_eq!(view["methods"][0]["type"], "terminal");
+    assert_eq!(view["freshness"], "unknown");
+    assert!(view["methods"].as_array().unwrap().is_empty(), "{view}");
     assert_eq!(view["observed_state"], "unknown");
 
     let flow_id = harness.start_flow_for("legacy", "opencode-login").await;
@@ -929,9 +947,12 @@ async fn legacy_opencode_runs_the_advertised_login_command() {
     assert_eq!(argv[1..], vec!["auth".to_string(), "login".to_string()]);
     assert_eq!(invocation["isatty"], true);
 
-    // No false success before login completes and no `authenticate` call.
+    // Starting the flow force-probed the agent to validate the method live,
+    // so the cache now carries the discovered legacy bridge. No false
+    // success before login completes and no `authenticate` call.
     let (status, view) = harness.request("GET", "/api/agents/legacy/auth").await;
     assert_eq!(status, 200, "{view}");
+    assert_eq!(view["methods"][0]["type"], "terminal");
     assert_eq!(view["observed_state"], "unknown");
     assert!(
         !history.join("authenticate.json").exists(),

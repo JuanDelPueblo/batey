@@ -353,8 +353,20 @@ export class ApiService {
     );
   }
 
+  /** A plain cache-only read. Never starts an agent process. */
   fetchAgentAuth(id: string): Promise<AgentAuthState> {
     return this.request<AgentAuthState>(`/api/agents/${encodeURIComponent(id)}/auth`);
+  }
+
+  /**
+   * Explicit refresh: the only read path, besides an actual authentication
+   * or session lifecycle event, that may start this agent's ACP process.
+   */
+  refreshAgentAuth(id: string): Promise<import('./types').AgentAuthRefreshResult> {
+    return this.request<import('./types').AgentAuthRefreshResult>(
+      `/api/agents/${encodeURIComponent(id)}/auth/refresh`,
+      { method: 'POST' },
+    );
   }
 
   authenticateAgent(id: string, methodId: string): Promise<AgentAuthState> {

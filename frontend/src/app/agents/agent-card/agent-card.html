@@ -74,6 +74,17 @@
           {{ label }}
         </p>
       }
+      @if (!neverChecked() && !authLoading()) {
+        <button
+          mat-icon-button
+          type="button"
+          (click)="retryAuth.emit()"
+          [matTooltip]="isStale() ? 'This may be out of date. Check again.' : 'Check again'"
+          aria-label="Check sign-in status again"
+        >
+          <mat-icon>refresh</mat-icon>
+        </button>
+      }
     </div>
 
     @if ((authLoading() || protocolLoading()) && !protocolFlow()) {
@@ -205,7 +216,10 @@
               </div>
             </div>
           } @empty {
-            @if (!logoutSupported()) {
+            @if (neverChecked()) {
+              <p class="auth-hint">Sign-in status has not been checked yet.</p>
+              <button mat-button type="button" (click)="retryAuth.emit()">Check</button>
+            } @else if (!logoutSupported()) {
               <p class="auth-hint">No sign-in options available.</p>
             }
           }

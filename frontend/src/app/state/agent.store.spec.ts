@@ -24,6 +24,15 @@ function makeApi() {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'unknown',
+      freshness: 'cached',
+    })),
+    refreshAgentAuth: vi.fn(async (id: string): Promise<import('../core/api/types').AgentAuthRefreshResult> => ({
+      agent_id: id,
+      methods: [],
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      freshness: 'fresh',
     })),
     authenticateAgent: vi.fn(async (id: string): Promise<AgentAuthState> => ({
       agent_id: id,
@@ -31,6 +40,7 @@ function makeApi() {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authenticated',
+      freshness: 'fresh',
     })),
     logoutAgent: vi.fn(async (id: string): Promise<AgentAuthState> => ({
       agent_id: id,
@@ -38,6 +48,7 @@ function makeApi() {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authentication_required',
+      freshness: 'fresh',
     })),
     startTerminalAuth: vi.fn(async () => ({
       flow_id: 'f',
@@ -158,6 +169,7 @@ describe('AgentStore', () => {
       logout_supported: true,
       terminal_supported: true,
       observed_state: 'authenticated',
+      freshness: 'fresh',
     });
     await store.authenticate('codex', 'openai');
     expect(api.authenticateAgent).toHaveBeenCalledWith('codex', 'openai');
@@ -167,6 +179,28 @@ describe('AgentStore', () => {
     await store.logout('codex');
     expect(api.logoutAgent).toHaveBeenCalledWith('codex');
     expect(store.authByAgent()['codex'].logout_supported).toBe(true);
+  });
+
+  it('refreshes authentication state explicitly and surfaces a probe failure without losing the cache', async () => {
+    await store.refreshAuth('codex');
+    expect(api.refreshAgentAuth).toHaveBeenCalledWith('codex');
+    expect(store.authByAgent()['codex'].freshness).toBe('fresh');
+    expect(store.authErrors()['codex']).toBeUndefined();
+
+    api.refreshAgentAuth.mockResolvedValueOnce({
+      agent_id: 'codex',
+      methods: [{ id: 'm1', name: 'M1', type: 'agent', supported: true }],
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      freshness: 'stale',
+      refresh_error: "Agent 'codex' did not start in time",
+    });
+    const state = await store.refreshAuth('codex');
+    // The last known methods stay in the store; the failure never erases them.
+    expect(state.methods.length).toBe(1);
+    expect(store.authByAgent()['codex'].methods.length).toBe(1);
+    expect(store.authErrors()['codex']).toBe("Agent 'codex' did not start in time");
   });
 
   it('starts a terminal flow and refreshes state after it', async () => {

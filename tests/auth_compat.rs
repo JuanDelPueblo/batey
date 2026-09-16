@@ -142,7 +142,7 @@ async fn codex_probe_uses_no_browser_by_default() {
     let history = harness
         .install_registry_agent("codex", "codex-acp", "auth")
         .await;
-    harness.hub.agent_auth("codex").await.unwrap();
+    harness.hub.refresh_agent_auth("codex").await.unwrap();
     let probe = harness.probe_env(&history);
     assert_eq!(probe.get("NO_BROWSER").and_then(|v| v.as_str()), Some("1"));
     harness.sessions.shutdown_all().await;
@@ -155,7 +155,7 @@ async fn t131_no_browser_override_wins() {
     let history = harness
         .install_registry_agent("codex", "codex-acp", "auth")
         .await;
-    harness.hub.agent_auth("codex").await.unwrap();
+    harness.hub.refresh_agent_auth("codex").await.unwrap();
     assert_eq!(
         harness.probe_env(&history)["NO_BROWSER"],
         serde_json::json!("1")
@@ -173,7 +173,7 @@ async fn t131_no_browser_override_wins() {
         )
         .await
         .unwrap();
-    harness.hub.agent_auth("codex").await.unwrap();
+    harness.hub.refresh_agent_auth("codex").await.unwrap();
     assert_eq!(
         harness.probe_env(&history)["NO_BROWSER"],
         serde_json::json!("0")
@@ -189,7 +189,7 @@ async fn copilot_probe_uses_ci_and_an_override_wins() {
     let history = harness
         .install_registry_agent("copilot", "github-copilot-cli", "auth")
         .await;
-    harness.hub.agent_auth("copilot").await.unwrap();
+    harness.hub.refresh_agent_auth("copilot").await.unwrap();
     assert_eq!(harness.probe_env(&history)["CI"], serde_json::json!("true"));
 
     harness
@@ -204,7 +204,7 @@ async fn copilot_probe_uses_ci_and_an_override_wins() {
         )
         .await
         .unwrap();
-    harness.hub.agent_auth("copilot").await.unwrap();
+    harness.hub.refresh_agent_auth("copilot").await.unwrap();
     assert_eq!(
         harness.probe_env(&history)["CI"],
         serde_json::json!("false")
@@ -255,7 +255,7 @@ async fn antigravity_warning_is_scoped_to_its_methods() {
     harness
         .install_registry_agent("anti", "antigravity-acp", "auth")
         .await;
-    let view = harness.hub.agent_auth("anti").await.unwrap();
+    let view = harness.hub.refresh_agent_auth("anti").await.unwrap().auth;
     let warned: Vec<_> = view
         .methods
         .iter()
@@ -269,7 +269,7 @@ async fn antigravity_warning_is_scoped_to_its_methods() {
     harness
         .install_registry_agent("codex", "codex-acp", "auth")
         .await;
-    let codex = harness.hub.agent_auth("codex").await.unwrap();
+    let codex = harness.hub.refresh_agent_auth("codex").await.unwrap().auth;
     assert!(codex.methods.iter().all(|method| method.warning.is_none()));
 
     // A builtin/uninstalled agent with no Registry id gets no warning either.

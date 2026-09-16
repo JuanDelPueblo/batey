@@ -215,6 +215,10 @@ pub fn router(state: AppState) -> Router {
         // the legacy synchronous `authenticate` route.
         .route("/api/agents/:id/auth", get(agent_auth::agent_auth))
         .route(
+            "/api/agents/:id/auth/refresh",
+            post(agent_auth::refresh_agent_auth),
+        )
+        .route(
             "/api/agents/:id/auth/terminal/:method_id",
             post(agent_auth::start_terminal_auth),
         )

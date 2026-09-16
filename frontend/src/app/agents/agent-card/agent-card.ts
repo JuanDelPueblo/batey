@@ -64,6 +64,12 @@ export class AgentCardComponent {
   readonly observed = computed<ObservedAuthState>(() => this.auth()?.observed_state ?? 'unknown');
   readonly isAuthenticated = computed(() => this.observed() === 'authenticated');
   readonly logoutSupported = computed(() => this.auth()?.logout_supported === true);
+  /** This agent has never been explicitly checked: there is no cache entry
+   * to show, so the card offers a check instead of guessing at methods. */
+  readonly neverChecked = computed(() => (this.auth()?.freshness ?? 'unknown') === 'unknown');
+  /** Cached evidence that has aged past trust, or that a mutation
+   * invalidated. Authenticated-but-stale is never shown as timeless truth. */
+  readonly isStale = computed(() => this.auth()?.freshness === 'stale');
   readonly canManageEnv = computed(() => {
     const mutability = this.mutability();
     return mutability === 'editable' || mutability === 'registry_managed';
@@ -79,11 +85,12 @@ export class AgentCardComponent {
    */
   readonly showMethods = computed(() => !this.isAuthenticated());
 
-  /** A user-visible status label, or null for the internal `unknown` state. */
+  /** A user-visible status label, or null for the internal `unknown` state.
+   * Stale evidence is never shown as if it were freshly verified. */
   readonly authStatusLabel = computed<string | null>(() => {
     switch (this.observed()) {
       case 'authenticated':
-        return 'Authenticated';
+        return this.isStale() ? 'Previously signed in' : 'Authenticated';
       case 'authentication_required':
         return 'Authentication required';
       default:

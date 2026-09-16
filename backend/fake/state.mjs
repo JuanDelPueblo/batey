@@ -302,11 +302,18 @@ export class FakeState {
     this.nextSeq = 1;
     this.listeners = new Set();
 
-    // Authentication state and opaque terminal flows (T111 contract).
-    // `observedByAgent` is in-memory observed evidence: unknown on a fresh
-    // process, never a durable authenticated boolean.
+    // Authentication state and opaque terminal flows (T111/T140 contract).
+    // `observedByAgent` is durable observed evidence: unknown until Batey
+    // saw real evidence, never a guess.
     this.authByAgent = new Map();
     this.observedByAgent = new Map();
+    // T140: the durable authentication discovery cache. `authCheckedAt` is
+    // set the first time anything (an explicit refresh, an authenticate/
+    // logout call, or observed evidence) writes to the cache; a never-set
+    // agent reports `freshness: 'unknown'`. `authStale` mirrors the Rust
+    // store's stale marker: a mutation invalidates without erasing.
+    this.authCheckedAt = new Map();
+    this.authStale = new Set();
     this.flows = new Map();
     this.protocolFlows = new Map();
     this.protocolElicitations = new Map();
@@ -639,6 +646,10 @@ export class FakeState {
     if (input.id !== id) throw Object.assign(new Error('An agent id cannot change'), { status: 400 });
     Object.assign(agent, customSummary(input));
     this.customDetails.set(id, customDetail(input));
+    // The edited definition can change initialization or authentication
+    // methods, so the cached discovery data can no longer be trusted as
+    // current.
+    this.markAuthStale(id);
     this.metadataChanged();
     return agent;
   }
@@ -661,6 +672,11 @@ export class FakeState {
     this.customDetails.delete(id);
     this.authByAgent.delete(id);
     this.agentEnv.delete(id);
+    // Nothing durable references this agent anymore: the discovery cache
+    // goes away with it, rather than staying stale forever.
+    this.authCheckedAt.delete(id);
+    this.authStale.delete(id);
+    this.observedByAgent?.delete(id);
     this.metadataChanged();
     return { id, deleted: true, retained_chats: 0 };
   }
@@ -721,6 +737,9 @@ export class FakeState {
         throw Object.assign(new Error(`Unknown environment action '${action}'.`), { status: 400 });
       }
     }
+    // Changing the launch environment can change what the next probe
+    // observes, so the cached discovery data can no longer be trusted.
+    this.markAuthStale(id);
     return this.agentEnvPresence(id);
   }
 
@@ -798,6 +817,8 @@ export class FakeState {
       return { updated: false, from_version: from, to_version: entry.version, agent };
     }
     agent.display = { ...agent.display, version: entry.version };
+    // A new version may change initialization or authentication methods.
+    this.markAuthStale(id);
     this.metadataChanged();
     return { updated: true, from_version: from, to_version: entry.version, agent };
   }
@@ -808,22 +829,53 @@ export class FakeState {
     return this.observedByAgent?.get(id) ?? 'unknown';
   }
 
+  /** Records new observed-state evidence. This is itself evidence the cache
+   * can trust, so it clears `stale` and stamps `checked_at`, exactly like
+   * the Rust store's `cache_write_observed`. */
   setObservedAuth(id, state) {
     if (!this.observedByAgent) this.observedByAgent = new Map();
     this.observedByAgent.set(id, state);
+    this.markAuthChecked(id);
   }
 
-  agentAuth(id) {
+  markAuthChecked(id) {
+    this.authCheckedAt.set(id, new Date().toISOString());
+    this.authStale.delete(id);
+  }
+
+  /** Marks the cache stale without erasing it. A no-op for an agent that
+   * was never checked, mirroring the Rust store. */
+  markAuthStale(id) {
+    if (this.authCheckedAt.has(id)) this.authStale.add(id);
+  }
+
+  /** A plain cache-only read. The fake backend never spawns a real process
+   * either way, but the freshness contract still matches the Rust backend:
+   * `unknown` until something has checked this agent at least once. */
+  agentAuth(id, { justProbed = false } = {}) {
     if (!this.agent(id)) throw Object.assign(new Error('Agent not found'), { status: 404 });
     const config = AUTH_METHODS[id] ?? { logout_supported: false, methods: [] };
+    const checkedAt = this.authCheckedAt.get(id) ?? null;
+    const stale = this.authStale.has(id);
+    const freshness = !checkedAt ? 'unknown' : justProbed ? 'fresh' : stale ? 'stale' : 'cached';
     return {
       agent_id: id,
       methods: config.methods.map((method) => ({ ...method })),
       logout_supported: config.logout_supported,
       terminal_supported: true,
       observed_state: this.observedAuth(id),
+      freshness,
+      checked_at: checkedAt,
       active_flow: this.activeFlowFor(id),
     };
+  }
+
+  /** Explicit refresh: the only read path that stamps `checked_at` on its
+   * own, matching the dedicated Rust route. */
+  refreshAgentAuth(id) {
+    if (!this.agent(id)) throw Object.assign(new Error('Agent not found'), { status: 404 });
+    this.markAuthChecked(id);
+    return this.agentAuth(id, { justProbed: true });
   }
 
   /**
@@ -870,7 +922,7 @@ export class FakeState {
       throw Object.assign(new Error(`Authentication method '${methodId}' uses the unsupported type '${method.type}'`), { status: 400 });
     }
     this.setObservedAuth(id, 'authenticated');
-    return this.agentAuth(id);
+    return this.agentAuth(id, { justProbed: true });
   }
 
   logoutAgent(id) {
@@ -879,7 +931,7 @@ export class FakeState {
       throw Object.assign(new Error(`Agent '${id}' does not support logout`), { status: 409 });
     }
     this.setObservedAuth(id, 'authentication_required');
-    return this.agentAuth(id);
+    return this.agentAuth(id, { justProbed: true });
   }
 
   startTerminalFlow(id, methodId) {

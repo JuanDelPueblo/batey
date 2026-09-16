@@ -79,6 +79,9 @@ const routes = [
   // from the per-agent routes, and the flow id stays opaque to the browser.
   // Protocol flows carry request-scoped elicitations, never durable chat events.
   ['GET', /^\/api\/agents\/([^/]+)\/auth$/, getAgentAuth],
+  // The refresh route sits above the generic method-id route below, so a
+  // refresh call never matches as a method named "refresh".
+  ['POST', /^\/api\/agents\/([^/]+)\/auth\/refresh$/, refreshAgentAuth],
   ['POST', /^\/api\/agents\/([^/]+)\/auth\/terminal\/([^/]+)$/, startTerminalAuth],
   ['POST', /^\/api\/agents\/([^/]+)\/auth\/protocol\/([^/]+)$/, startProtocolAuth],
   ['POST', /^\/api\/agents\/([^/]+)\/auth\/([^/]+)$/, authenticateAgentRoute],
@@ -374,6 +377,9 @@ function updateRegistryAgent({ params }) { return json(state.updateRegistryAgent
 // ------------------------------------------------------- authentication
 
 function getAgentAuth({ params }) { return json(state.agentAuth(params[0])); }
+
+/** Explicit refresh: the only read path that stamps `checked_at` here. */
+function refreshAgentAuth({ params }) { return json(state.refreshAgentAuth(params[0])); }
 
 function authenticateAgentRoute({ params }) {
   return json(state.authenticateAgent(params[0], params[1]));

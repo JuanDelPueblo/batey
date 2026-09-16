@@ -6,13 +6,13 @@ use axum::{
     http::Request,
 };
 use batey::{
-    agents::{AgentDefinition, AgentRegistry},
+    agents::{AgentDefinition, AgentRegistry, AgentSource, InstalledAgent},
     auth::TERMINAL_AUTH_SUPPORTED,
     config::{BateyPaths, Config, PathOverrides},
     events::EventLog,
     service::HubService,
     session::SessionManager,
-    store::Store,
+    store::{AgentEnvAction, AgentEnvEdit, Store},
     web::{router, AppState},
 };
 use serde_json::Value;
@@ -36,17 +36,31 @@ struct Harness {
     app: axum::Router,
     hub: Arc<HubService>,
     sessions: Arc<SessionManager>,
-    root: tempfile::TempDir,
+    agents: Arc<AgentRegistry>,
+    root: std::path::PathBuf,
+    /// Owns the temporary directory for the lifetime of this harness, when
+    /// it created one itself. A restart test builds a second harness over
+    /// the same path and keeps the directory alive externally instead.
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl Harness {
-    /// Builds a hub whose catalog holds one agent per named auth mode.
+    /// Builds a hub whose catalog holds one agent per named auth mode, in a
+    /// fresh temporary directory this harness owns.
     fn new(modes: &[(&str, &str)]) -> Self {
-        let root = tempfile::tempdir().unwrap();
+        let tempdir = tempfile::tempdir().unwrap();
+        let mut harness = Self::at(tempdir.path(), modes);
+        harness._tempdir = Some(tempdir);
+        harness
+    }
+
+    /// Builds a hub over an existing directory, so a caller can reopen the
+    /// same durable store across two harnesses, as a restart would.
+    fn at(root: &Path, modes: &[(&str, &str)]) -> Self {
         let paths = BateyPaths::from_overrides(PathOverrides {
-            database: Some(root.path().join("hub.db")),
-            data_dir: Some(root.path().join("data")),
-            state_dir: Some(root.path().join("state")),
+            database: Some(root.join("hub.db")),
+            data_dir: Some(root.join("data")),
+            state_dir: Some(root.join("state")),
             ..Default::default()
         });
         let store = Arc::new(Store::open(&paths.database).unwrap());
@@ -54,7 +68,7 @@ impl Harness {
         let definitions: Vec<AgentDefinition> = modes
             .iter()
             .map(|(id, mode)| {
-                let history = root.path().join(id);
+                let history = root.join(id);
                 std::fs::create_dir_all(&history).unwrap();
                 agent(id, &history, mode)
             })
@@ -66,20 +80,22 @@ impl Harness {
             agents: agents.clone(),
             ..Default::default()
         };
-        config.web.project_roots = vec![root.path().display().to_string()];
+        config.web.project_roots = vec![root.display().to_string()];
         let config = Arc::new(config);
-        let hub = HubService::new(store, sessions.clone(), agents, &config);
+        let hub = HubService::new(store, sessions.clone(), agents.clone(), &config);
         let app = router(AppState::new(sessions.clone(), config, 8765));
         Self {
             app,
             hub,
             sessions,
-            root,
+            agents,
+            root: root.to_path_buf(),
+            _tempdir: None,
         }
     }
 
     fn history(&self, agent_id: &str) -> std::path::PathBuf {
-        self.root.path().join(agent_id)
+        self.root.join(agent_id)
     }
 
     /// What the fake agent recorded for one request kind, if anything.
@@ -127,7 +143,9 @@ impl Harness {
 #[tokio::test]
 async fn auth_methods_and_capabilities_are_preserved_by_kind() {
     let harness = Harness::new(&[("full", "auth"), ("plain", "auth-no-logout")]);
-    let (status, body) = harness.request("GET", "/api/agents/full/auth").await;
+    let (status, body) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["agent_id"], "full");
     assert_eq!(body["logout_supported"], true);
@@ -149,7 +167,9 @@ async fn auth_methods_and_capabilities_are_preserved_by_kind() {
     assert_eq!(methods[3]["type"], "browser-popup");
     assert_eq!(methods[3]["supported"], false);
 
-    let (status, body) = harness.request("GET", "/api/agents/plain/auth").await;
+    let (status, body) = harness
+        .request("POST", "/api/agents/plain/auth/refresh")
+        .await;
     assert_eq!(status, 200);
     assert_eq!(body["logout_supported"], false);
     harness.sessions.shutdown_all().await;
@@ -160,7 +180,9 @@ async fn auth_methods_and_capabilities_are_preserved_by_kind() {
 #[tokio::test]
 async fn client_advertises_terminal_auth_capability_truthfully() {
     let harness = Harness::new(&[("full", "auth")]);
-    let (status, _) = harness.request("GET", "/api/agents/full/auth").await;
+    let (status, _) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
     assert_eq!(status, 200);
     let recorded = harness.recorded("full", "initialize.json").unwrap();
     assert_eq!(
@@ -271,6 +293,7 @@ async fn unknown_agents_are_not_found() {
     let harness = Harness::new(&[("full", "auth")]);
     for (method, uri) in [
         ("GET", "/api/agents/nobody/auth"),
+        ("POST", "/api/agents/nobody/auth/refresh"),
         ("POST", "/api/agents/nobody/auth/api-key"),
         ("POST", "/api/agents/nobody/logout"),
         ("POST", "/api/agents/nobody/auth/terminal/tui"),
@@ -290,7 +313,7 @@ async fn auth_required_is_structured_and_keeps_durable_chat_data() {
     let harness = Harness::new(&[("gated", "auth-required")]);
     let project = harness
         .hub
-        .create_project("demo".into(), harness.root.path().display().to_string())
+        .create_project("demo".into(), harness.root.display().to_string())
         .unwrap();
     let chat = harness
         .hub
@@ -315,10 +338,18 @@ async fn auth_required_is_structured_and_keeps_durable_chat_data() {
         .request("GET", &format!("/api/chats/{}/history", chat.chat.id))
         .await;
     assert_eq!(status, 200, "{history}");
-    // The agent still advertises how to authenticate.
+    // A plain cache-only read already carries the observed evidence, with
+    // no process spawned for it.
     let (status, auth) = harness.request("GET", "/api/agents/gated/auth").await;
     assert_eq!(status, 200, "{auth}");
-    assert!(!auth["methods"].as_array().unwrap().is_empty());
+    assert_eq!(auth["observed_state"], "authentication_required");
+    // The agent still advertises how to authenticate; an explicit check
+    // discovers the methods.
+    let (status, refreshed) = harness
+        .request("POST", "/api/agents/gated/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{refreshed}");
+    assert!(!refreshed["methods"].as_array().unwrap().is_empty());
     harness.sessions.shutdown_all().await;
 }
 
@@ -381,7 +412,7 @@ async fn authentication_stderr_is_discarded_but_chat_stderr_is_logged() {
     // `initialize`, and chat-agent stderr is diagnostic material.
     let project = harness
         .hub
-        .create_project("demo".into(), harness.root.path().display().to_string())
+        .create_project("demo".into(), harness.root.display().to_string())
         .unwrap();
     let chat = harness
         .hub
@@ -409,8 +440,11 @@ async fn authentication_stderr_is_discarded_but_chat_stderr_is_logged() {
     );
 
     // The authentication probe path. The same stderr line must stay out of
-    // the log entirely.
-    let (status, body) = harness.request("GET", "/api/agents/full/auth").await;
+    // the log entirely. A plain read never probes, so this exercises the
+    // explicit refresh operation instead.
+    let (status, body) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
     assert_eq!(status, 200, "{body}");
 
     // Re-check for a bounded window, so a hypothetical late drain task that
@@ -450,6 +484,7 @@ async fn web_authentication_middleware_protects_every_auth_route() {
 
     let routes = [
         ("GET", "/api/agents/full/auth"),
+        ("POST", "/api/agents/full/auth/refresh"),
         ("POST", "/api/agents/full/auth/api-key"),
         ("POST", "/api/agents/full/auth/protocol/api-key"),
         ("POST", "/api/agents/full/logout"),
@@ -507,10 +542,20 @@ async fn web_authentication_middleware_protects_every_auth_route() {
 #[tokio::test]
 async fn observed_state_is_unknown_until_evidence() {
     let harness = Harness::new(&[("full", "auth")]);
+    // Never probed: a plain read is truthfully unknown, with no methods.
     let (status, body) = harness.request("GET", "/api/agents/full/auth").await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["observed_state"], "unknown");
-    // Capability alone never implies a login.
+    assert_eq!(body["freshness"], "unknown");
+    assert!(body["methods"].as_array().unwrap().is_empty());
+
+    // An explicit check discovers the logout capability, but that alone
+    // never implies a login.
+    let (status, body) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["observed_state"], "unknown");
     assert_eq!(body["logout_supported"], true);
     harness.sessions.shutdown_all().await;
 }
@@ -543,7 +588,7 @@ async fn auth_required_records_observed_state() {
 
     let project = harness
         .hub
-        .create_project("demo".into(), harness.root.path().display().to_string())
+        .create_project("demo".into(), harness.root.display().to_string())
         .unwrap();
     let chat = harness
         .hub
@@ -565,7 +610,9 @@ async fn auth_required_records_observed_state() {
 #[tokio::test]
 async fn legacy_opencode_bridge_runs_in_a_terminal() {
     let harness = Harness::new(&[("legacy", "auth-legacy-opencode")]);
-    let (status, body) = harness.request("GET", "/api/agents/legacy/auth").await;
+    let (status, body) = harness
+        .request("POST", "/api/agents/legacy/auth/refresh")
+        .await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["methods"][0]["type"], "terminal");
     assert_eq!(body["methods"][0]["supported"], TERMINAL_AUTH_SUPPORTED);
@@ -588,7 +635,9 @@ async fn legacy_opencode_bridge_runs_in_a_terminal() {
 #[tokio::test]
 async fn legacy_copilot_bridge_runs_in_a_terminal() {
     let harness = Harness::new(&[("legacy", "auth-legacy-copilot")]);
-    let (status, body) = harness.request("GET", "/api/agents/legacy/auth").await;
+    let (status, body) = harness
+        .request("POST", "/api/agents/legacy/auth/refresh")
+        .await;
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["methods"][0]["type"], "terminal");
 
@@ -791,5 +840,222 @@ async fn active_terminal_flow_is_discoverable_and_resumable() {
         .await;
     assert_eq!(status, 200, "{cancelled}");
     assert_eq!(cancelled["state"], "cancelled");
+    harness.sessions.shutdown_all().await;
+}
+
+// -------------------------------------------------- T140 caching/status core
+
+/// A plain cache-only read never starts a process, no matter how many times
+/// it is repeated. This agent was never explicitly checked, so it truthfully
+/// reports `unknown` with no methods instead of guessing or probing.
+#[tokio::test]
+async fn plain_reads_never_spawn_a_process() {
+    let harness = Harness::new(&[("full", "auth")]);
+    for _ in 0..5 {
+        let (status, body) = harness.request("GET", "/api/agents/full/auth").await;
+        assert_eq!(status, 200, "{body}");
+        assert_eq!(body["freshness"], "unknown");
+        assert!(body["methods"].as_array().unwrap().is_empty());
+    }
+    assert!(
+        harness.recorded("full", "initialize.json").is_none(),
+        "a plain read spawned an agent process"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// An explicit refresh populates the durable cache, and a later plain read
+/// answers from it without spawning another process.
+#[tokio::test]
+async fn explicit_refresh_populates_the_cache_for_later_plain_reads() {
+    let harness = Harness::new(&[("full", "auth")]);
+    let (status, refreshed) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(refreshed["freshness"], "fresh");
+    assert!(!refreshed["methods"].as_array().unwrap().is_empty());
+
+    let initializes_after_refresh = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+
+    let (status, cached) = harness.request("GET", "/api/agents/full/auth").await;
+    assert_eq!(status, 200, "{cached}");
+    assert_eq!(cached["freshness"], "cached");
+    assert_eq!(cached["methods"], refreshed["methods"]);
+
+    let initializes_after_read = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        initializes_after_refresh, initializes_after_read,
+        "a plain read after a refresh spawned another process"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// Concurrent explicit refreshes for one agent coalesce into a single
+/// probe: repeated clicks or racing requests never spawn duplicates.
+#[tokio::test]
+async fn concurrent_refreshes_result_in_one_probe() {
+    let harness = Harness::new(&[("full", "auth-slow")]);
+    let (a, b, c, d, e) = tokio::join!(
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+    );
+    for (status, body) in [a, b, c, d, e] {
+        assert_eq!(status, 200, "{body}");
+        assert!(!body["methods"].as_array().unwrap().is_empty(), "{body}");
+    }
+    let initializes = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        initializes, 1,
+        "concurrent refreshes spawned more than one probe"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// The discovery cache survives a restart. Durable evidence comes back, but
+/// it is never shown as a fresh check that never happened this session: a
+/// plain read in the new process still spawns nothing.
+#[tokio::test]
+async fn restart_preserves_the_cache_as_historical_evidence() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let harness = Harness::at(tempdir.path(), &[("full", "auth")]);
+    let (status, body) = harness
+        .request("POST", "/api/agents/full/auth/api-key")
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["observed_state"], "authenticated");
+    let initializes_before_restart = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+    harness.sessions.shutdown_all().await;
+    drop(harness);
+
+    let harness = Harness::at(tempdir.path(), &[("full", "auth")]);
+    let (status, body) = harness.request("GET", "/api/agents/full/auth").await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["observed_state"], "authenticated");
+    assert_ne!(body["freshness"], "fresh");
+
+    let initializes_after_read = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        initializes_before_restart, initializes_after_read,
+        "the restarted process spawned an agent just to answer a plain read"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// A mutation that can change initialization or authentication methods
+/// marks the cache stale without erasing it: the last known methods stay
+/// visible as historical evidence, and staleness alone never spawns a probe.
+#[tokio::test]
+async fn environment_changes_mark_the_cache_stale_without_erasing_it() {
+    let harness = Harness::new(&[("full", "auth")]);
+    let store = harness.sessions.store.as_ref().unwrap();
+    let record = InstalledAgent::new("full".into(), AgentSource::Registry, "python3".into());
+    store.insert_agent(&record).unwrap();
+
+    let (status, refreshed) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(refreshed["freshness"], "fresh");
+    let methods_before = refreshed["methods"].clone();
+
+    harness
+        .hub
+        .update_agent_env(
+            "full",
+            vec![AgentEnvEdit {
+                name: "SOME_VALUE".into(),
+                value: Some("1".into()),
+                action: AgentEnvAction::Replace,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let initializes_before_read = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+
+    let (status, stale) = harness.request("GET", "/api/agents/full/auth").await;
+    assert_eq!(status, 200, "{stale}");
+    assert_eq!(stale["freshness"], "stale");
+    // The last known methods stay visible as historical evidence.
+    assert_eq!(stale["methods"], methods_before);
+
+    let initializes_after_read = harness
+        .recorded("full", "initialize.json")
+        .unwrap()
+        .as_array()
+        .unwrap()
+        .len();
+    assert_eq!(
+        initializes_before_read, initializes_after_read,
+        "staleness alone spawned a probe"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// A failed explicit probe never erases a useful cache and never makes the
+/// agent look unusable: the last known methods come back, alongside the
+/// refresh error.
+#[tokio::test]
+async fn a_failed_probe_preserves_the_existing_cache() {
+    let harness = Harness::new(&[("full", "auth")]);
+    let (status, refreshed) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{refreshed}");
+    assert!(!refreshed["methods"].as_array().unwrap().is_empty());
+    let methods_before = refreshed["methods"].clone();
+
+    // Swap in a command that cannot start, simulating an agent that has
+    // gone unavailable since it was last checked.
+    let broken = AgentDefinition::new("full", "/no/such/binary-does-not-exist");
+    harness.agents.replace(broken).unwrap();
+
+    let (status, failed) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{failed}");
+    assert!(failed["refresh_error"].is_string(), "{failed}");
+    // The last known methods stay useful, not erased by the failure.
+    assert_eq!(failed["methods"], methods_before);
+
+    // A plain read afterward is just as unaffected: the agent is not
+    // reported as unusable.
+    let (status, after) = harness.request("GET", "/api/agents/full/auth").await;
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["methods"], methods_before);
     harness.sessions.shutdown_all().await;
 }

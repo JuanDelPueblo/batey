@@ -121,6 +121,18 @@ pub const MIGRATIONS: &[Migration] = &[
         CREATE INDEX IF NOT EXISTS idx_agent_env_overrides_agent ON agent_env_overrides(agent_id);",
         precondition: None,
     },
+    Migration {
+        version: 4,
+        name: "agent_auth_cache",
+        sql: "
+        CREATE TABLE IF NOT EXISTS agent_auth_cache (
+            agent_id TEXT PRIMARY KEY,
+            data TEXT NOT NULL,
+            checked_at TEXT NOT NULL,
+            stale INTEGER NOT NULL DEFAULT 0
+        );",
+        precondition: None,
+    },
 ];
 
 pub fn latest_version() -> i64 {
@@ -259,6 +271,7 @@ mod tests {
         assert_eq!(user_version(&conn).unwrap(), latest_version());
         let tables = table_names(&conn);
         for expected in [
+            "agent_auth_cache",
             "agent_env_overrides",
             "chats",
             "chat_additional_roots",

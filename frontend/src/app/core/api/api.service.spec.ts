@@ -137,6 +137,19 @@ describe('ApiService', () => {
     });
     await expect(statePromise).resolves.toMatchObject({ logout_supported: true, terminal_supported: true });
 
+    const refreshPromise = api.refreshAgentAuth('codex');
+    const refreshRequest = http.expectOne('/api/agents/codex/auth/refresh');
+    expect(refreshRequest.request.method).toBe('POST');
+    refreshRequest.flush({
+      agent_id: 'codex',
+      methods: [],
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      freshness: 'fresh',
+    });
+    await expect(refreshPromise).resolves.toMatchObject({ freshness: 'fresh' });
+
     const loginPromise = api.authenticateAgent('codex', 'openai');
     const login = http.expectOne('/api/agents/codex/auth/openai');
     expect(login.request.method).toBe('POST');

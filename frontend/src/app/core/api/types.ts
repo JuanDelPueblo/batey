@@ -158,6 +158,17 @@ export interface AgentAuthMethod {
 
 export type ObservedAuthState = 'unknown' | 'authentication_required' | 'authenticated';
 
+/**
+ * How current an `AgentAuthState` is. `unknown` means this agent was never
+ * checked: there is no cache entry at all. `fresh` means this exact response
+ * is the direct result of a live check that just completed. `cached` means
+ * the response came from the durable cache and nothing has invalidated it.
+ * `stale` means the cache is either explicitly invalidated by a mutation or
+ * old enough that it should no longer be trusted without a fresh check; the
+ * data is still historical evidence, never erased.
+ */
+export type AuthFreshness = 'unknown' | 'fresh' | 'cached' | 'stale';
+
 /** Safe active-flow discovery. Never carries PTY output, codes, or secrets. */
 export interface ActiveAuthFlow {
   flow_id: string;
@@ -173,8 +184,20 @@ export interface AgentAuthState {
   logout_supported: boolean;
   terminal_supported: boolean;
   observed_state: ObservedAuthState;
+  freshness: AuthFreshness;
+  /** When this data was last confirmed, absent when never checked. */
+  checked_at?: string | null;
   /** The one unfinished auth flow for this agent, when one exists. */
   active_flow?: ActiveAuthFlow | null;
+}
+
+/**
+ * The response of an explicit refresh. `refresh_error` is set only when the
+ * probe itself failed; `AgentAuthState` still carries the best data Batey
+ * has, so a failed check never erases a useful cache or hides the agent.
+ */
+export interface AgentAuthRefreshResult extends AgentAuthState {
+  refresh_error?: string | null;
 }
 
 export type AgentAuthFlowState =

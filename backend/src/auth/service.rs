@@ -8,6 +8,11 @@
 //! Every process it starts uses the installed catalog runtime, a Batey-owned
 //! working directory, and the sanitized per-agent environment. It never reads
 //! a project `.envrc`, because an agent-level login has no project.
+//!
+//! A plain read of one agent's authentication state never starts a process:
+//! it answers from the durable discovery cache in `crate::store`. Only the
+//! explicit refresh operation, and an actual authentication or session
+//! lifecycle event, may start an ACP process to update that cache.
 use super::flow::{
     SuccessHook, TerminalAuthFlow, TerminalAuthFlowView, TerminalAuthFlows, TerminalFlowState,
 };
@@ -16,27 +21,29 @@ use super::protocol::{
 };
 use super::pty::{PtyCommand, TERMINAL_AUTH_SUPPORTED};
 use crate::acp::auth::{
-    AgentAuthState, AuthMethodKind, LegacyTerminalAuth, ObservedAuthState, TerminalAuthMethod,
+    AgentAuthState as LiveAuthState, AuthMethodKind, LegacyTerminalAuth, ObservedAuthState,
+    TerminalAuthMethod,
 };
 use crate::acp::{AcpClient, StderrPolicy};
 use crate::agents::{AgentCatalog, AgentRuntime};
 use crate::events::EventLog;
 use crate::session::SessionManager;
+use crate::store::{AuthCacheData, AuthCacheEntry, CachedAuthMethod};
 use serde::Serialize;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
-/// How long a probe result answers a read before Batey probes again.
-/// Every probe starts an agent process, so repeated reads must not start one
-/// each time. Every authentication change refreshes the entry immediately.
-const AUTH_CACHE_TTL: Duration = Duration::from_secs(15);
 /// How long one probe may take, including process start and `initialize`.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
 /// The private event log of the probe processes. Nothing subscribes to it, so
 /// no authentication traffic can reach a durable chat event.
 const PROBE_EVENT_CAPACITY: usize = 64;
+/// How long a cache entry stays labeled `cached` with no mutation before its
+/// age alone moves the label to `stale`. This never spawns a probe by
+/// itself; it only changes the freshness label shown to a client.
+const AUTH_CACHE_STALE_AFTER_HOURS: i64 = 24;
 
 /// Provider-neutral reason for a protocol-authentication timeout.
 ///
@@ -103,14 +110,33 @@ pub struct ActiveAuthFlowView {
     pub started_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// How current the data in one `AgentAuthView` is.
+///
+/// `Unknown` means this agent was never probed: there is no cache entry at
+/// all. `Fresh` means this exact response is the direct result of a live
+/// probe that just completed in this call. `Cached` means the response came
+/// from the durable cache and nothing has invalidated it. `Stale` means the
+/// cache is either explicitly invalidated by a mutation or old enough that
+/// it should no longer be trusted without a fresh check; the data is still
+/// returned as historical evidence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuthFreshness {
+    Unknown,
+    Fresh,
+    Cached,
+    Stale,
+}
+
 /// The authentication state of one installed agent.
 ///
 /// `logout_supported` is a capability only. `observed_state` is the
 /// provider-neutral evidence Batey actually saw: `unknown` on a fresh
 /// process, `authentication_required` after a stable `auth_required` or a
 /// successful logout, and `authenticated` after a successful supported flow.
-/// Batey never persists `authenticated` as durable truth; it lives in
-/// memory and resets to `unknown` on restart.
+/// It is durable: it survives restart, but `freshness` tells a client
+/// whether it is a live result or long-standing historical evidence, so an
+/// `authenticated` value is never shown as timeless truth.
 ///
 /// `unknown` is an internal absence-of-evidence state, never a user-visible
 /// status. Clients show available methods normally and make no signed-in or
@@ -128,42 +154,100 @@ pub struct AgentAuthView {
     /// Whether this build runs terminal authentication at all.
     pub terminal_supported: bool,
     pub observed_state: ObservedAuthState,
+    pub freshness: AuthFreshness,
+    /// When this data was last confirmed by a live probe or by explicit
+    /// evidence. `None` when this agent was never probed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Safe active-flow discovery, when an unfinished flow exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_flow: Option<ActiveAuthFlowView>,
 }
 
 impl AgentAuthView {
-    fn new(
+    /// Builds a view from the durable cache. `just_probed` is true only when
+    /// this exact call completed a live probe: it is the sole source of
+    /// `AuthFreshness::Fresh`, so a plain cache read can never claim it.
+    fn build(
         agent_id: &str,
-        state: &AgentAuthState,
-        observed: ObservedAuthState,
+        entry: Option<&AuthCacheEntry>,
+        just_probed: bool,
         registry_id: Option<&str>,
         active_flow: Option<ActiveAuthFlowView>,
     ) -> Self {
+        let data = entry.map(|entry| &entry.data);
         Self {
             agent_id: agent_id.to_owned(),
-            methods: state
-                .methods
-                .iter()
-                .map(|method| AuthMethodView {
-                    id: method.id.clone(),
-                    name: method.name.clone(),
-                    description: method.description.clone(),
-                    method_type: method.type_name().to_owned(),
-                    supported: method.is_supported(TERMINAL_AUTH_SUPPORTED),
-                    warning: crate::agents::method_warning(
-                        registry_id,
-                        &method.id,
-                        method.type_name(),
-                    ),
+            methods: data
+                .map(|data| {
+                    data.methods
+                        .iter()
+                        .map(|method| AuthMethodView {
+                            id: method.id.clone(),
+                            name: method.name.clone(),
+                            description: method.description.clone(),
+                            method_type: method.method_type.clone(),
+                            supported: method.supported,
+                            warning: crate::agents::method_warning(
+                                registry_id,
+                                &method.id,
+                                &method.method_type,
+                            ),
+                        })
+                        .collect()
                 })
-                .collect(),
-            logout_supported: state.logout_supported,
+                .unwrap_or_default(),
+            logout_supported: data.is_some_and(|data| data.logout_supported),
             terminal_supported: TERMINAL_AUTH_SUPPORTED,
-            observed_state: observed,
+            observed_state: data
+                .map(|data| data.observed_state)
+                .unwrap_or(ObservedAuthState::Unknown),
+            freshness: freshness_of(entry, just_probed),
+            checked_at: entry.and_then(|entry| parse_checked_at(&entry.checked_at)),
             active_flow,
         }
+    }
+}
+
+/// The response of an explicit refresh.
+///
+/// `refresh_error` is set only when the probe itself failed. The cache still
+/// answers with the best data it has: a failed check never erases a useful
+/// cache and never makes the agent look unusable.
+#[derive(Debug, Clone, Serialize)]
+pub struct AgentAuthRefreshView {
+    #[serde(flatten)]
+    pub auth: AgentAuthView,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_error: Option<String>,
+}
+
+fn parse_checked_at(value: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+}
+
+fn freshness_of(entry: Option<&AuthCacheEntry>, just_probed: bool) -> AuthFreshness {
+    let Some(entry) = entry else {
+        return AuthFreshness::Unknown;
+    };
+    if just_probed {
+        return AuthFreshness::Fresh;
+    }
+    if entry.stale {
+        return AuthFreshness::Stale;
+    }
+    match parse_checked_at(&entry.checked_at) {
+        Some(checked_at) => {
+            let age = chrono::Utc::now().signed_duration_since(checked_at);
+            if age > chrono::Duration::hours(AUTH_CACHE_STALE_AFTER_HOURS) {
+                AuthFreshness::Stale
+            } else {
+                AuthFreshness::Cached
+            }
+        }
+        None => AuthFreshness::Stale,
     }
 }
 
@@ -197,11 +281,6 @@ impl From<crate::acp::callbacks::PendingElicitationInfo> for ProtocolElicitation
     }
 }
 
-struct CachedState {
-    state: AgentAuthState,
-    read_at: Instant,
-}
-
 pub struct AgentAuthService {
     agents: Arc<AgentCatalog>,
     sessions: Arc<SessionManager>,
@@ -210,20 +289,20 @@ pub struct AgentAuthService {
     work_dir: PathBuf,
     flows: Arc<TerminalAuthFlows>,
     protocol_flows: Arc<ProtocolAuthFlows>,
-    /// Probe results per agent. A plain `RwLock` keeps invalidation
-    /// synchronous, so a terminal success can drop its entry inside the
-    /// transition to `succeeded`.
-    cache: RwLock<HashMap<String, CachedState>>,
-    /// Observed authentication evidence per agent. In-memory only; a fresh
-    /// process starts at `Unknown`. Never persisted as durable truth.
-    observed: RwLock<HashMap<String, ObservedAuthState>>,
-    /// When the cache of an agent was last dropped because authentication
-    /// may have changed. A probe that finished before that instant may carry
-    /// the pre-change state, so it must not re-cache.
+    /// Per-agent locks for the explicit refresh operation, so repeated
+    /// clicks or concurrent requests for one agent coalesce into a single
+    /// probe. Never a global lock: refreshing one agent never waits on
+    /// another agent's probe.
+    refresh_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    /// When one agent's cache was last updated by a completed probe. A
+    /// refresh call reads this after it acquires the per-agent lock, so it
+    /// can tell whether a concurrent call already did the work while it
+    /// waited, instead of starting a second process.
+    last_probed_at: RwLock<HashMap<String, Instant>>,
+    /// When one agent's cache was last invalidated by a mutation. A probe
+    /// that started before this instant may carry pre-change data, so its
+    /// result must not resurrect what the invalidation exists to forget.
     invalidated_at: RwLock<HashMap<String, Instant>>,
-    /// Serializes probes, so a burst of reads cannot start a burst of agent
-    /// processes.
-    probe_lock: tokio::sync::Mutex<()>,
     /// A private in-memory log for the probe processes.
     events: Arc<EventLog>,
     /// A tracker separate from the chat task tracker, so an authentication
@@ -251,31 +330,104 @@ impl AgentAuthService {
             work_dir,
             flows: Arc::new(TerminalAuthFlows::new()),
             protocol_flows: Arc::new(ProtocolAuthFlows::new()),
-            cache: RwLock::new(HashMap::new()),
-            observed: RwLock::new(HashMap::new()),
+            refresh_locks: RwLock::new(HashMap::new()),
+            last_probed_at: RwLock::new(HashMap::new()),
             invalidated_at: RwLock::new(HashMap::new()),
-            probe_lock: tokio::sync::Mutex::new(()),
             events: Arc::new(EventLog::new(PROBE_EVENT_CAPACITY)),
             tasks: Arc::new(crate::tasks::TerminalTaskTracker::default()),
         })
     }
 
-    /// The authentication state of one agent. A recent probe answers without
-    /// starting another process. The observed state travels alongside the
-    /// capability-only `logout_supported`, never derived from it.
-    /// `unknown` stays an internal absence-of-evidence state; the view still
-    /// carries methods normally and any unfinished active flow for recovery.
+    /// The authentication state of one agent, from the durable cache only.
+    /// This never starts a process: an unknown agent is a plain lookup
+    /// failure, and a known-but-never-probed agent truthfully reports
+    /// `AuthFreshness::Unknown` with no methods, rather than guessing.
     pub async fn auth_view(&self, agent_id: &str) -> AuthResult<AgentAuthView> {
-        let state = self.state(agent_id, false).await?;
+        if !self.agents.contains(agent_id) {
+            return Err(AgentAuthError::NotFound(format!(
+                "Unknown agent '{agent_id}'"
+            )));
+        }
+        let entry = self.cache_entry(agent_id);
         let registry_id = self.registry_id_for(agent_id);
         let active_flow = self.active_flow_for(agent_id);
-        Ok(AgentAuthView::new(
+        Ok(AgentAuthView::build(
             agent_id,
-            &state,
-            self.observed_state(agent_id),
+            entry.as_ref(),
+            false,
             registry_id.as_deref(),
             active_flow,
         ))
+    }
+
+    /// Explicit refresh: the only read path, besides an actual
+    /// authentication or session lifecycle event, that may start an ACP
+    /// process. Single-flight per agent: concurrent calls for the same
+    /// agent coalesce behind one probe instead of spawning duplicates.
+    ///
+    /// A probe failure never erases the existing cache and never makes the
+    /// agent look unavailable: the last known data comes back, alongside
+    /// `refresh_error`.
+    pub async fn refresh(self: &Arc<Self>, agent_id: &str) -> AuthResult<AgentAuthRefreshView> {
+        if !self.agents.contains(agent_id) {
+            return Err(AgentAuthError::NotFound(format!(
+                "Unknown agent '{agent_id}'"
+            )));
+        }
+        let requested_at = Instant::now();
+        let lock = self.refresh_lock_for(agent_id);
+        let _guard = lock.lock().await;
+
+        // Another concurrent refresh may have already probed while this
+        // call waited for the lock. Reuse that result instead of starting a
+        // second process.
+        let already_fresh = self
+            .last_probed_at
+            .read()
+            .expect("agent auth probe-time lock poisoned")
+            .get(agent_id)
+            .is_some_and(|probed_at| *probed_at >= requested_at);
+
+        let refresh_error = if already_fresh {
+            None
+        } else {
+            self.probe(agent_id)
+                .await
+                .err()
+                .map(|error| error.to_string())
+        };
+
+        let registry_id = self.registry_id_for(agent_id);
+        let active_flow = self.active_flow_for(agent_id);
+        let entry = self.cache_entry(agent_id);
+        let auth = AgentAuthView::build(
+            agent_id,
+            entry.as_ref(),
+            refresh_error.is_none(),
+            registry_id.as_deref(),
+            active_flow,
+        );
+        Ok(AgentAuthRefreshView {
+            auth,
+            refresh_error,
+        })
+    }
+
+    fn refresh_lock_for(&self, agent_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        if let Some(lock) = self
+            .refresh_locks
+            .read()
+            .expect("agent auth refresh-lock lock poisoned")
+            .get(agent_id)
+        {
+            return lock.clone();
+        }
+        self.refresh_locks
+            .write()
+            .expect("agent auth refresh-lock lock poisoned")
+            .entry(agent_id.to_owned())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
     }
 
     /// The official Registry id behind one catalog id, when the agent is a
@@ -333,31 +485,22 @@ impl AgentAuthService {
         }
     }
 
-    /// The in-memory observed state. `Unknown` on a fresh process.
-    pub fn observed_state(&self, agent_id: &str) -> ObservedAuthState {
-        self.observed
-            .read()
-            .expect("agent auth observed lock poisoned")
-            .get(agent_id)
-            .copied()
+    /// The durable observed state. `Unknown` when this agent was never
+    /// probed and has no recorded evidence.
+    fn observed_state(&self, agent_id: &str) -> ObservedAuthState {
+        self.cache_entry(agent_id)
+            .map(|entry| entry.data.observed_state)
             .unwrap_or(ObservedAuthState::Unknown)
-    }
-
-    fn set_observed(&self, agent_id: &str, state: ObservedAuthState) {
-        self.observed
-            .write()
-            .expect("agent auth observed lock poisoned")
-            .insert(agent_id.to_owned(), state);
     }
 
     /// Records that Batey saw a stable `auth_required` for this agent.
     pub fn note_auth_required(&self, agent_id: &str) {
-        self.set_observed(agent_id, ObservedAuthState::AuthenticationRequired);
+        self.cache_write_observed(agent_id, ObservedAuthState::AuthenticationRequired);
     }
 
     /// Records a successful supported authentication flow.
     pub fn note_authenticated(&self, agent_id: &str) {
-        self.set_observed(agent_id, ObservedAuthState::Authenticated);
+        self.cache_write_observed(agent_id, ObservedAuthState::Authenticated);
     }
 
     /// Reinforces `authenticated` after a session setup succeeded.
@@ -366,12 +509,8 @@ impl AgentAuthService {
     /// `Unknown`: a session that never needed auth is not evidence of a
     /// login. `Authenticated` stays as it is.
     pub fn note_session_success(&self, agent_id: &str) {
-        let mut observed = self
-            .observed
-            .write()
-            .expect("agent auth observed lock poisoned");
-        if observed.get(agent_id) == Some(&ObservedAuthState::AuthenticationRequired) {
-            observed.insert(agent_id.to_owned(), ObservedAuthState::Authenticated);
+        if self.observed_state(agent_id) == ObservedAuthState::AuthenticationRequired {
+            self.cache_write_observed(agent_id, ObservedAuthState::Authenticated);
         }
     }
 
@@ -382,8 +521,12 @@ impl AgentAuthService {
     /// it did not get: an agent rejection stays an error and the observed
     /// state is unchanged.
     pub async fn authenticate(&self, agent_id: &str, method_id: &str) -> AuthResult<AgentAuthView> {
+        let probe_started_at = Instant::now();
         let client = self.connect(agent_id).await?;
         let state = client.auth_state().await;
+        // Discovery data from a live initialize is safe to cache regardless
+        // of whether the authenticate call below succeeds.
+        self.cache_write_full(agent_id, &state, probe_started_at);
         let method = state
             .method(method_id)
             .ok_or_else(|| {
@@ -425,8 +568,11 @@ impl AgentAuthService {
     /// observed `authentication_required`; the capability alone never
     /// implied `authenticated`.
     pub async fn logout(&self, agent_id: &str) -> AuthResult<AgentAuthView> {
+        let probe_started_at = Instant::now();
         let client = self.connect(agent_id).await?;
-        let supported = client.auth_state().await.logout_supported;
+        let state = client.auth_state().await;
+        self.cache_write_full(agent_id, &state, probe_started_at);
+        let supported = state.logout_supported;
         let outcome = if supported {
             client
                 .logout()
@@ -474,7 +620,9 @@ impl AgentAuthService {
             )));
         }
         let runtime = self.runtime(agent_id)?;
-        let state = self.state(agent_id, true).await?;
+        // Live ACP initialization is the authority before executing a
+        // method: a cached method is for discovery/UI only.
+        let state = self.probe(agent_id).await?;
         let method = state
             .method(method_id)
             .ok_or_else(|| {
@@ -517,16 +665,15 @@ impl AgentAuthService {
             }
         };
         // A successful terminal command changes the agent's stored
-        // credentials. The hook drops the cached pre-login state and records
-        // observed `authenticated` inside the transition to `succeeded`, so
-        // a client that reacts to the success always reads fresh state and
-        // never the stale 15-second entry.
+        // credentials. The hook records observed `authenticated` inside the
+        // transition to `succeeded`, so a client that reacts to the success
+        // always reads durable evidence at once, instead of waiting for the
+        // async re-probe below to finish.
         let on_success: SuccessHook = {
             let service = Arc::downgrade(self);
             let agent_id = agent_id.to_owned();
             Arc::new(move || {
                 if let Some(service) = service.upgrade() {
-                    service.invalidate_auth_cache(&agent_id);
                     service.note_authenticated(&agent_id);
                 }
             })
@@ -575,7 +722,9 @@ impl AgentAuthService {
                 "Agent '{agent_id}' already has an authentication flow running. Finish or cancel it first."
             )));
         }
-        let state = self.state(agent_id, true).await?;
+        // Live ACP initialization is the authority before executing a
+        // method: a cached method is for discovery/UI only.
+        let state = self.probe(agent_id).await?;
         let method = state
             .method(method_id)
             .ok_or_else(|| {
@@ -719,7 +868,6 @@ impl AgentAuthService {
                         match outcome {
                             Ok(_) => {
                                 service.note_authenticated(&agent_id);
-                                service.invalidate_auth_cache(&agent_id);
                                 flow.finish(ProtocolFlowState::Succeeded, None);
                                 client.shutdown().await;
                                 // Refresh stopped sessions and probe fresh
@@ -839,13 +987,14 @@ impl AgentAuthService {
         self.sessions
             .invalidate_stopped_sessions_for_agent(agent_id)
             .await;
-        let state = self.state(agent_id, true).await?;
+        self.probe(agent_id).await?;
         let registry_id = self.registry_id_for(agent_id);
         let active_flow = self.active_flow_for(agent_id);
-        Ok(AgentAuthView::new(
+        let entry = self.cache_entry(agent_id);
+        Ok(AgentAuthView::build(
             agent_id,
-            &state,
-            self.observed_state(agent_id),
+            entry.as_ref(),
+            true,
             registry_id.as_deref(),
             active_flow,
         ))
@@ -873,82 +1022,150 @@ impl AgentAuthService {
         });
     }
 
-    /// Drops the cached authentication state of one agent. Environment
-    /// overrides call this after a change, so the next probe observes the new
-    /// launch environment instead of the stale 15-second entry.
+    /// Marks the durable discovery cache of one agent stale, without erasing
+    /// its last known methods. A mutation that can affect initialization or
+    /// authentication methods calls this: environment overrides, updates,
+    /// reinstalls, and custom-definition edits. The last known data stays
+    /// available as historical evidence and invites an explicit refresh.
     pub fn invalidate_agent(&self, agent_id: &str) {
-        self.invalidate_auth_cache(agent_id);
-    }
-
-    /// Drops the cached state of one agent and records when it happened.
-    ///
-    /// A terminal success calls this inside the transition to `succeeded`.
-    /// The recorded instant keeps a probe that started before it from
-    /// re-caching the state it read.
-    fn invalidate_auth_cache(&self, agent_id: &str) {
-        self.cache
-            .write()
-            .expect("agent auth cache lock poisoned")
-            .remove(agent_id);
         self.invalidated_at
             .write()
             .expect("agent auth invalidation lock poisoned")
             .insert(agent_id.to_owned(), Instant::now());
+        let Some(store) = self.sessions.store.as_ref() else {
+            return;
+        };
+        if let Err(error) = store.mark_agent_auth_cache_stale(agent_id) {
+            tracing::warn!(
+                agent = agent_id,
+                %error,
+                "Could not mark the agent authentication discovery cache stale"
+            );
+        }
     }
 
-    /// The typed authentication state, from the cache or from a fresh probe.
-    async fn state(&self, agent_id: &str, force: bool) -> AuthResult<AgentAuthState> {
-        if !force {
-            if let Some(cached) = self
-                .cache
-                .read()
-                .expect("agent auth cache lock poisoned")
-                .get(agent_id)
-            {
-                if cached.read_at.elapsed() < AUTH_CACHE_TTL {
-                    return Ok(cached.state.clone());
-                }
+    /// Deletes the durable discovery cache row outright. Only a full agent
+    /// removal calls this; a retired agent keeps its row, marked stale, as
+    /// historical evidence for the chats that still reference it.
+    pub fn forget_agent(&self, agent_id: &str) {
+        self.invalidated_at
+            .write()
+            .expect("agent auth invalidation lock poisoned")
+            .insert(agent_id.to_owned(), Instant::now());
+        let Some(store) = self.sessions.store.as_ref() else {
+            return;
+        };
+        if let Err(error) = store.delete_agent_auth_cache(agent_id) {
+            tracing::warn!(
+                agent = agent_id,
+                %error,
+                "Could not delete the agent authentication discovery cache"
+            );
+        }
+    }
+
+    /// The durable cache entry of one agent, if any. Never spawns a process.
+    fn cache_entry(&self, agent_id: &str) -> Option<AuthCacheEntry> {
+        let store = self.sessions.store.as_ref()?;
+        match store.agent_auth_cache(agent_id) {
+            Ok(entry) => entry,
+            Err(error) => {
+                tracing::warn!(
+                    agent = agent_id,
+                    %error,
+                    "Could not read the agent authentication discovery cache"
+                );
+                None
             }
         }
-        let _probe_guard = self.probe_lock.lock().await;
-        if !force {
-            if let Some(cached) = self
-                .cache
-                .read()
-                .expect("agent auth cache lock poisoned")
-                .get(agent_id)
-            {
-                if cached.read_at.elapsed() < AUTH_CACHE_TTL {
-                    return Ok(cached.state.clone());
-                }
-            }
-        }
-        // A probe that started before the last invalidation may have read
-        // the state that the invalidation exists to forget. Keep it out of
-        // the cache, so the next read probes again. A probe that started
-        // after it read nothing older than the change.
-        let started_at = Instant::now();
-        let client = self.connect(agent_id).await?;
-        let state = client.auth_state().await;
-        client.shutdown().await;
+    }
+
+    /// Writes fresh discovery data (methods, logout capability) from a
+    /// completed live probe. Never overwrites `observed_state`: a probe of
+    /// the advertised methods alone is not authentication evidence, so the
+    /// previous observed state carries forward untouched.
+    fn cache_write_full(&self, agent_id: &str, state: &LiveAuthState, probe_started_at: Instant) {
+        let Some(store) = self.sessions.store.as_ref() else {
+            return;
+        };
+        // A probe that started before the last invalidation may carry the
+        // state an invalidation exists to forget. Skip the write, so the
+        // mutation's stale marker stays in place until a later probe.
         let superseded = self
             .invalidated_at
             .read()
             .expect("agent auth invalidation lock poisoned")
             .get(agent_id)
-            .is_some_and(|invalidated_at| started_at <= *invalidated_at);
-        if !superseded {
-            self.cache
-                .write()
-                .expect("agent auth cache lock poisoned")
-                .insert(
-                    agent_id.to_owned(),
-                    CachedState {
-                        state: state.clone(),
-                        read_at: Instant::now(),
-                    },
-                );
+            .is_some_and(|invalidated_at| probe_started_at <= *invalidated_at);
+        if superseded {
+            return;
         }
+        let previous_observed = self
+            .cache_entry(agent_id)
+            .map(|entry| entry.data.observed_state)
+            .unwrap_or(ObservedAuthState::Unknown);
+        let data = AuthCacheData {
+            methods: state
+                .methods
+                .iter()
+                .map(|method| CachedAuthMethod {
+                    id: method.id.clone(),
+                    name: method.name.clone(),
+                    description: method.description.clone(),
+                    method_type: method.type_name().to_owned(),
+                    supported: method.is_supported(TERMINAL_AUTH_SUPPORTED),
+                })
+                .collect(),
+            logout_supported: state.logout_supported,
+            observed_state: previous_observed,
+        };
+        let entry = AuthCacheEntry::fresh(agent_id, data, chrono::Utc::now().to_rfc3339());
+        if let Err(error) = store.save_agent_auth_cache(&entry) {
+            tracing::warn!(
+                agent = agent_id,
+                %error,
+                "Could not save the agent authentication discovery cache"
+            );
+        }
+        self.last_probed_at
+            .write()
+            .expect("agent auth probe-time lock poisoned")
+            .insert(agent_id.to_owned(), Instant::now());
+    }
+
+    /// Records new observed-state evidence, preserving whatever methods and
+    /// logout capability are already cached. Creates a minimal entry when
+    /// none exists yet, so evidence from a chat session is never lost just
+    /// because this agent has never been explicitly probed.
+    fn cache_write_observed(&self, agent_id: &str, observed: ObservedAuthState) {
+        let Some(store) = self.sessions.store.as_ref() else {
+            return;
+        };
+        let mut entry = self.cache_entry(agent_id).unwrap_or_else(|| {
+            AuthCacheEntry::fresh(agent_id, AuthCacheData::default(), String::new())
+        });
+        entry.data.observed_state = observed;
+        entry.checked_at = chrono::Utc::now().to_rfc3339();
+        entry.stale = false;
+        if let Err(error) = store.save_agent_auth_cache(&entry) {
+            tracing::warn!(
+                agent = agent_id,
+                %error,
+                "Could not save the agent authentication discovery cache"
+            );
+        }
+    }
+
+    /// Runs one live probe: spawn, `initialize`, read the auth state, shut
+    /// down. Writes the discovery cache with the result. Only the explicit
+    /// refresh operation and an authentication/session lifecycle event call
+    /// this; a plain read never does.
+    async fn probe(&self, agent_id: &str) -> AuthResult<LiveAuthState> {
+        let started_at = Instant::now();
+        let client = self.connect(agent_id).await?;
+        let state = client.auth_state().await;
+        client.shutdown().await;
+        self.cache_write_full(agent_id, &state, started_at);
         Ok(state)
     }
 

@@ -6,8 +6,8 @@
 //! decides which authentication method to run.
 use super::{HubService, ServiceError, ServiceResult};
 use crate::auth::{
-    AgentAuthError, AgentAuthView, ProtocolAuthFlowView, ProtocolElicitationView, TerminalAuthFlow,
-    TerminalAuthFlowView,
+    AgentAuthError, AgentAuthRefreshView, AgentAuthView, ProtocolAuthFlowView,
+    ProtocolElicitationView, TerminalAuthFlow, TerminalAuthFlowView,
 };
 use std::sync::Arc;
 
@@ -27,6 +27,13 @@ impl HubService {
     /// The authentication methods and capabilities one agent advertises.
     pub async fn agent_auth(&self, agent_id: &str) -> ServiceResult<AgentAuthView> {
         Ok(self.agent_auth.auth_view(agent_id).await?)
+    }
+
+    /// Explicit refresh: the only read path, besides an actual
+    /// authentication or session lifecycle event, that may probe this
+    /// agent's ACP process. Single-flight per agent.
+    pub async fn refresh_agent_auth(&self, agent_id: &str) -> ServiceResult<AgentAuthRefreshView> {
+        Ok(self.agent_auth.refresh(agent_id).await?)
     }
 
     /// Runs one advertised `agent` authentication method.

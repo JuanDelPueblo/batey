@@ -87,15 +87,27 @@ describe('AgentCardComponent', () => {
     expect(text).toContain('Command missing.');
   });
 
-  it('keeps the availability badge as the single status cue in the header', () => {
+  it('keeps availability as the single status treatment in the header', () => {
     render(summary('builtin', { display: { description: 'A builtin.' } }));
     const head = fixture.nativeElement.querySelector('.card-head') as HTMLElement;
     expect(head.textContent).toContain('Available');
     expect(head.textContent).not.toContain('Read-only');
     expect(head.textContent).not.toContain('Built-in');
-    const tags = fixture.nativeElement.querySelector('.tags') as HTMLElement;
-    expect(tags.textContent).toContain('Built-in');
-    expect(tags.textContent).toContain('Read-only');
+    expect(head.querySelector('.availability')).not.toBeNull();
+    const provenance = fixture.nativeElement.querySelector('.provenance') as HTMLElement;
+    expect(provenance.textContent).toContain('Source: Built-in');
+    expect(provenance.textContent).toContain('Read-only');
+    expect(fixture.nativeElement.querySelectorAll('.availability').length).toBe(1);
+  });
+
+  it('keeps a targeted sign-in section focusable for authentication deep links', () => {
+    fixture.componentRef.setInput('agent', summary('builtin'));
+    fixture.componentRef.setInput('targeted', true);
+    fixture.detectChanges();
+    const auth = fixture.nativeElement.querySelector('.auth') as HTMLElement;
+    expect(auth.id).toBe('agent-auth-builtin-agent');
+    expect(auth.tabIndex).toBe(-1);
+    expect(auth.classList.contains('targeted')).toBe(true);
   });
 
   it('represents agent, terminal, and unsupported methods honestly', () => {

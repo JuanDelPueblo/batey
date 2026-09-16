@@ -143,6 +143,7 @@ fn managed_recovery_and_removal() {
     ));
 }
 
+#[cfg(unix)]
 #[test]
 fn only_the_generated_nix_direnv_profile_is_disposable() {
     let td = init_repo();

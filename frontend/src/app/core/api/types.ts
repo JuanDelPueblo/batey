@@ -486,7 +486,10 @@ export interface TurnEntryPermission {
   method: string;
   description: string;
   responded?: boolean;
+  /** Human-readable name of the selected ACP option. */
   decision?: string;
+  /** Exact ACP option ID selected by the user. */
+  decisionOptionId?: string;
   title?: string;
   kind?: string;
   options?: AgentPermissionOption[];

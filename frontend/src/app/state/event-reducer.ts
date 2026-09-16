@@ -8,6 +8,7 @@ import type {
   SessionEvent,
   TurnEntry,
   TurnEntryTool,
+  AgentPermissionOption,
 } from '../core/api/types';
 
 /**
@@ -20,6 +21,8 @@ import type {
 export class EventReducer {
   private nextId = 1;
   private readonly eventsBySeq = new Map<number, SessionEvent>();
+  /** API success can arrive before the durable response event. */
+  private readonly localPermissionResponses = new Map<string, string>();
   private readonly itemList = signal<DisplayItem[]>([]);
   readonly items = this.itemList.asReadonly();
   private readonly turnStart = signal<string | null>(null);
@@ -58,6 +61,15 @@ export class EventReducer {
   private ingestOrdered(event: SessionEvent): DisplayItem | null {
     const payload = event.payload;
     if (!payload) return null;
+
+    // A response confirms an existing request; it must never create a new
+    // visible turn when it arrives after the request's turn.
+    if (payload.type === 'permission_response') {
+      const current = this.itemList();
+      const marked = this.markPermissionInItems(current, -1, payload);
+      if (marked !== current) this.itemList.set(marked);
+      return marked.at(-1) ?? null;
+    }
 
     if (payload.type === 'user_message') {
       this.turnStart.set(event.timestamp);
@@ -335,6 +347,9 @@ export class EventReducer {
     }
 
     if (payload.type === 'permission_request') {
+      const requestId = this.stringValue(payload.id) ?? '';
+      const localDecision = this.localPermissionResponses.get(requestId);
+      const options = this.permissionOptions(payload.options);
       return {
         ...turn,
         entries: [
@@ -342,22 +357,17 @@ export class EventReducer {
           {
             id: this.nextId++,
             type: 'permission_request',
-            requestId: this.stringValue(payload.id) ?? '',
+            requestId,
             method: this.stringValue(payload.method) ?? '',
             description: this.stringValue(payload.description) ?? '',
             title: this.stringValue(payload['title']),
             kind: this.stringValue(payload['kind']),
-            options: this.permissionOptions(payload.options),
-            responded: false,
+            options,
+            responded: localDecision !== undefined,
+            ...(localDecision !== undefined ? this.permissionPresentation(options, localDecision) : {}),
           },
         ],
       };
-    }
-
-
-    if (payload.type === 'permission_response') {
-      const marked = this.markPermission(entries, payload);
-      return marked ? { ...turn, entries: marked } : turn;
     }
 
     if (payload.type === 'elicitation_request') {
@@ -406,12 +416,32 @@ export class EventReducer {
     );
     if (index < 0) return null;
     const next = [...entries];
+    const request = next[index];
+    const requestId = request.type === 'permission_request' ? request.requestId : null;
+    const localDecision = requestId ? this.localPermissionResponses.get(requestId) : undefined;
+    const optionId = localDecision ?? this.stringValue(payload['option_id']);
+    const response = optionId
+      ? this.permissionPresentation(request.type === 'permission_request' ? request.options : undefined, optionId)
+      : { decision: this.permissionDecision(payload) };
     next[index] = {
-      ...next[index],
+      ...request,
       responded: true,
-      decision: this.permissionDecision(payload),
+      ...response,
     } as TurnEntry;
     return next;
+  }
+
+  /** Resolve a request immediately after the response API succeeds. */
+  resolvePermission(requestId: string, optionId: string): boolean {
+    if (!requestId || !optionId) return false;
+    const hasRequest = this.itemList().some(
+      (item) => item.type === 'turn'
+        && item.entries.some((entry) => entry.type === 'permission_request' && entry.requestId === requestId),
+    );
+    if (!hasRequest) return false;
+    this.localPermissionResponses.set(requestId, optionId);
+    this.rebuild();
+    return true;
   }
 
   private permissionDecision(payload: SessionEvent['payload']): string {
@@ -423,9 +453,19 @@ export class EventReducer {
     return 'Cancelled';
   }
 
-  private permissionOptions(value: unknown): import('../core/api/types').AgentPermissionOption[] {
+  private permissionPresentation(
+    options: readonly AgentPermissionOption[] | undefined,
+    optionId: string,
+  ): { decision: string; decisionOptionId: string } {
+    return {
+      decision: options?.find((option) => option.optionId === optionId)?.name ?? optionId,
+      decisionOptionId: optionId,
+    };
+  }
+
+  private permissionOptions(value: unknown): AgentPermissionOption[] {
     if (!Array.isArray(value)) return [];
-    return value.filter((option): option is import('../core/api/types').AgentPermissionOption =>
+    return value.filter((option): option is AgentPermissionOption =>
       typeof option === 'object' && option !== null
       && typeof (option as Record<string, unknown>)['optionId'] === 'string'
       && typeof (option as Record<string, unknown>)['name'] === 'string'

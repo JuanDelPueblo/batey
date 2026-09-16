@@ -434,8 +434,12 @@ export class ChatSessionStore {
     return created;
   }
 
-  respondPermission(chatId: string, requestId: string, optionId: string): Promise<void> {
-    return this.api.respondPermission(chatId, requestId, optionId);
+  async respondPermission(chatId: string, requestId: string, optionId: string): Promise<void> {
+    await this.api.respondPermission(chatId, requestId, optionId);
+    const reducer = this.reducersByChat()[chatId];
+    if (reducer?.resolvePermission(requestId, optionId)) {
+      this.reducersByChat.set({ ...this.reducersByChat(), [chatId]: reducer });
+    }
   }
 
   removeProject(projectId: string): void {

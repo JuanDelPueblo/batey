@@ -1,4 +1,4 @@
-<mat-card class="permission" [class.plan-approval]="isPlanApproval()" [class.responded]="permission().responded">
+<mat-card class="permission" [class.plan-approval]="isPlanApproval()" [class.responded]="isResolved()">
   <div class="permission-header">
     <mat-icon>{{ icon() }}</mat-icon>
     <div class="permission-heading">
@@ -17,21 +17,35 @@
       <pre>{{ permission().description || permission().method || 'Action requested' }}</pre>
     }
   </mat-card-content>
-  @if (permission().responded) {
+  @if (isResolved()) {
     <div class="decision">
       <mat-icon>check</mat-icon>
-      <span>Responded: {{ permission().decision || 'Handled' }}</span>
+      <span>Responded: {{ displayDecision() }}</span>
     </div>
   } @else {
-    <mat-card-actions align="end">
+    @if (responseError()) {
+      <div class="response-error" role="alert">
+        <mat-icon>error</mat-icon>
+        <span>{{ responseError() }}</span>
+      </div>
+    }
+    <mat-card-actions align="end" [class.responding]="responding()">
       @for (option of permission().options ?? []; track option.optionId) {
         <button
           mat-stroked-button
           type="button"
           (click)="respond(option.optionId)"
           [disabled]="responding()"
+          [attr.aria-label]="option.name + (optionScope(option) ? ', ' + optionScope(option) : '')"
         >
-          @if (responding()) { <mat-spinner diameter="18" /> } @else { {{ option.name }} }
+          @if (responding() && selectedOptionId() === option.optionId) {
+            <mat-spinner diameter="18" />
+          } @else {
+            <span>{{ option.name }}</span>
+            @if (optionScope(option)) {
+              <small class="option-scope">{{ optionScope(option) }}</small>
+            }
+          }
         </button>
       }
     </mat-card-actions>

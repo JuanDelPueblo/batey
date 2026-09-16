@@ -846,7 +846,7 @@ pub fn remove_managed_on_branch(
 }
 
 fn worktree_dirty(worktree: &Path) -> Result<bool, WorkspaceError> {
-    Ok(!run_git_ok(
+    let status = run_git_ok(
         worktree,
         &[
             "status",
@@ -854,9 +854,91 @@ fn worktree_dirty(worktree: &Path) -> Result<bool, WorkspaceError> {
             "--untracked-files=all",
             "--ignored=matching",
         ],
-    )?
-    .trim()
-    .is_empty())
+    )?;
+
+    status
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .try_fold(false, |dirty, line| {
+            if dirty {
+                return Ok(true);
+            }
+            Ok(!is_disposable_runtime_status(worktree, line)?)
+        })
+}
+
+/// The first `direnv export` in a Nix-backed workspace creates this cache in
+/// the worktree. Git reports the whole ignored directory as one entry, so
+/// inspect its contents before allowing it to be disposable. An unexpected
+/// file, directory, or link keeps the worktree safety-sensitive.
+fn is_disposable_runtime_status(worktree: &Path, status: &str) -> Result<bool, WorkspaceError> {
+    let Some(path) = status.strip_prefix("!! ") else {
+        return Ok(false);
+    };
+    let path = path.strip_suffix('/').unwrap_or(path);
+    if path != ".direnv" {
+        return Ok(false);
+    }
+
+    let cache = worktree.join(".direnv");
+    let metadata = std::fs::symlink_metadata(&cache).map_err(|error| {
+        WorkspaceError::Failed(format!(
+            "cannot inspect disposable direnv cache {}: {error}",
+            cache.display()
+        ))
+    })?;
+    if !metadata.file_type().is_dir() {
+        return Ok(false);
+    }
+
+    let entries = std::fs::read_dir(&cache).map_err(|error| {
+        WorkspaceError::Failed(format!(
+            "cannot inspect disposable direnv cache {}: {error}",
+            cache.display()
+        ))
+    })?;
+    for entry in entries {
+        let entry = entry.map_err(|error| {
+            WorkspaceError::Failed(format!(
+                "cannot inspect disposable direnv cache {}: {error}",
+                cache.display()
+            ))
+        })?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !is_nix_direnv_profile_name(&name) {
+            return Ok(false);
+        }
+        let entry_metadata = std::fs::symlink_metadata(entry.path()).map_err(|error| {
+            WorkspaceError::Failed(format!(
+                "cannot inspect disposable direnv cache entry {}: {error}",
+                entry.path().display()
+            ))
+        })?;
+        let target = match entry.path().canonicalize() {
+            Ok(target) => target,
+            Err(_) => return Ok(false),
+        };
+        if !entry_metadata.file_type().is_symlink() || !target.starts_with(Path::new("/nix/store"))
+        {
+            return Ok(false);
+        }
+    }
+
+    Ok(true)
+}
+
+fn is_nix_direnv_profile_name(name: &str) -> bool {
+    if name == "flake-profile" {
+        return true;
+    }
+    let Some(generation) = name
+        .strip_prefix("flake-profile-")
+        .and_then(|name| name.strip_suffix("-link"))
+    else {
+        return false;
+    };
+    !generation.is_empty() && generation.bytes().all(|byte| byte.is_ascii_digit())
 }
 
 /// Whether a managed worktree currently holds uncommitted or untracked

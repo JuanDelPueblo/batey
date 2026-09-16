@@ -456,8 +456,9 @@ impl Store {
     }
 
     /// Replaces the cache row with fresh discovery data (methods, logout
-    /// capability) from a completed live probe, and clears the discovery
-    /// `stale` marker.
+    /// capability) from a completed live probe, clears the discovery `stale`
+    /// marker, and retains the latest independently recorded observed fields.
+    /// The merge and write share this store lock.
     pub fn save_agent_auth_cache(&self, entry: &AuthCacheEntry) -> StoreResult<()> {
         auth_cache::save(&self.conn.lock().unwrap(), entry)
     }

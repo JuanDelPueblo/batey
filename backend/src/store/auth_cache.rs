@@ -120,17 +120,23 @@ pub(crate) fn get(conn: &Connection, agent_id: &str) -> StoreResult<Option<AuthC
 }
 
 /// Replaces the row with fresh discovery data (methods, logout capability)
-/// and clears `stale`. Only a completed live probe calls this. Never used to
-/// store credentials or execution details: only the safe presentation
-/// fields.
+/// and clears `stale`. Only a completed live probe calls this. The latest
+/// observed-authentication fields are merged while the caller holds the store
+/// lock, so a discovery write cannot overwrite newer evidence. Never used to
+/// store credentials or execution details: only the safe presentation fields.
 pub(crate) fn save(conn: &Connection, entry: &AuthCacheEntry) -> StoreResult<()> {
+    let mut data = entry.data.clone();
+    if let Some(previous) = get(conn, &entry.agent_id)? {
+        data.observed_state = previous.data.observed_state;
+        data.observed_checked_at = previous.data.observed_checked_at;
+    }
     conn.execute(
         "INSERT INTO agent_auth_cache (agent_id, data, checked_at, stale) \
          VALUES (?1, ?2, ?3, 0) \
          ON CONFLICT (agent_id) DO UPDATE SET data=excluded.data, checked_at=excluded.checked_at, stale=0",
         params![
             entry.agent_id,
-            serde_json::to_string(&entry.data)?,
+            serde_json::to_string(&data)?,
             entry.checked_at,
         ],
     )?;
@@ -328,6 +334,69 @@ mod tests {
         assert_eq!(
             read.data.observed_checked_at.as_deref(),
             Some("2026-01-01T00:00:00Z")
+        );
+    }
+
+    /// A completed probe can carry observed fields read before newer evidence
+    /// was recorded. Force that interleaving across concurrent writers and
+    /// verify the locked merge retains both writers' independently owned data.
+    #[test]
+    fn concurrent_discovery_and_observed_writes_merge_both_changes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = std::sync::Arc::new(Store::open(&tmp.path().join("hub.db")).unwrap());
+        let discovery = AuthCacheEntry::fresh(
+            "codex",
+            AuthCacheData {
+                methods: vec![CachedAuthMethod {
+                    id: "device-code".into(),
+                    name: "Device code".into(),
+                    description: None,
+                    method_type: "agent".into(),
+                    supported: true,
+                }],
+                logout_supported: true,
+                observed_state: ObservedAuthState::Unknown,
+                observed_checked_at: None,
+            },
+            "2026-01-02T00:00:00Z".into(),
+        );
+        let start = std::sync::Arc::new(std::sync::Barrier::new(3));
+        let (observed_saved, wait_for_observed) = std::sync::mpsc::sync_channel(0);
+
+        std::thread::scope(|scope| {
+            let observed_store = store.clone();
+            let observed_start = start.clone();
+            scope.spawn(move || {
+                observed_start.wait();
+                observed_store
+                    .save_agent_auth_observed(
+                        "codex",
+                        ObservedAuthState::Authenticated,
+                        "2026-01-03T00:00:00Z",
+                    )
+                    .unwrap();
+                observed_saved.send(()).unwrap();
+            });
+
+            let discovery_store = store.clone();
+            let discovery_start = start.clone();
+            scope.spawn(move || {
+                discovery_start.wait();
+                wait_for_observed.recv().unwrap();
+                discovery_store.save_agent_auth_cache(&discovery).unwrap();
+            });
+
+            start.wait();
+        });
+
+        let read = store.agent_auth_cache("codex").unwrap().unwrap();
+        assert_eq!(read.data.methods[0].id, "device-code");
+        assert!(read.data.logout_supported);
+        assert_eq!(read.checked_at, "2026-01-02T00:00:00Z");
+        assert_eq!(read.data.observed_state, ObservedAuthState::Authenticated);
+        assert_eq!(
+            read.data.observed_checked_at.as_deref(),
+            Some("2026-01-03T00:00:00Z")
         );
     }
 }

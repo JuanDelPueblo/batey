@@ -1213,7 +1213,6 @@ impl AgentAuthService {
         if superseded {
             return false;
         }
-        let previous = self.cache_entry(agent_id).map(|entry| entry.data);
         let data = AuthCacheData {
             methods: state
                 .methods
@@ -1227,11 +1226,8 @@ impl AgentAuthService {
                 })
                 .collect(),
             logout_supported: state.logout_supported,
-            observed_state: previous
-                .as_ref()
-                .map(|data| data.observed_state)
-                .unwrap_or(ObservedAuthState::Unknown),
-            observed_checked_at: previous.and_then(|data| data.observed_checked_at),
+            observed_state: ObservedAuthState::Unknown,
+            observed_checked_at: None,
         };
         let entry = AuthCacheEntry::fresh(agent_id, data, chrono::Utc::now().to_rfc3339());
         if let Err(error) = store.save_agent_auth_cache(&entry) {

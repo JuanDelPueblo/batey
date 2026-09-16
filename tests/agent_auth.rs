@@ -1214,11 +1214,12 @@ async fn a_mutation_racing_a_probe_reports_the_result_as_stale_not_fresh() {
 async fn concurrent_refreshes_of_a_failing_probe_result_in_one_attempt() {
     let harness = Harness::new(&[("full", "auth")]);
     let counter = harness.history("full").join("attempts.txt");
-    let script = format!(
-        "import pathlib\np = pathlib.Path('{counter}')\np.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')\nraise SystemExit(1)\n",
-        counter = counter.display()
-    );
-    let broken = AgentDefinition::new("full", "python3").with_args(vec!["-c".into(), script]);
+    let script = "import pathlib, sys\np = pathlib.Path(sys.argv[1])\np.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')\nraise SystemExit(1)\n";
+    let broken = AgentDefinition::new("full", "python3").with_args(vec![
+        "-c".into(),
+        script.into(),
+        counter.to_string_lossy().into_owned(),
+    ]);
     harness.agents.replace(broken).unwrap();
 
     let (a, b, c, d, e) = tokio::join!(

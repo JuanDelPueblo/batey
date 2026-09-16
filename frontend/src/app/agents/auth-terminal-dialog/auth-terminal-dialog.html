@@ -5,6 +5,13 @@
     to the running flow and is never saved.
   </p>
 
+  @if (data.resumed) {
+    <p class="hint" role="note">
+      Reconnected to the running authentication flow. Only the retained recent output is shown;
+      Batey does not fabricate earlier terminal output.
+    </p>
+  }
+
   @if (errorMessage()) { <div class="error" role="alert">{{ errorMessage() }}</div> }
 
   <div class="terminal-shell" [class.disconnected]="!connected()" (click)="focusTerminal()">

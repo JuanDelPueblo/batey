@@ -1,6 +1,7 @@
 import { computed, inject, Service, signal, WritableSignal } from '@angular/core';
 import { ApiService } from '../core/api/api.service';
 import type {
+  ActiveAuthFlow,
   AgentAuthFlow,
   AgentAuthState,
   AgentEnvEdit,
@@ -50,6 +51,7 @@ export class AgentStore {
   readonly protocolFlowsByAgent = signal<Record<string, ProtocolAuthFlow>>({});
   readonly protocolElicitationsByFlow = signal<Record<string, ProtocolAuthElicitation[]>>({});
   readonly protocolLoading = signal<ReadonlySet<string>>(new Set());
+  readonly terminalFlowsByAgent = signal<Record<string, AgentAuthFlow>>({});
 
   readonly available = computed(() =>
     this.installed().filter((agent) => agent.availability === 'available'),
@@ -230,6 +232,26 @@ export class AgentStore {
     return flow;
   }
 
+  /** Reconnects to an existing terminal flow instead of starting another. */
+  async fetchTerminalFlow(flowId: string): Promise<AgentAuthFlow> {
+    return this.api.fetchAgentAuthFlow(flowId);
+  }
+
+  setTerminalFlow(agentId: string, flow: AgentAuthFlow | null): void {
+    this.terminalFlowsByAgent.update((current) => {
+      const next = { ...current };
+      if (flow) next[agentId] = flow;
+      else delete next[agentId];
+      return next;
+    });
+  }
+
+  async cancelTerminalFlow(agentId: string, flowId: string): Promise<AgentAuthFlow> {
+    const flow = await this.api.cancelAgentAuthFlow(flowId);
+    this.setTerminalFlow(agentId, flow);
+    return flow;
+  }
+
   /** Starts an async protocol flow so a long `authenticate` never blocks the card. */
   async startProtocolAuth(id: string, methodId: string): Promise<ProtocolAuthFlow> {
     this.setProtocolLoading(id, true);
@@ -276,6 +298,22 @@ export class AgentStore {
       delete next[agentId];
       return next;
     });
+  }
+
+  /** Seeds a recovered protocol flow from the safe active-flow discovery. */
+  setProtocolFlowFromActive(agentId: string, active: ActiveAuthFlow): void {
+    this.protocolFlowsByAgent.update((current) => ({
+      ...current,
+      [agentId]: {
+        flow_id: active.flow_id,
+        agent_id: agentId,
+        method_id: active.method_id,
+        state: active.state as ProtocolAuthFlow['state'],
+        reason: null,
+        started_at: active.started_at,
+        completed_at: null,
+      },
+    }));
   }
 
   async respondProtocolElicitation(

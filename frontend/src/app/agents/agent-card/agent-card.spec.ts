@@ -125,23 +125,24 @@ describe('AgentCardComponent', () => {
     expect(disabledButtons[1]?.disabled).toBe(true);
   });
 
-  it('shows logout only when authenticated and clear action when unknown', () => {
+  it('shows logout only when authenticated and clear action when auth was required', () => {
     const logout = vi.fn();
     const clear = vi.fn();
     fixture.componentInstance.logout.subscribe(logout);
     fixture.componentInstance.clearCredentials.subscribe(clear);
-    // Unknown state: capability alone never implies a login. Only the
-    // lower-emphasis clear action appears, not Log out alongside sign-in.
+    // Unknown state is an internal absence of evidence: no status claim and
+    // no Log out, only the lower-emphasis clear action when the capability
+    // exists and authentication was actually required.
     render(summary('builtin'), {
       agent_id: 'x',
       logout_supported: true,
       terminal_supported: true,
-      observed_state: 'unknown',
+      observed_state: 'authentication_required',
       methods: [],
     });
     let text = fixture.nativeElement.textContent as string;
     expect(text).not.toContain('Active session');
-    expect(text).toContain('Sign-in status unknown');
+    expect(text).toContain('Authentication required');
     expect(
       Array.from(fixture.nativeElement.querySelectorAll('button')).find((item) =>
         (item as HTMLButtonElement).textContent?.includes('Log out'),
@@ -171,6 +172,108 @@ describe('AgentCardComponent', () => {
     expect(logoutButton).toBeDefined();
     logoutButton.click();
     expect(logout).toHaveBeenCalled();
+  });
+
+  it('never renders an unknown sign-in status label', () => {
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).not.toContain('Sign-in status unknown');
+    expect(text).not.toContain('unknown');
+    // Methods still show normally under the absence-of-evidence state.
+    expect(text).toContain('OAuth');
+    const status = fixture.nativeElement.querySelector('.auth-status');
+    expect(status).toBeNull();
+  });
+
+  it('hides sign-in methods and shows only Log out once authenticated', () => {
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'authenticated',
+      methods: [
+        { id: 'oauth', name: 'OAuth', type: 'agent', supported: true },
+        { id: 'tui', name: 'Terminal', type: 'terminal', supported: true },
+      ],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Authenticated');
+    expect(text).not.toContain('OAuth');
+    expect(text).not.toContain('Open terminal');
+    const labels = (Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[])
+      .map((button) => button.textContent?.trim() ?? '');
+    expect(labels.filter((label) => label === 'Log out').length).toBe(1);
+    expect(labels.some((label) => label.includes('Sign in'))).toBe(false);
+  });
+
+  it('restores sign-in methods after observed auth-required', () => {
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'authentication_required',
+      methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Authentication required');
+    expect(text).toContain('OAuth');
+    expect(text).toContain('Sign in');
+  });
+
+  it('shows a scoped method warning without marking the whole agent broken', () => {
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      methods: [
+        {
+          id: 'interactive',
+          name: 'Interactive sign-in',
+          type: 'agent',
+          supported: true,
+          warning: 'May need a localhost callback. API-key auth still works.',
+        },
+      ],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('May need a localhost callback');
+    expect(text).toContain('Interactive sign-in');
+  });
+
+  it('offers Resume terminal and Cancel for a recovered running terminal flow', () => {
+    const resume = vi.fn();
+    const cancel = vi.fn();
+    fixture.componentInstance.resumeTerminal.subscribe(resume);
+    fixture.componentInstance.cancelTerminal.subscribe(cancel);
+    fixture.componentRef.setInput('agent', summary('builtin'));
+    fixture.componentRef.setInput('auth', {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: true,
+      observed_state: 'unknown',
+      methods: [{ id: 'tui', name: 'Terminal', type: 'terminal', supported: true }],
+    });
+    fixture.componentRef.setInput('terminalFlow', {
+      flow_id: 'flow-7',
+      agent_id: 'x',
+      method_id: 'tui',
+      state: 'running',
+    });
+    fixture.detectChanges();
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Authentication is still running in a terminal');
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
+    buttons.find((button) => button.textContent?.includes('Resume terminal'))?.click();
+    expect(resume).toHaveBeenCalledWith('flow-7');
+    buttons.find((button) => button.textContent?.trim() === 'Cancel')?.click();
+    expect(cancel).toHaveBeenCalled();
   });
 
   it('shows simple wording when an agent offers no sign-in options', () => {

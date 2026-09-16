@@ -150,9 +150,20 @@ export interface AgentAuthMethod {
   type: string;
   description?: string | null;
   supported: boolean;
+  /** Scoped headless compatibility warning for this method, when provided. */
+  warning?: string | null;
 }
 
 export type ObservedAuthState = 'unknown' | 'authentication_required' | 'authenticated';
+
+/** Safe active-flow discovery. Never carries PTY output, codes, or secrets. */
+export interface ActiveAuthFlow {
+  flow_id: string;
+  kind: 'protocol' | 'terminal';
+  method_id: string;
+  state: string;
+  started_at?: string;
+}
 
 export interface AgentAuthState {
   agent_id: string;
@@ -160,6 +171,8 @@ export interface AgentAuthState {
   logout_supported: boolean;
   terminal_supported: boolean;
   observed_state: ObservedAuthState;
+  /** The one unfinished auth flow for this agent, when one exists. */
+  active_flow?: ActiveAuthFlow | null;
 }
 
 export type AgentAuthFlowState =

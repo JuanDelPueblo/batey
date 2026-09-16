@@ -52,6 +52,22 @@ export class FakeAgentAuth {
       logout_supported: state.logout_supported,
       terminal_supported: true,
       observed_state: this.observedState(agentId),
+      active_flow: this.activeFlowFor(agentId),
+    };
+  }
+
+  /** Safe active-flow discovery: lifecycle only, never PTY material. */
+  activeFlowFor(agentId) {
+    const flow = [...this.flows.values()]
+      .filter((candidate) => candidate.agent_id === agentId && candidate.state === 'running')
+      .sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''))[0];
+    if (!flow) return null;
+    return {
+      flow_id: flow.flow_id,
+      kind: 'terminal',
+      method_id: flow.method_id,
+      state: flow.state,
+      started_at: flow.started_at,
     };
   }
 

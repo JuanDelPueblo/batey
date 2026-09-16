@@ -232,6 +232,20 @@ impl ProtocolAuthFlows {
             .cloned()
     }
 
+    /// One unfinished flow for this agent, when one exists. Used for
+    /// recovery after navigation or reload. Only `running` and
+    /// `waiting_for_user` count as active.
+    pub fn active_for_agent(&self, agent_id: &str) -> Option<Arc<ProtocolAuthFlow>> {
+        self.flows
+            .lock()
+            .expect("protocol auth registry lock poisoned")
+            .values()
+            .filter(|flow| flow.agent_id == agent_id)
+            .filter(|flow| !flow.state().is_finished())
+            .max_by_key(|flow| flow.started_at)
+            .cloned()
+    }
+
     /// Creates one flow entry in `Running`. The caller spawns the ACP work
     /// and finishes the flow. Fails when bounds are hit.
     pub fn create(&self, agent_id: &str, method_id: &str) -> anyhow::Result<Arc<ProtocolAuthFlow>> {

@@ -174,8 +174,8 @@ describe('ApiService', () => {
     const cancelPromise = api.cancelAgentAuthFlow('flow-1');
     const cancel = http.expectOne('/api/agent-auth/flow-1/cancel');
     expect(cancel.request.method).toBe('POST');
-    cancel.flush(null);
-    await expect(cancelPromise).resolves.toBeUndefined();
+    cancel.flush({ flow_id: 'flow-1', agent_id: 'codex', method_id: 'api-key', state: 'cancelled' });
+    await expect(cancelPromise).resolves.toMatchObject({ state: 'cancelled' });
 
     expect(api.agentAuthSocketUrl('flow-1')).toContain('/api/agent-auth/flow-1/ws');
   });

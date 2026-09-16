@@ -37,6 +37,8 @@
 .method-action { display: flex; justify-content: flex-end; }
 .method-name { font: var(--mat-sys-body-medium); }
 .method-type, .method-description, .auth-hint { color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-body-small); }
+.method-warning { color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-body-small); border-left: 3px solid var(--mat-sys-outline-variant); padding-left: 8px; }
+.terminal-flow { padding: 4px 0; }
 .card-actions { display: flex; gap: 8px; flex-wrap: wrap; border-top: 1px solid var(--mat-sys-outline-variant); padding-top: 8px; margin-top: auto; }
 .destructive-text { color: var(--mat-sys-error); }
 .readonly-note { display: flex; gap: 6px; align-items: center; color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-body-small); }

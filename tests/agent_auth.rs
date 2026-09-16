@@ -702,3 +702,94 @@ async fn protocol_flow_cancel_ends_promptly() {
     assert_eq!(view["state"], "cancelled");
     harness.sessions.shutdown_all().await;
 }
+
+/// An active protocol flow is discoverable through the auth view, so a page
+/// reload can resume polling and cancel it. Discovery never exposes the URL
+/// or any other sensitive auth material.
+#[tokio::test]
+async fn active_protocol_flow_is_discoverable_and_safe() {
+    let harness = Harness::new(&[("codex", "auth-codex-url")]);
+    let (status, flow) = harness
+        .request("POST", "/api/agents/codex/auth/protocol/codex-oauth")
+        .await;
+    assert_eq!(status, 200, "{flow}");
+    let flow_id = flow["flow_id"].as_str().unwrap().to_owned();
+
+    let mut body = Value::Null;
+    for _ in 0..100 {
+        let (status, view) = harness.request("GET", "/api/agents/codex/auth").await;
+        assert_eq!(status, 200, "{view}");
+        body = view;
+        if body["active_flow"]["state"] == "waiting_for_user" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let active = &body["active_flow"];
+    assert_eq!(active["kind"], "protocol", "{body}");
+    assert_eq!(active["flow_id"], flow_id, "{body}");
+    assert_eq!(active["method_id"], "codex-oauth", "{body}");
+    assert!(active["started_at"].is_string(), "{body}");
+
+    // Discovery carries no URL, code, token, or terminal output.
+    let serialized = body.to_string();
+    assert!(!serialized.contains("example.invalid"), "{serialized}");
+    assert!(!serialized.contains("ABCD-1234"), "{serialized}");
+    assert!(body.get("output").is_none(), "{body}");
+
+    // Cancel is available throughout the wait and clears discovery.
+    let (status, cancelled) = harness
+        .request("POST", &format!("/api/protocol-auth/{flow_id}/cancel"))
+        .await;
+    assert_eq!(status, 200, "{cancelled}");
+    let (status, after) = harness.request("GET", "/api/agents/codex/auth").await;
+    assert_eq!(status, 200, "{after}");
+    assert!(
+        after.get("active_flow").is_none() || after["active_flow"].is_null(),
+        "a cancelled flow stayed discoverable: {after}"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// An active terminal flow is discoverable and resumable: reopening reads the
+/// existing flow instead of starting a second process.
+#[tokio::test]
+async fn active_terminal_flow_is_discoverable_and_resumable() {
+    if !TERMINAL_AUTH_SUPPORTED {
+        return;
+    }
+    let harness = Harness::new(&[("full", "auth")]);
+    let (status, flow) = harness
+        .request("POST", "/api/agents/full/auth/terminal/tui")
+        .await;
+    assert_eq!(status, 200, "{flow}");
+    let flow_id = flow["flow_id"].as_str().unwrap().to_owned();
+
+    let (status, view) = harness.request("GET", "/api/agents/full/auth").await;
+    assert_eq!(status, 200, "{view}");
+    let active = &view["active_flow"];
+    assert_eq!(active["kind"], "terminal", "{view}");
+    assert_eq!(active["flow_id"], flow_id, "{view}");
+    assert_eq!(active["method_id"], "tui", "{view}");
+    assert_eq!(active["state"], "running", "{view}");
+
+    // Reopening fetches the same running flow.
+    let (status, resumed) = harness
+        .request("GET", &format!("/api/agent-auth/{flow_id}"))
+        .await;
+    assert_eq!(status, 200, "{resumed}");
+    assert_eq!(resumed["flow_id"], flow_id);
+    assert_eq!(resumed["state"], "running");
+    // The active flow still blocks a second start.
+    let (status, conflict) = harness
+        .request("POST", "/api/agents/full/auth/terminal/tui")
+        .await;
+    assert_eq!(status, 409, "{conflict}");
+
+    let (status, cancelled) = harness
+        .request("POST", &format!("/api/agent-auth/{flow_id}/cancel"))
+        .await;
+    assert_eq!(status, 200, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled");
+    harness.sessions.shutdown_all().await;
+}

@@ -250,7 +250,11 @@ rather than to a chat:
 - `GET /api/agents/:id/auth` reports the methods the agent advertised at
   `initialize`, whether it supports logout, and whether this build runs
   terminal authentication. A method type Batey cannot run comes back as
-  unsupported; Batey never guesses a fallback for it.
+  unsupported; Batey never guesses a fallback for it. The view also carries
+  `active_flow` when one unfinished flow exists, so a reload can resume or
+  cancel it. The active-flow summary holds only a flow id, a kind, a method
+  id, a lifecycle state, and a start time. It never carries PTY output,
+  credentials, tokens, device codes, or sensitive URLs.
 - `POST /api/agents/:id/auth/:methodId` runs an `agent` method through the
   stable `authenticate` request.
 - `POST /api/agents/:id/logout` runs the stable `logout` request. It goes out
@@ -273,6 +277,47 @@ flow nobody watches, and server shutdown all kill the whole process tree.
 An agent that answers `auth_required` produces a recoverable `409` with
 `"code": "auth_required"` and the agent id. The chat and its history stay
 exactly as they were.
+
+`observed_state` is provider-neutral evidence. `unknown` means ACP supplied
+no evidence yet. Batey shows the available methods normally and makes no
+signed-in or signed-out claim. Once Batey observes `authenticated`, it hides
+the sign-in methods and shows **Log out** when the agent supports logout.
+Logout or `auth_required` restores the sign-in methods.
+
+### Agent authentication in containers
+
+Batey's backend has no ordinary browser. Upstream agents differ in how they
+authenticate in a container. Batey centralizes these defaults in agent
+metadata. A T131 per-agent environment override always wins.
+
+- **Codex** - Batey sets `NO_BROWSER=1` for the Codex authentication probe
+  and protocol-auth processes. Codex then offers the working ChatGPT
+  device-code method. It does not offer the ordinary local-browser method.
+  Batey never forces `NO_BROWSER` on ordinary Codex chat sessions.
+- **GitHub Copilot** - Batey sets `CI=true` for the Copilot
+  authentication and terminal-auth processes. Upstream Copilot then chooses
+  its headless/device-code path instead of a loopback-browser callback.
+  Batey never forces `CI` on ordinary Copilot chat sessions, and it never
+  appends `--device-code` to the ACP-advertised arguments.
+- **OpenCode** - Use the terminal method to run `opencode auth login` for
+  additional providers. A Registry-installed OpenCode resolves its own
+  installed executable. Batey does not add `/data/agents/**` to `PATH`.
+- **Antigravity** - Use API-key authentication with `GEMINI_API_KEY`. The
+  interactive browser/Google path may need a localhost callback that ACP does
+  not currently expose in a fully remote-friendly way. Batey shows that
+  warning next to the affected method only. One-time interactive workaround:
+  authenticate Antigravity inside the same persistent Batey environment, use
+  the upstream remote/SSH-friendly flow when the tool offers one, forward or
+  publish the localhost callback port shown by the tool to the machine that
+  runs the browser, and keep `/data` persistent so the credentials survive
+  container recreation. Batey does not implement Google's OAuth flow and
+  never guesses a fixed callback port.
+
+A protocol-authentication timeout reports a provider-neutral message. It
+states that the agent may need a browser or an interactive environment that
+the agent did not expose through ACP. Cancel stays available throughout the
+wait, and the user interface never stays at **Signing in** or
+**Checking sign-in**.
 
 Deployments can also supply `--declarative-agents-file` (or
 `BATEY_DECLARATIVE_AGENTS_FILE`). It has the same shape as `agents.json`

@@ -5,6 +5,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
 import type {
+  AgentAuthFlow,
   AgentAuthMethod,
   AgentAuthState,
   AgentMutability,
@@ -34,6 +35,7 @@ export class AgentCardComponent {
   readonly protocolFlow = input<ProtocolAuthFlow | null>(null);
   readonly protocolElicitations = input<ProtocolAuthElicitation[]>([]);
   readonly protocolLoading = input(false);
+  readonly terminalFlow = input<AgentAuthFlow | null>(null);
 
   readonly authenticate = output<string>();
   readonly terminal = output<string>();
@@ -42,6 +44,8 @@ export class AgentCardComponent {
   readonly cancelProtocol = output<void>();
   readonly dismissProtocol = output<void>();
   readonly respondElicitation = output<{ id: string; action: string }>();
+  readonly resumeTerminal = output<string>();
+  readonly cancelTerminal = output<void>();
   readonly edit = output<void>();
   readonly remove = output<void>();
   readonly update = output<void>();
@@ -68,19 +72,26 @@ export class AgentCardComponent {
   });
   /** Normal Log out only when Batey observed authenticated state. */
   readonly showLogout = computed(() => this.logoutSupported() && this.isAuthenticated());
-  /** Lower-emphasis credential clear when capability exists but state is not authenticated. */
-  readonly showClear = computed(() => this.logoutSupported() && !this.isAuthenticated());
+  /** Lower-emphasis credential clear only when auth was observed required. */
+  readonly showClear = computed(() => this.logoutSupported() && this.observed() === 'authentication_required');
+  /**
+   * Sign-in methods are hidden once Batey observed authenticated state, so a
+   * signed-in agent never shows login choices beside the ordinary Log out.
+   * `unknown` shows methods normally because it is an absence of evidence.
+   */
+  readonly showMethods = computed(() => !this.isAuthenticated());
 
-  observedLabel(): string {
+  /** A user-visible status label, or null for the internal `unknown` state. */
+  readonly authStatusLabel = computed<string | null>(() => {
     switch (this.observed()) {
       case 'authenticated':
         return 'Authenticated';
       case 'authentication_required':
         return 'Authentication required';
       default:
-        return 'Sign-in status unknown';
+        return null;
     }
-  }
+  });
 
   elicitationHost(url: string | null | undefined): string {
     if (!url) return '';

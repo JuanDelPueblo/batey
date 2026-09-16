@@ -30,6 +30,7 @@ pub use protocol::{
 };
 pub use pty::{PtyCommand, PtyWindow, TERMINAL_AUTH_SUPPORTED};
 pub use service::{
-    legacy_terminal_command, terminal_command, AgentAuthError, AgentAuthService, AgentAuthView,
-    AuthMethodView, ProtocolElicitationView,
+    legacy_terminal_command, legacy_terminal_command_for_agent, terminal_command,
+    ActiveAuthFlowView, AgentAuthError, AgentAuthService, AgentAuthView, AuthMethodView,
+    ProtocolElicitationView, PROTOCOL_TIMEOUT_REASON,
 };

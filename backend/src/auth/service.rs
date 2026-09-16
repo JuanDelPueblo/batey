@@ -39,6 +39,13 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
 /// no authentication traffic can reach a durable chat event.
 const PROBE_EVENT_CAPACITY: usize = 64;
 
+/// Provider-neutral reason for a protocol-authentication timeout.
+///
+/// It never names a provider or guesses why the agent did not answer. It
+/// states what Batey observed and why the method may need a browser or an
+/// interactive environment that the agent did not expose through ACP.
+pub const PROTOCOL_TIMEOUT_REASON: &str = "The agent did not complete authentication before the timeout. This method may require a browser or interactive environment that the agent did not expose through ACP.";
+
 /// A failure of an authentication operation, in transport-neutral terms.
 #[derive(Debug)]
 pub enum AgentAuthError {
@@ -75,6 +82,26 @@ pub struct AuthMethodView {
     pub method_type: String,
     /// Whether this build can run the method.
     pub supported: bool,
+    /// Scoped headless compatibility warning for this method, when the
+    /// dedicated compatibility layer provides one. Never agent-wide.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub warning: Option<String>,
+}
+
+/// Safe backend representation of one active unfinished auth flow.
+///
+/// Contains only flow id, kind, method id, lifecycle state, and start time.
+/// Never PTY contents, credentials, tokens, device codes, sensitive URLs,
+/// or other private buffered auth material.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ActiveAuthFlowView {
+    pub flow_id: String,
+    /// Either `protocol` or `terminal`.
+    pub kind: String,
+    pub method_id: String,
+    /// Lifecycle state such as `running` or `waiting_for_user`.
+    pub state: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// The authentication state of one installed agent.
@@ -85,6 +112,14 @@ pub struct AuthMethodView {
 /// successful logout, and `authenticated` after a successful supported flow.
 /// Batey never persists `authenticated` as durable truth; it lives in
 /// memory and resets to `unknown` on restart.
+///
+/// `unknown` is an internal absence-of-evidence state, never a user-visible
+/// status. Clients show available methods normally and make no signed-in or
+/// signed-out claim.
+///
+/// `active_flow` carries the safe discovery summary of one unfinished flow
+/// for this agent, when one exists, so navigation or reload can resume or
+/// cancel it instead of stranding it behind a conflict error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AgentAuthView {
     pub agent_id: String,
@@ -94,10 +129,19 @@ pub struct AgentAuthView {
     /// Whether this build runs terminal authentication at all.
     pub terminal_supported: bool,
     pub observed_state: ObservedAuthState,
+    /// Safe active-flow discovery, when an unfinished flow exists.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_flow: Option<ActiveAuthFlowView>,
 }
 
 impl AgentAuthView {
-    fn new(agent_id: &str, state: &AgentAuthState, observed: ObservedAuthState) -> Self {
+    fn new(
+        agent_id: &str,
+        state: &AgentAuthState,
+        observed: ObservedAuthState,
+        registry_id: Option<&str>,
+        active_flow: Option<ActiveAuthFlowView>,
+    ) -> Self {
         Self {
             agent_id: agent_id.to_owned(),
             methods: state
@@ -109,11 +153,17 @@ impl AgentAuthView {
                     description: method.description.clone(),
                     method_type: method.type_name().to_owned(),
                     supported: method.is_supported(TERMINAL_AUTH_SUPPORTED),
+                    warning: crate::agents::method_warning(
+                        registry_id,
+                        &method.id,
+                        method.type_name(),
+                    ),
                 })
                 .collect(),
             logout_supported: state.logout_supported,
             terminal_supported: TERMINAL_AUTH_SUPPORTED,
             observed_state: observed,
+            active_flow,
         }
     }
 }
@@ -214,13 +264,74 @@ impl AgentAuthService {
     /// The authentication state of one agent. A recent probe answers without
     /// starting another process. The observed state travels alongside the
     /// capability-only `logout_supported`, never derived from it.
+    /// `unknown` stays an internal absence-of-evidence state; the view still
+    /// carries methods normally and any unfinished active flow for recovery.
     pub async fn auth_view(&self, agent_id: &str) -> AuthResult<AgentAuthView> {
         let state = self.state(agent_id, false).await?;
+        let registry_id = self.registry_id_for(agent_id);
+        let active_flow = self.active_flow_for(agent_id);
         Ok(AgentAuthView::new(
             agent_id,
             &state,
             self.observed_state(agent_id),
+            registry_id.as_deref(),
+            active_flow,
         ))
+    }
+
+    /// The official Registry id behind one catalog id, when the agent is a
+    /// Registry install. Compatibility defaults match on this, never on a
+    /// Batey catalog id or an agent name.
+    fn registry_id_for(&self, agent_id: &str) -> Option<String> {
+        let store = self.sessions.store.as_ref()?;
+        match store.installed_agent(agent_id) {
+            Ok(Some(record)) => record.registry.map(|snapshot| snapshot.registry_id),
+            _ => None,
+        }
+    }
+
+    /// Safe discovery summary of one unfinished flow for this agent, when one
+    /// exists. Covers both protocol and terminal flows. Contains only flow
+    /// id, kind, method id, lifecycle state, and start time.
+    pub fn active_flow_for(&self, agent_id: &str) -> Option<ActiveAuthFlowView> {
+        let protocol = self.protocol_flows.active_for_agent(agent_id).map(|flow| {
+            let view = flow.view();
+            ActiveAuthFlowView {
+                flow_id: view.flow_id,
+                kind: "protocol".to_string(),
+                method_id: view.method_id,
+                state: view.state.as_str().to_string(),
+                started_at: view.started_at,
+            }
+        });
+        let terminal = self.flows.active_for_agent(agent_id).map(|flow| {
+            let view = flow.view();
+            ActiveAuthFlowView {
+                flow_id: view.flow_id,
+                kind: "terminal".to_string(),
+                method_id: view.method_id,
+                state: match view.state {
+                    super::flow::TerminalFlowState::Running => "running".to_string(),
+                    super::flow::TerminalFlowState::Succeeded => "succeeded".to_string(),
+                    super::flow::TerminalFlowState::Failed => "failed".to_string(),
+                    super::flow::TerminalFlowState::Cancelled => "cancelled".to_string(),
+                    super::flow::TerminalFlowState::TimedOut => "timed_out".to_string(),
+                },
+                started_at: view.started_at,
+            }
+        });
+        match (protocol, terminal) {
+            (Some(p), Some(t)) => {
+                if t.started_at > p.started_at {
+                    Some(t)
+                } else {
+                    Some(p)
+                }
+            }
+            (Some(p), None) => Some(p),
+            (None, Some(t)) => Some(t),
+            (None, None) => None,
+        }
     }
 
     /// The in-memory observed state. `Unknown` on a fresh process.
@@ -341,7 +452,10 @@ impl AgentAuthService {
     /// args/env. A legacy bridge runs the advertised command/args from the
     /// agent's `initialize` response. Nothing in either comes from the
     /// request. Both run in the same PTY lifecycle, never through a shell,
-    /// and never reach `authenticate`.
+    /// and never reach `authenticate`. The exact advertised command/args are
+    /// preserved; a bare relative legacy command that PATH cannot resolve
+    /// may resolve inside this same Registry-managed agent's own validated
+    /// install directory, never another agent's.
     pub async fn start_terminal(
         self: &Arc<Self>,
         agent_id: &str,
@@ -351,6 +465,14 @@ impl AgentAuthService {
             return Err(AgentAuthError::Unavailable(
                 "Terminal authentication is not supported on this platform".into(),
             ));
+        }
+        // One active flow per agent across both kinds, so recovery always
+        // finds a single resumable flow instead of stranding one behind a
+        // conflict error with no UI path.
+        if self.protocol_flows.active_for_agent(agent_id).is_some() {
+            return Err(AgentAuthError::Conflict(format!(
+                "Agent '{agent_id}' already has an authentication flow running. Finish or cancel it first."
+            )));
         }
         let runtime = self.runtime(agent_id)?;
         let state = self.state(agent_id, true).await?;
@@ -364,13 +486,21 @@ impl AgentAuthService {
             .cloned()?;
 
         let cwd = self.work_dir()?;
-        let base_env = self.agent_env(&runtime);
+        let base_env = self.agent_env(&runtime, crate::agents::AuthEnvScope::Terminal);
+        let install_dir = self.install_dir_for(agent_id);
         let command = match &method.kind {
             AuthMethodKind::Terminal(terminal) => {
                 terminal_command(&runtime, terminal, &base_env, &cwd)
             }
             AuthMethodKind::LegacyTerminal(legacy) => {
-                legacy_terminal_command(legacy, &base_env, &cwd).map_err(|error| {
+                legacy_terminal_command_for_agent(
+                    agent_id,
+                    legacy,
+                    &base_env,
+                    &cwd,
+                    install_dir.as_deref(),
+                )
+                .map_err(|error| {
                     AgentAuthError::Invalid(format!(
                         "Authentication method '{method_id}' carries an invalid legacy login command: {error}"
                     ))
@@ -432,12 +562,20 @@ impl AgentAuthService {
     /// The browser request returns at once with a running flow id. The ACP
     /// `authenticate` RPC runs in the background so a long device-code or
     /// URL step never ties up the request. Elicitations stay request-scoped
-    /// on the flow and never reach durable chat events.
+    /// on the flow and never reach durable chat events. Cancel stays
+    /// available throughout the wait.
     pub async fn start_protocol(
         self: &Arc<Self>,
         agent_id: &str,
         method_id: &str,
     ) -> AuthResult<ProtocolAuthFlowView> {
+        // One active flow per agent across both kinds, so a terminal flow
+        // never hides behind a protocol conflict with no resume path.
+        if self.flows.active_for_agent(agent_id).is_some() {
+            return Err(AgentAuthError::Conflict(format!(
+                "Agent '{agent_id}' already has an authentication flow running. Finish or cancel it first."
+            )));
+        }
         let state = self.state(agent_id, true).await?;
         let method = state
             .method(method_id)
@@ -612,7 +750,7 @@ impl AgentAuthService {
                     _ = tokio::time::sleep_until(deadline) => {
                         flow.finish(
                             ProtocolFlowState::TimedOut,
-                            Some("The authentication flow reached its time limit".into()),
+                            Some(PROTOCOL_TIMEOUT_REASON.into()),
                         );
                         client.callback_handler().cancel_pending_elicitations().await;
                         client.shutdown().await;
@@ -646,7 +784,7 @@ impl AgentAuthService {
     async fn connect_for_protocol(&self, agent_id: &str, flow_id: &str) -> AuthResult<AcpClient> {
         let runtime = self.runtime(agent_id)?;
         let cwd = self.work_dir()?;
-        let env = self.agent_env(&runtime);
+        let env = self.agent_env(&runtime, crate::agents::AuthEnvScope::Auth);
         let client = tokio::time::timeout(
             PROBE_TIMEOUT,
             AcpClient::spawn(
@@ -704,10 +842,14 @@ impl AgentAuthService {
             .invalidate_stopped_sessions_for_agent(agent_id)
             .await;
         let state = self.state(agent_id, true).await?;
+        let registry_id = self.registry_id_for(agent_id);
+        let active_flow = self.active_flow_for(agent_id);
         Ok(AgentAuthView::new(
             agent_id,
             &state,
             self.observed_state(agent_id),
+            registry_id.as_deref(),
+            active_flow,
         ))
     }
 
@@ -819,7 +961,7 @@ impl AgentAuthService {
     async fn connect(&self, agent_id: &str) -> AuthResult<AcpClient> {
         let runtime = self.runtime(agent_id)?;
         let cwd = self.work_dir()?;
-        let env = self.agent_env(&runtime);
+        let env = self.agent_env(&runtime, crate::agents::AuthEnvScope::Auth);
         let client = tokio::time::timeout(
             PROBE_TIMEOUT,
             AcpClient::spawn(
@@ -884,18 +1026,35 @@ impl AgentAuthService {
     /// The base is the Batey process environment, which startup already
     /// emptied of every stashed secret. The resolver scrubs the stashed names
     /// again, injects only the names this agent's `pass_env` lists, and then
-    /// applies this agent's private overrides, so one agent never observes
-    /// another agent's value. Terminal authentication later overlays the
-    /// method-specific environment on top of this base.
-    fn agent_env(&self, runtime: &AgentRuntime) -> HashMap<String, String> {
+    /// applies compatibility defaults plus this agent's private overrides, so
+    /// one agent never observes another agent's value. Compatibility defaults
+    /// lose to T131 overrides, and they are scoped: a Codex `NO_BROWSER`
+    /// default reaches auth processes only, while a Copilot `CI` default
+    /// reaches auth and terminal-auth processes. Terminal authentication
+    /// later overlays the method-specific environment on top of this base.
+    /// Ordinary chat sessions never pass through here, so headless defaults
+    /// never leak into them.
+    fn agent_env(
+        &self,
+        runtime: &AgentRuntime,
+        scope: crate::agents::AuthEnvScope,
+    ) -> HashMap<String, String> {
         let base: HashMap<String, String> = std::env::vars().collect();
         let overrides = self.agent_env_overrides(&runtime.id);
+        let registry_id = self.registry_id_for(&runtime.id);
+        let compat = crate::agents::auth_env_defaults(registry_id.as_deref(), scope);
+        // Compatibility defaults behave as lower-precedence overrides: they
+        // win over base/launch/pass_env but lose to explicit T131 values.
+        let mut effective = compat;
+        for (name, value) in overrides {
+            effective.insert(name, value);
+        }
         crate::workspace_env::resolve_agent_env_with_overrides(
             &base,
             &runtime.launch.env,
             &runtime.launch.pass_env,
             &self.sessions.secret_env(),
-            &overrides,
+            &effective,
         )
     }
 
@@ -927,6 +1086,17 @@ impl AgentAuthService {
             ))
         })?;
         Ok(self.work_dir.clone())
+    }
+
+    /// The validated Batey-managed install directory of one Registry install,
+    /// when it has one. Only a binary distribution records an install
+    /// directory. Resolution never searches another agent's directory.
+    fn install_dir_for(&self, agent_id: &str) -> Option<PathBuf> {
+        let store = self.sessions.store.as_ref()?;
+        let record = store.installed_agent(agent_id).ok().flatten()?;
+        let snapshot = record.registry?;
+        let install_dir = snapshot.install_dir?;
+        Some(PathBuf::from(install_dir))
     }
 }
 
@@ -963,30 +1133,148 @@ pub fn terminal_command(
     }
 }
 
-/// Builds the legacy bridge invocation from the advertised descriptor.
+/// Builds the legacy bridge invocation, resolving a bare relative command
+/// inside the same Registry-managed agent's own install directory when the
+/// sanitized `PATH` cannot resolve it.
 ///
-/// The program and args come from the agent's `initialize` response, never
-/// from a browser field. The environment is the same sanitized per-agent
-/// base and the cwd is the Batey-owned auth directory. The caller runs the
-/// result directly, never through a shell, under the same PTY lifecycle as
-/// a stable terminal method.
-pub fn legacy_terminal_command(
+/// The exact advertised command/args are preserved. Only a bare relative
+/// command with no slash is a candidate for install-directory resolution,
+/// and only when `PATH` does not already resolve it. The resolved file must
+/// canonicalize inside `install_dir`, be a regular executable file, match
+/// the advertised command name, and pass the existing path-boundary checks.
+/// Never a shell. Never another agent's directory.
+pub fn legacy_terminal_command_for_agent(
+    agent_id: &str,
     legacy: &LegacyTerminalAuth,
     base_env: &HashMap<String, String>,
     cwd: &Path,
+    install_dir: Option<&Path>,
 ) -> anyhow::Result<PtyCommand> {
     crate::acp::auth::validate_legacy_terminal_auth(legacy)?;
     validate_legacy_program(&legacy.command)?;
+    let program = resolve_legacy_program(&legacy.command, base_env, install_dir, agent_id)?;
     let env: BTreeMap<String, String> = base_env
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))
         .collect();
     Ok(PtyCommand {
-        program: legacy.command.clone(),
+        program,
         args: legacy.args.clone(),
         env,
         cwd: cwd.to_path_buf(),
     })
+}
+
+/// Resolves the advertised legacy command to an executable path.
+///
+/// An absolute path or a name already on `PATH` is used unchanged. A bare
+/// relative name that `PATH` cannot resolve is resolved inside this agent's
+/// own validated install directory, under strict boundary rules.
+fn resolve_legacy_program(
+    command: &str,
+    base_env: &HashMap<String, String>,
+    install_dir: Option<&Path>,
+    agent_id: &str,
+) -> anyhow::Result<String> {
+    // An absolute path stays exactly as advertised.
+    if command.starts_with('/') {
+        return Ok(command.to_string());
+    }
+    // A name that resolves through the sanitized PATH stays as advertised.
+    if let Some(path) =
+        crate::agents::which_in(command, std::ffi::OsStr::new(&path_value(base_env)))
+    {
+        if path.is_file() {
+            return Ok(command.to_string());
+        }
+    }
+    // A bare relative name may resolve inside this agent's own install dir.
+    let Some(install_dir) = install_dir else {
+        return Ok(command.to_string());
+    };
+    let resolved = resolve_inside_install_dir(command, install_dir, agent_id)?;
+    Ok(resolved.display().to_string())
+}
+
+/// The sanitized `PATH` of one auth process, as a string for `which_in`.
+fn path_value(base_env: &HashMap<String, String>) -> String {
+    base_env.get("PATH").cloned().unwrap_or_default()
+}
+
+/// Resolves one advertised relative command inside the validated install
+/// directory, rejecting traversal, symlink escape, cross-agent paths, and
+/// non-executable or mismatched files.
+fn resolve_inside_install_dir(
+    command: &str,
+    install_dir: &Path,
+    agent_id: &str,
+) -> anyhow::Result<PathBuf> {
+    anyhow::ensure!(
+        !command.contains('/') && !command.contains('\\'),
+        "A legacy login command with a path separator needs an absolute path"
+    );
+    // The install root must exist and canonicalize inside itself.
+    let root = install_dir.canonicalize().map_err(|error| {
+        anyhow::anyhow!(
+            "The installed agent directory {} is not usable: {error}",
+            install_dir.display()
+        )
+    })?;
+    let candidate = root.join(command);
+    let resolved = candidate.canonicalize().map_err(|error| {
+        anyhow::anyhow!(
+            "The advertised login command '{command}' was not found for agent '{agent_id}': {error}"
+        )
+    })?;
+    // The resolved file must stay inside this agent's own install directory.
+    anyhow::ensure!(
+        resolved.starts_with(&root),
+        "The advertised login command '{command}' resolves outside the installed agent directory"
+    );
+    anyhow::ensure!(
+        resolved.is_file(),
+        "The advertised login command '{command}' is not a file"
+    );
+    // The resolved file name must match the advertised command, so a symlink
+    // to a differently named program is refused.
+    let name_matches = resolved
+        .file_name()
+        .map(|name| name.to_string_lossy() == command)
+        .unwrap_or(false);
+    anyhow::ensure!(
+        name_matches,
+        "The advertised login command '{command}' resolved to a file with another name"
+    );
+    anyhow::ensure!(
+        is_executable(&resolved),
+        "The advertised login command '{command}' is not executable"
+    );
+    Ok(resolved)
+}
+
+fn is_executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+    #[cfg(not(unix))]
+    {
+        path.is_file()
+    }
+}
+
+/// The legacy bridge invocation without install-directory resolution. Kept
+/// for callers that only have the advertised descriptor; it never searches
+/// an install directory.
+pub fn legacy_terminal_command(
+    legacy: &LegacyTerminalAuth,
+    base_env: &HashMap<String, String>,
+    cwd: &Path,
+) -> anyhow::Result<PtyCommand> {
+    legacy_terminal_command_for_agent("", legacy, base_env, cwd, None)
 }
 
 fn validate_legacy_program(program: &str) -> anyhow::Result<()> {
@@ -1125,5 +1413,182 @@ mod tests {
             label: None,
         };
         assert!(legacy_terminal_command(&legacy, &base, Path::new("/tmp")).is_ok());
+    }
+
+    fn write_executable(path: &Path, body: &str) {
+        std::fs::write(path, body).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(path, perms).unwrap();
+        }
+    }
+
+    /// The timeout reason is provider-neutral and actionable.
+    #[test]
+    fn protocol_timeout_reason_is_provider_neutral() {
+        assert!(PROTOCOL_TIMEOUT_REASON.contains("timeout"));
+        assert!(PROTOCOL_TIMEOUT_REASON.contains("browser"));
+        for provider in [
+            "Codex",
+            "Copilot",
+            "Claude",
+            "Antigravity",
+            "OpenAI",
+            "GitHub",
+        ] {
+            assert!(
+                !PROTOCOL_TIMEOUT_REASON.contains(provider),
+                "the timeout reason named {provider}"
+            );
+        }
+    }
+
+    /// A Registry-installed OpenCode advertises a bare `opencode` command.
+    /// When PATH cannot resolve it, the resolver finds it inside that same
+    /// agent's validated install directory.
+    #[test]
+    fn a_bare_legacy_command_resolves_inside_the_agents_own_install_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_dir = tmp.path().join("opencode/1.18.30");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let executable = install_dir.join("opencode");
+        write_executable(&executable, "#!/bin/sh\nexit 0\n");
+
+        let legacy = LegacyTerminalAuth {
+            command: "opencode".into(),
+            args: vec!["auth".into(), "login".into()],
+            label: None,
+        };
+        let base = HashMap::from([("PATH".to_string(), String::new())]);
+        let command = legacy_terminal_command_for_agent(
+            "opencode",
+            &legacy,
+            &base,
+            Path::new("/var/lib/batey"),
+            Some(&install_dir),
+        )
+        .unwrap();
+        // The advertised args are preserved exactly.
+        assert_eq!(command.args, vec!["auth", "login"]);
+        // The program is the resolved install-dir path.
+        assert_eq!(
+            Path::new(&command.program).canonicalize().unwrap(),
+            executable.canonicalize().unwrap()
+        );
+    }
+
+    /// A command that already resolves through PATH is never rewritten.
+    #[test]
+    fn a_path_resolvable_legacy_command_is_used_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let on_path = tmp.path().join("opencode");
+        write_executable(&on_path, "#!/bin/sh\nexit 0\n");
+        let install_dir = tmp.path().join("agents/opencode/1.0.0");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        write_executable(&install_dir.join("opencode"), "#!/bin/sh\nexit 1\n");
+
+        let legacy = LegacyTerminalAuth {
+            command: "opencode".into(),
+            args: vec!["auth".into(), "login".into()],
+            label: None,
+        };
+        let base = HashMap::from([("PATH".to_string(), tmp.path().display().to_string())]);
+        let command = legacy_terminal_command_for_agent(
+            "opencode",
+            &legacy,
+            &base,
+            Path::new("/tmp"),
+            Some(&install_dir),
+        )
+        .unwrap();
+        assert_eq!(command.program, "opencode");
+    }
+
+    /// A symlink inside the install directory that escapes it is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_escaping_the_install_directory_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_dir = tmp.path().join("opencode/1.0.0");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        let outside = tmp.path().join("outside-opencode");
+        write_executable(&outside, "#!/bin/sh\nexit 0\n");
+        std::os::unix::fs::symlink(&outside, install_dir.join("opencode")).unwrap();
+
+        let legacy = LegacyTerminalAuth {
+            command: "opencode".into(),
+            args: vec!["auth".into(), "login".into()],
+            label: None,
+        };
+        let base = HashMap::from([("PATH".to_string(), String::new())]);
+        let error = legacy_terminal_command_for_agent(
+            "opencode",
+            &legacy,
+            &base,
+            Path::new("/tmp"),
+            Some(&install_dir),
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("outside") || error.to_string().contains("another name"),
+            "{error}"
+        );
+    }
+
+    /// Never search another agent's install directory: a command that only
+    /// exists in a sibling agent's directory does not resolve.
+    #[test]
+    fn another_agents_install_directory_is_never_searched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let other = tmp.path().join("other/1.0.0");
+        std::fs::create_dir_all(&other).unwrap();
+        write_executable(&other.join("opencode"), "#!/bin/sh\nexit 0\n");
+        let own = tmp.path().join("opencode/1.0.0");
+        std::fs::create_dir_all(&own).unwrap();
+
+        let legacy = LegacyTerminalAuth {
+            command: "opencode".into(),
+            args: vec!["auth".into(), "login".into()],
+            label: None,
+        };
+        let base = HashMap::from([("PATH".to_string(), String::new())]);
+        let error = legacy_terminal_command_for_agent(
+            "opencode",
+            &legacy,
+            &base,
+            Path::new("/tmp"),
+            Some(&own),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error}");
+    }
+
+    /// A non-executable file inside the install directory is refused.
+    #[cfg(unix)]
+    #[test]
+    fn a_non_executable_install_file_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let install_dir = tmp.path().join("opencode/1.0.0");
+        std::fs::create_dir_all(&install_dir).unwrap();
+        std::fs::write(install_dir.join("opencode"), "not executable").unwrap();
+
+        let legacy = LegacyTerminalAuth {
+            command: "opencode".into(),
+            args: vec!["auth".into(), "login".into()],
+            label: None,
+        };
+        let base = HashMap::from([("PATH".to_string(), String::new())]);
+        let error = legacy_terminal_command_for_agent(
+            "opencode",
+            &legacy,
+            &base,
+            Path::new("/tmp"),
+            Some(&install_dir),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("executable"), "{error}");
     }
 }

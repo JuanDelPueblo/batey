@@ -109,7 +109,7 @@ export const AUTH_METHODS = {
   codex: {
     logout_supported: true,
     methods: [
-      { id: 'openai-oauth', name: 'Sign in with OpenAI', type: 'agent', description: null, supported: true },
+      { id: 'openai-oauth', name: 'Sign in with OpenAI (device code)', type: 'agent', description: 'ChatGPT device-code sign-in for a headless backend.', supported: true },
       { id: 'api-key', name: 'API key', type: 'terminal', description: 'Enter an API key in a terminal.', supported: true },
     ],
   },
@@ -129,7 +129,14 @@ export const AUTH_METHODS = {
   antigravity: {
     logout_supported: false,
     methods: [
-      { id: 'antigravity-interactive', name: 'Interactive sign-in', type: 'agent', description: 'Complete the interactive step.', supported: true },
+      {
+        id: 'antigravity-interactive',
+        name: 'Interactive sign-in',
+        type: 'agent',
+        description: 'Complete the interactive step, or set GEMINI_API_KEY for API-key auth.',
+        supported: true,
+        warning: 'Upstream Antigravity sign-in may need a browser or a localhost callback that ACP does not expose in a fully remote-friendly way. API-key auth still works when GEMINI_API_KEY is set for this agent. One-time interactive workaround: run the login inside this same persistent Batey environment, use the upstream remote/SSH-friendly flow when the tool offers one, forward or publish the localhost callback port shown by the tool to the machine running the browser, and keep /data persistent so the credentials survive container recreation.',
+      },
     ],
   },
   'opencode-legacy': {
@@ -816,7 +823,41 @@ export class FakeState {
       logout_supported: config.logout_supported,
       terminal_supported: true,
       observed_state: this.observedAuth(id),
+      active_flow: this.activeFlowFor(id),
     };
+  }
+
+  /**
+   * Safe active-flow discovery for one agent. Contains only flow id, kind,
+   * method id, lifecycle state, and start time. Never PTY output, codes,
+   * tokens, or sensitive URLs.
+   */
+  activeFlowFor(id) {
+    const candidates = [];
+    for (const flow of this.protocolFlows.values()) {
+      if (flow.agent_id !== id) continue;
+      if (flow.state !== 'running' && flow.state !== 'waiting_for_user') continue;
+      candidates.push({
+        flow_id: flow.flow_id,
+        kind: 'protocol',
+        method_id: flow.method_id,
+        state: flow.state,
+        started_at: flow.started_at,
+      });
+    }
+    for (const flow of this.flows.values()) {
+      if (flow.agent_id !== id || flow.state !== 'running') continue;
+      candidates.push({
+        flow_id: flow.flow_id,
+        kind: 'terminal',
+        method_id: flow.method_id,
+        state: flow.state,
+        started_at: flow.started_at,
+      });
+    }
+    if (candidates.length === 0) return null;
+    candidates.sort((a, b) => (b.started_at ?? '').localeCompare(a.started_at ?? ''));
+    return candidates[0];
   }
 
   authenticateAgent(id, methodId) {
@@ -1212,6 +1253,24 @@ export class FakeState {
     this.setSeedChatDates(fresh, '2026-09-15T12:50:00.000Z', '2026-09-15T12:50:00.000Z');
     this.setSeedConfig(fresh, 'web_search', true);
     this.setSeedUsage(fresh, { used: 0, size: 200000, cost_amount: 0, cost_currency: 'USD' });
+
+    this.seedAuthFlows();
+  }
+
+  /**
+   * Seeds one recoverable protocol flow and one recoverable terminal flow, so
+   * the Agents page exercises automatic rediscovery after navigation/reload.
+   * The token/URL values are fictional fixtures, never real credentials.
+   */
+  seedAuthFlows() {
+    // Defensive: the shared AGENTS fixture is mutable across tests, so seed
+    // only when the agent is still present.
+    if (this.agent('antigravity')) {
+      this.startProtocolFlow('antigravity', 'antigravity-interactive');
+    }
+    if (this.agent('example-acp')) {
+      this.startTerminalFlow('example-acp', 'example-token');
+    }
   }
 
   /**

@@ -547,6 +547,37 @@ describe('fake backend seed history', () => {
     assert.throws(() => state.logoutAgent('opencode'), /does not support logout/);
   });
 
+  it('exposes safe active-flow discovery without private material', () => {
+    const state = new FakeState();
+    const terminal = state.startTerminalFlow('codex', 'api-key');
+    const codex = state.agentAuth('codex');
+    assert.equal(codex.active_flow.kind, 'terminal');
+    assert.equal(codex.active_flow.flow_id, terminal.flow_id);
+    assert.equal(codex.active_flow.method_id, 'api-key');
+    assert.ok(codex.active_flow.started_at);
+
+    // The seeded Antigravity protocol flow is discoverable too.
+    const anti = state.agentAuth('antigravity');
+    assert.equal(anti.active_flow.kind, 'protocol');
+    assert.equal(anti.active_flow.method_id, 'antigravity-interactive');
+    assert.equal(anti.active_flow.state, 'waiting_for_user');
+
+    const serialized = JSON.stringify({ codex, anti });
+    assert.equal(serialized.includes('scrollback'), false);
+    assert.equal(serialized.includes('"output"'), false);
+    assert.equal(serialized.includes('example.invalid'), false);
+    assert.equal(serialized.includes('ABCD-1234'), false);
+  });
+
+  it('scopes the antigravity headless warning to its own method', () => {
+    const state = new FakeState();
+    const anti = state.agentAuth('antigravity');
+    assert.ok(anti.methods[0].warning.includes('localhost'));
+    assert.ok(anti.methods[0].warning.includes('GEMINI_API_KEY'));
+    const codex = state.agentAuth('codex');
+    assert.ok(codex.methods.every((method) => method.warning === undefined));
+  });
+
   it('runs an async protocol flow with a URL elicitation', () => {
     const state = new FakeState();
     const flow = state.startProtocolFlow('codex', 'openai-oauth');

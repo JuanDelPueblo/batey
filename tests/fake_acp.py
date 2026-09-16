@@ -120,6 +120,16 @@ def auth_methods():
                                         "args": ["auth", "login"],
                                         "label": "OpenCode Login"}}},
         ]
+    if mode == "auth-legacy-opencode-relative":
+        # A Registry-installed OpenCode advertises a bare command name. Batey
+        # may resolve it inside that same agent's validated install directory.
+        return [
+            {"id": "opencode-login", "name": "Log in with OpenCode",
+             "description": "Run `opencode auth login` in the terminal",
+             "_meta": {"terminal-auth": {"command": "opencode",
+                                        "args": ["auth", "login"],
+                                        "label": "OpenCode Login"}}},
+        ]
     if mode == "auth-legacy-copilot":
         return [
             {"id": "copilot-login", "name": "Log in with Copilot CLI",

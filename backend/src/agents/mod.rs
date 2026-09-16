@@ -5,6 +5,7 @@
 //! through the management API. Ownership is explicit, so a mutable API never
 //! changes a declarative definition and an id collision is reported instead of
 //! resolved by precedence.
+mod compat;
 mod custom;
 mod declarative;
 mod definition;
@@ -12,6 +13,11 @@ mod file;
 mod installed;
 mod manager;
 pub mod registry;
+
+pub use compat::{
+    auth_env_defaults, method_warning, AuthEnvScope, ANTIGRAVITY_AUTH_WARNING,
+    ANTIGRAVITY_REGISTRY_ID, CODEX_REGISTRY_ID, COPILOT_REGISTRY_ID, OPENCODE_REGISTRY_ID,
+};
 
 pub use custom::{CustomAgentInput, ValidationIssue, ValidationReport, MAX_IDLE_TIMEOUT_SECS};
 pub use declarative::parse_declarative_agents;

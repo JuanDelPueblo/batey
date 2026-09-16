@@ -26,6 +26,8 @@ import { AppStateService } from '../../state/app-state.service';
 export interface AuthTerminalDialogData {
   flow: AgentAuthFlow;
   method: AgentAuthMethod;
+  /** True when the dialog reconnected to an already-running flow. */
+  resumed?: boolean;
 }
 
 @Component({

@@ -10,7 +10,10 @@ use axum::{
     http::Request,
 };
 use batey::{
-    agents::{AgentDefinition, AgentRegistry},
+    agents::{
+        which, AgentDefinition, AgentRegistry, AgentSource, InstalledAgent, InstalledDistribution,
+        RegistrySnapshot,
+    },
     auth::{AgentAuthService, MAX_SCROLLBACK_BYTES},
     config::{BateyPaths, Config, PathOverrides},
     events::EventLog,
@@ -1011,6 +1014,92 @@ async fn legacy_copilot_runs_copilot_login() {
         !history.join("authenticate.json").exists(),
         "copilot legacy sent `authenticate` instead of `copilot login`"
     );
+    harness.auth.shutdown();
+    harness.sessions.shutdown_all().await;
+}
+
+/// A Registry-installed agent that advertises a bare relative login command
+/// resolves it inside that same agent's own validated install directory when
+/// the sanitized PATH cannot. The advertised args stay exact and no shell runs.
+#[tokio::test]
+async fn registry_installed_relative_legacy_command_resolves_in_its_install_dir() {
+    // If `opencode` were on this host's PATH, resolution would (correctly)
+    // use the PATH entry instead, so this test only proves the install-dir
+    // fallback when PATH cannot answer.
+    if which("opencode").is_some() {
+        return;
+    }
+
+    let root_dir = tempfile::tempdir().unwrap();
+    let root = root_dir.path();
+    let history = root.join("legacy");
+    std::fs::create_dir_all(&history).unwrap();
+
+    // The agent's own install directory holds the advertised executable.
+    let install_dir = root.join("data/agents/opencode/1.0.0");
+    std::fs::create_dir_all(&install_dir).unwrap();
+    write_legacy_stub(&install_dir.join("opencode"));
+
+    let harness = Harness::start(
+        root,
+        vec![legacy_agent(
+            "legacy",
+            &history,
+            "auth-legacy-opencode-relative",
+        )],
+    )
+    .await;
+
+    // The durable record names the Registry agent and its install directory.
+    let store = harness
+        .sessions
+        .store
+        .as_ref()
+        .expect("the harness has a store");
+    let mut record = InstalledAgent::new("legacy".into(), AgentSource::Registry, "python3".into());
+    record.registry = Some(RegistrySnapshot {
+        registry_id: "opencode".into(),
+        registry_version: "1.0.0".into(),
+        distribution: InstalledDistribution::Npx {
+            package: "opencode@1.0.0".into(),
+            args: Vec::new(),
+            env: Default::default(),
+        },
+        install_dir: Some(install_dir.display().to_string()),
+        installed_at: chrono::Utc::now().to_rfc3339(),
+    });
+    store.insert_agent(&record).unwrap();
+
+    let flow_id = harness.start_flow_for("legacy", "opencode-login").await;
+
+    // The legacy stub records its invocation beside itself, inside the
+    // install directory.
+    let invocation_path = install_dir.join("invocation.json");
+    for _ in 0..200 {
+        if invocation_path.exists() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let invocation: Value =
+        serde_json::from_str(&std::fs::read_to_string(&invocation_path).unwrap()).unwrap();
+    let argv: Vec<String> = invocation["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap().to_owned())
+        .collect();
+    // The resolved program is the install-dir file, not a bare name.
+    let resolved = std::fs::canonicalize(install_dir.join("opencode")).unwrap();
+    assert_eq!(
+        std::fs::canonicalize(&argv[0]).unwrap(),
+        resolved,
+        "{argv:?}"
+    );
+    // The advertised arguments are preserved exactly.
+    assert_eq!(argv[1..], vec!["auth".to_string(), "login".to_string()]);
+
+    harness.auth.cancel_terminal_flow(&flow_id).unwrap();
     harness.auth.shutdown();
     harness.sessions.shutdown_all().await;
 }

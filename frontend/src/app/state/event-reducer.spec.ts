@@ -42,6 +42,16 @@ describe('EventReducer', () => {
     expect((reducer.items()[0] as { entries: Array<{ responded?: boolean; decision?: string }> }).entries[0]).toMatchObject({ responded: true, decision: 'allow-once' });
   });
 
+  it.each([
+    [true, 'Allowed'],
+    [false, 'Denied'],
+  ])('preserves legacy permission response history when granted is %s', (granted, decision) => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'permission_request', { id: 'permission-1', method: 'edit', description: 'Edit' }));
+    reducer.ingest(event(2, 'permission_response', { id: 'permission-1', granted }));
+    expect((reducer.items()[0] as { entries: Array<{ decision?: string }> }).entries[0]).toMatchObject({ decision });
+  });
+
   it('updates tool output and preserves thought entries', () => {
     const reducer = new EventReducer();
     reducer.ingest(event(1, 'thought_chunk', { text: 'Inspecting the repository' }));

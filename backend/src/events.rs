@@ -129,6 +129,7 @@ pub enum EventPayload {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<String>,
         /// The exact ACP permission options advertised by the agent.
+        #[serde(default)]
         options: serde_json::Value,
     },
     PermissionResponse {
@@ -137,6 +138,10 @@ pub enum EventPayload {
         /// cancellation marker, never an implicit denial.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         option_id: Option<String>,
+        /// Legacy v0.4.0 response state. New responses leave this absent;
+        /// retaining it keeps old history from being misread as cancelled.
+        #[serde(default, rename = "granted", skip_serializing_if = "Option::is_none")]
+        legacy_granted: Option<bool>,
     },
     TurnComplete {
         stop_reason: String,
@@ -255,6 +260,7 @@ impl EventLog {
                 EventPayload::PermissionResponse {
                     id,
                     option_id: None,
+                    legacy_granted: None,
                 },
             )?;
         }
@@ -612,6 +618,44 @@ mod tests {
     }
 
     #[test]
+    fn legacy_permission_events_deserialize_without_losing_history() {
+        let request: EventPayload = serde_json::from_value(serde_json::json!({
+            "type": "permission_request",
+            "id": "p1",
+            "method": "fs/write_text_file",
+            "description": "Write a file"
+        }))
+        .unwrap();
+        match request {
+            EventPayload::PermissionRequest { options, .. } => {
+                assert_eq!(options, serde_json::Value::Null);
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+
+        for granted in [true, false] {
+            let response: EventPayload = serde_json::from_value(serde_json::json!({
+                "type": "permission_response",
+                "id": "p1",
+                "granted": granted
+            }))
+            .unwrap();
+            match &response {
+                EventPayload::PermissionResponse {
+                    option_id,
+                    legacy_granted,
+                    ..
+                } => {
+                    assert_eq!(*option_id, None);
+                    assert_eq!(*legacy_granted, Some(granted));
+                }
+                other => panic!("unexpected payload: {other:?}"),
+            }
+            assert_eq!(serde_json::to_value(response).unwrap()["granted"], granted);
+        }
+    }
+
+    #[test]
     fn persistent_replay_is_not_limited_by_memory_window() {
         let temp = tempfile::tempdir().unwrap();
         let store = Arc::new(crate::store::Store::open(&temp.path().join("events.db")).unwrap());
@@ -704,7 +748,7 @@ mod tests {
         assert_eq!(denied.session_id, "chat-a");
         assert!(matches!(
             &denied.payload,
-            EventPayload::PermissionResponse { id, option_id: None } if id == "p1"
+            EventPayload::PermissionResponse { id, option_id: None, .. } if id == "p1"
         ));
         let completed = &durable[8];
         assert_eq!(completed.seq, 9);
@@ -775,6 +819,7 @@ mod tests {
                     EventPayload::PermissionResponse {
                         id: "p1".into(),
                         option_id: Some("allow-once".into()),
+                        legacy_granted: None,
                     },
                 )
                 .unwrap();
@@ -811,7 +856,7 @@ mod tests {
         assert_eq!(durable.len(), 9);
         assert!(!durable.iter().any(|e| matches!(
             &e.payload,
-            EventPayload::PermissionResponse { id, option_id: None } if id == "p1"
+            EventPayload::PermissionResponse { id, option_id: None, .. } if id == "p1"
         )));
         assert!(!durable.iter().any(|e| matches!(
             &e.payload,

@@ -409,9 +409,18 @@ export class EventReducer {
     next[index] = {
       ...next[index],
       responded: true,
-      decision: this.stringValue(payload['option_id']) ?? 'Cancelled',
+      decision: this.permissionDecision(payload),
     } as TurnEntry;
     return next;
+  }
+
+  private permissionDecision(payload: SessionEvent['payload']): string {
+    const optionId = this.stringValue(payload['option_id']);
+    if (optionId) return optionId;
+    if (typeof payload['granted'] === 'boolean') {
+      return payload['granted'] ? 'Allowed' : 'Denied';
+    }
+    return 'Cancelled';
   }
 
   private permissionOptions(value: unknown): import('../core/api/types').AgentPermissionOption[] {

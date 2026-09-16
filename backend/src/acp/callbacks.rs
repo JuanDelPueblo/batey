@@ -442,6 +442,7 @@ impl CallbackHandler {
                 EventPayload::PermissionResponse {
                     id: perm_id.to_string(),
                     option_id: Some(option_id.clone()),
+                    legacy_granted: None,
                 },
             ) {
                 tracing::error!(%error, "Failed to emit PermissionResponse event");
@@ -464,6 +465,7 @@ impl CallbackHandler {
                 EventPayload::PermissionResponse {
                     id,
                     option_id: None,
+                    legacy_granted: None,
                 },
             ) {
                 tracing::error!(%error, "Failed to emit cancelled PermissionResponse event");

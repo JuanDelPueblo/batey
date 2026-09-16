@@ -1357,7 +1357,9 @@ async fn http_permission_endpoint_accepts_frontend_payload() {
     let response = match mgr.event_log().replay_from(0) {
         ReplayResult::Complete(events) | ReplayResult::Partial { events, .. } => {
             events.into_iter().find_map(|event| match event.payload {
-                EventPayload::PermissionResponse { id, option_id } if id == perm_id => option_id,
+                EventPayload::PermissionResponse { id, option_id, .. } if id == perm_id => {
+                    option_id
+                }
                 _ => None,
             })
         }

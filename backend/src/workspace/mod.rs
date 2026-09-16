@@ -919,8 +919,7 @@ fn is_disposable_runtime_status(worktree: &Path, status: &str) -> Result<bool, W
             Ok(target) => target,
             Err(_) => return Ok(false),
         };
-        if !entry_metadata.file_type().is_symlink() || !target.starts_with(Path::new("/nix/store"))
-        {
+        if !entry_metadata.file_type().is_symlink() || !target.is_dir() {
             return Ok(false);
         }
     }

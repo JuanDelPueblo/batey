@@ -44,14 +44,22 @@ fn git_repo(root: &Path) -> std::path::PathBuf {
     repo
 }
 
-fn git_repo_with_nix_direnv(root: &Path) -> std::path::PathBuf {
+fn git_repo_with_direnv_runtime_cache(root: &Path) -> std::path::PathBuf {
     let repo = git_repo(root);
-    let source_root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for name in [".envrc", "flake.nix", "flake.lock", ".gitignore"] {
-        std::fs::copy(source_root.join(name), repo.join(name)).unwrap();
-    }
+    // This is the shape that nix-direnv produces for a flake profile. Keep
+    // the fixture network- and Nix-independent so the Rust CI job can still
+    // exercise the real direnv authorization/export lifecycle.
+    let path = std::env::var("PATH").unwrap();
+    std::fs::write(
+        repo.join(".envrc"),
+        format!(
+            "export PATH=\"{path}\"\nmkdir -p .direnv\nln -sfn /tmp .direnv/flake-profile-1-link\nln -sfn flake-profile-1-link .direnv/flake-profile\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(repo.join(".gitignore"), ".direnv/\n").unwrap();
     git(&repo, &["add", "."]);
-    git(&repo, &["commit", "-m", "add Nix direnv environment"]);
+    git(&repo, &["commit", "-m", "add direnv runtime environment"]);
     repo
 }
 
@@ -449,7 +457,7 @@ async fn deleting_clean_managed_chat_removes_worktree_but_preserves_branch() {
 #[tokio::test]
 async fn deleting_initialized_managed_chat_removes_only_the_runtime_cache() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git_repo_with_nix_direnv(tmp.path());
+    let repo = git_repo_with_direnv_runtime_cache(tmp.path());
     let (hub, store, sessions) = hub_with_manager(tmp.path());
     let project = hub
         .create_project("git".into(), repo.display().to_string())
@@ -851,7 +859,7 @@ async fn deleting_project_cascades_many_managed_chats_and_their_worktrees() {
 #[tokio::test]
 async fn project_deletion_preflight_allows_the_same_runtime_cache_as_chat_deletion() {
     let tmp = tempfile::tempdir().unwrap();
-    let repo = git_repo_with_nix_direnv(tmp.path());
+    let repo = git_repo_with_direnv_runtime_cache(tmp.path());
     let (hub, store, sessions) = hub_with_manager(tmp.path());
     let project = hub
         .create_project("git".into(), repo.display().to_string())

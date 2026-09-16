@@ -154,7 +154,8 @@ fn only_the_generated_nix_direnv_profile_is_disposable() {
     let managed = provision_managed(td.path(), ws.path(), "runtime", &base).unwrap();
     let cache = managed.worktree.join(".direnv");
     fs::create_dir(&cache).unwrap();
-    std::os::unix::fs::symlink("/nix/store", cache.join("flake-profile-1-link")).unwrap();
+    let profile_target = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(profile_target.path(), cache.join("flake-profile-1-link")).unwrap();
     std::os::unix::fs::symlink("flake-profile-1-link", cache.join("flake-profile")).unwrap();
 
     git(&managed.worktree, &["status", "--porcelain"]);

@@ -53,6 +53,7 @@ function makeState() {
         terminal_supported: true,
         observed_state: 'unknown',
         freshness: 'cached',
+        observed_freshness: 'cached',
       },
     }),
     authLoading: signal<ReadonlySet<string>>(new Set()),
@@ -230,6 +231,7 @@ describe('AgentsPageComponent', () => {
         terminal_supported: true,
         observed_state: 'unknown',
         freshness: 'cached',
+        observed_freshness: 'cached',
         active_flow: { flow_id: 't', kind: 'terminal', method_id: 'tui', state: 'running' },
       },
     });
@@ -250,6 +252,7 @@ describe('AgentsPageComponent', () => {
         terminal_supported: true,
         observed_state: 'unknown',
         freshness: 'cached',
+        observed_freshness: 'cached',
         active_flow: {
           flow_id: 'p',
           kind: 'protocol',

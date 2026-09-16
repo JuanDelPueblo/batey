@@ -602,6 +602,49 @@ describe('fake backend seed history', () => {
     assert.equal(state.authCheckedAt.has('my-custom'), false);
   });
 
+  it('T140: discovery and observed-evidence freshness age independently', () => {
+    const state = new FakeState();
+
+    // Authenticating is itself a live check for both halves at once.
+    const authed = state.authenticateAgent('codex', 'openai-oauth');
+    assert.equal(authed.freshness, 'fresh');
+    assert.equal(authed.observed_freshness, 'fresh');
+    assert.equal(authed.observed_state, 'authenticated');
+
+    // A bare discovery refresh must never make old sign-in evidence look
+    // freshly verified: it carries no new login evidence.
+    const refreshed = state.refreshAgentAuth('codex');
+    assert.equal(refreshed.freshness, 'fresh');
+    assert.equal(refreshed.observed_state, 'authenticated');
+    assert.notEqual(
+      refreshed.observed_freshness,
+      'fresh',
+      'a bare discovery refresh freshened unrelated auth evidence',
+    );
+  });
+
+  it("T140: recording observed evidence never clears a mutation's discovery stale marker", () => {
+    const state = new FakeState();
+    state.refreshAgentAuth('my-custom');
+    assert.equal(state.agentAuth('my-custom').freshness, 'cached');
+
+    // A mutation invalidates the discovered methods.
+    state.applyAgentEnvEdits('my-custom', [{ name: 'NO_BROWSER', value: '1', action: 'replace' }]);
+    assert.equal(state.agentAuth('my-custom').freshness, 'stale');
+
+    // Evidence recorded elsewhere (e.g. a chat hitting `auth_required`)
+    // touches only the observed half of the cache.
+    state.setObservedAuth('my-custom', 'authentication_required');
+    const after = state.agentAuth('my-custom');
+    assert.equal(after.observed_state, 'authentication_required');
+    assert.notEqual(after.observed_freshness, 'unknown');
+    assert.equal(
+      after.freshness,
+      'stale',
+      "recording observed evidence cleared the mutation's discovery stale marker",
+    );
+  });
+
   it('exposes safe active-flow discovery without private material', () => {
     const state = new FakeState();
     const terminal = state.startTerminalFlow('codex', 'api-key');

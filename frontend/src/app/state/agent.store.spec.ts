@@ -25,6 +25,7 @@ function makeApi() {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
     })),
     refreshAgentAuth: vi.fn(async (id: string): Promise<import('../core/api/types').AgentAuthRefreshResult> => ({
       agent_id: id,
@@ -33,6 +34,7 @@ function makeApi() {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'fresh',
+      observed_freshness: 'fresh',
     })),
     authenticateAgent: vi.fn(async (id: string): Promise<AgentAuthState> => ({
       agent_id: id,
@@ -41,6 +43,7 @@ function makeApi() {
       terminal_supported: true,
       observed_state: 'authenticated',
       freshness: 'fresh',
+      observed_freshness: 'fresh',
     })),
     logoutAgent: vi.fn(async (id: string): Promise<AgentAuthState> => ({
       agent_id: id,
@@ -49,6 +52,7 @@ function makeApi() {
       terminal_supported: true,
       observed_state: 'authentication_required',
       freshness: 'fresh',
+      observed_freshness: 'fresh',
     })),
     startTerminalAuth: vi.fn(async () => ({
       flow_id: 'f',
@@ -170,6 +174,7 @@ describe('AgentStore', () => {
       terminal_supported: true,
       observed_state: 'authenticated',
       freshness: 'fresh',
+      observed_freshness: 'fresh',
     });
     await store.authenticate('codex', 'openai');
     expect(api.authenticateAgent).toHaveBeenCalledWith('codex', 'openai');
@@ -194,6 +199,7 @@ describe('AgentStore', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'stale',
+      observed_freshness: 'stale',
       refresh_error: "Agent 'codex' did not start in time",
     });
     const state = await store.refreshAuth('codex');

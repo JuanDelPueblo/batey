@@ -117,6 +117,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [
         { id: 'oauth', name: 'OAuth', type: 'agent', supported: true },
         { id: 'key', name: 'API key', type: 'terminal', supported: true },
@@ -152,6 +153,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'authentication_required',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [],
     });
     let text = fixture.nativeElement.textContent as string;
@@ -177,6 +179,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'authenticated',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [],
     });
     text = fixture.nativeElement.textContent as string;
@@ -196,6 +199,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -214,6 +218,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'authenticated',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [
         { id: 'oauth', name: 'OAuth', type: 'agent', supported: true },
         { id: 'tui', name: 'Terminal', type: 'terminal', supported: true },
@@ -236,6 +241,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'authentication_required',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -251,6 +257,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [
         {
           id: 'interactive',
@@ -278,6 +285,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'tui', name: 'Terminal', type: 'terminal', supported: true }],
     });
     fixture.componentRef.setInput('terminalFlow', {
@@ -303,6 +311,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: false,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -332,6 +341,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'unknown',
+      observed_freshness: 'unknown',
       methods: [],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -351,6 +361,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'authenticated',
       freshness: 'stale',
+      observed_freshness: 'stale',
       methods: [],
     });
     const text = fixture.nativeElement.textContent as string;
@@ -366,6 +377,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: false,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     fixture.componentRef.setInput('protocolLoading', true);
@@ -391,6 +403,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const rows = fixture.nativeElement.querySelectorAll('.method') as NodeListOf<HTMLElement>;
@@ -418,6 +431,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [],
     });
     const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
@@ -448,6 +462,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')).map(
@@ -469,6 +484,7 @@ describe('AgentCardComponent', () => {
       terminal_supported: true,
       observed_state: 'unknown',
       freshness: 'cached',
+      observed_freshness: 'cached',
       methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
     });
     fixture.componentRef.setInput('protocolFlow', {

@@ -308,12 +308,18 @@ export class FakeState {
     this.authByAgent = new Map();
     this.observedByAgent = new Map();
     // T140: the durable authentication discovery cache. `authCheckedAt` is
-    // set the first time anything (an explicit refresh, an authenticate/
-    // logout call, or observed evidence) writes to the cache; a never-set
-    // agent reports `freshness: 'unknown'`. `authStale` mirrors the Rust
-    // store's stale marker: a mutation invalidates without erasing.
+    // set the first time a live discovery probe (an explicit refresh, or an
+    // authenticate/logout call's own initialize) writes to the cache; a
+    // never-set agent reports `freshness: 'unknown'`. `authStale` mirrors
+    // the Rust store's stale marker: a mutation invalidates without
+    // erasing. `authObservedCheckedAt` tracks `observed_state` on its own
+    // independent timeline: recording evidence never touches
+    // `authCheckedAt`/`authStale`, and a discovery probe never touches
+    // `authObservedCheckedAt`, so refreshing one can never silently
+    // refresh the other.
     this.authCheckedAt = new Map();
     this.authStale = new Set();
+    this.authObservedCheckedAt = new Map();
     this.flows = new Map();
     this.protocolFlows = new Map();
     this.protocolElicitations = new Map();
@@ -677,6 +683,7 @@ export class FakeState {
     this.authCheckedAt.delete(id);
     this.authStale.delete(id);
     this.observedByAgent?.delete(id);
+    this.authObservedCheckedAt?.delete(id);
     this.metadataChanged();
     return { id, deleted: true, retained_chats: 0 };
   }
@@ -829,35 +836,61 @@ export class FakeState {
     return this.observedByAgent?.get(id) ?? 'unknown';
   }
 
-  /** Records new observed-state evidence. This is itself evidence the cache
-   * can trust, so it clears `stale` and stamps `checked_at`, exactly like
-   * the Rust store's `cache_write_observed`. */
+  /** Records new observed-state evidence, on its own independent timeline
+   * (`authObservedCheckedAt`). Deliberately never touches
+   * `authCheckedAt`/`authStale`: a bare discovery probe is not
+   * authentication evidence, and recording evidence is not a discovery
+   * probe, so neither can silently freshen the other — mirroring the Rust
+   * store's `cache_write_observed`. */
   setObservedAuth(id, state) {
     if (!this.observedByAgent) this.observedByAgent = new Map();
+    if (!this.authObservedCheckedAt) this.authObservedCheckedAt = new Map();
     this.observedByAgent.set(id, state);
-    this.markAuthChecked(id);
+    this.authObservedCheckedAt.set(id, new Date().toISOString());
   }
 
+  /** Marks the discovered methods/logout capability as freshly confirmed
+   * and clears the discovery `stale` marker. Never touches observed
+   * evidence. */
   markAuthChecked(id) {
     this.authCheckedAt.set(id, new Date().toISOString());
     this.authStale.delete(id);
   }
 
-  /** Marks the cache stale without erasing it. A no-op for an agent that
-   * was never checked, mirroring the Rust store. */
+  /** Marks the discovery half of the cache stale without erasing it. A
+   * no-op for an agent that was never checked, mirroring the Rust store.
+   * Never touches observed evidence: a mutation invalidates the method
+   * list, not whether Batey last saw the user signed in. */
   markAuthStale(id) {
     if (this.authCheckedAt.has(id)) this.authStale.add(id);
   }
 
   /** A plain cache-only read. The fake backend never spawns a real process
    * either way, but the freshness contract still matches the Rust backend:
-   * `unknown` until something has checked this agent at least once. */
-  agentAuth(id, { justProbed = false } = {}) {
+   * `unknown` until something has checked this agent at least once, and
+   * discovery freshness (`freshness`) ages completely independently of
+   * observed-evidence freshness (`observed_freshness`) — a bare discovery
+   * probe can never make old sign-in evidence look freshly verified, and
+   * new sign-in evidence can never un-stale a mutation-invalidated method
+   * list. */
+  agentAuth(id, { justProbedDiscovery = false, justProbedObserved = false } = {}) {
     if (!this.agent(id)) throw Object.assign(new Error('Agent not found'), { status: 404 });
     const config = AUTH_METHODS[id] ?? { logout_supported: false, methods: [] };
     const checkedAt = this.authCheckedAt.get(id) ?? null;
     const stale = this.authStale.has(id);
-    const freshness = !checkedAt ? 'unknown' : justProbed ? 'fresh' : stale ? 'stale' : 'cached';
+    const freshness = !checkedAt
+      ? 'unknown'
+      : justProbedDiscovery
+        ? 'fresh'
+        : stale
+          ? 'stale'
+          : 'cached';
+    const observedCheckedAt = this.authObservedCheckedAt?.get(id) ?? null;
+    const observedFreshness = !observedCheckedAt
+      ? 'unknown'
+      : justProbedObserved
+        ? 'fresh'
+        : 'cached';
     return {
       agent_id: id,
       methods: config.methods.map((method) => ({ ...method })),
@@ -866,16 +899,19 @@ export class FakeState {
       observed_state: this.observedAuth(id),
       freshness,
       checked_at: checkedAt,
+      observed_freshness: observedFreshness,
+      observed_checked_at: observedCheckedAt,
       active_flow: this.activeFlowFor(id),
     };
   }
 
-  /** Explicit refresh: the only read path that stamps `checked_at` on its
-   * own, matching the dedicated Rust route. */
+  /** Explicit refresh: the only read path that stamps discovery
+   * `checked_at` on its own, matching the dedicated Rust route. It never
+   * records observed evidence: a bare `initialize` is not a sign-in. */
   refreshAgentAuth(id) {
     if (!this.agent(id)) throw Object.assign(new Error('Agent not found'), { status: 404 });
     this.markAuthChecked(id);
-    return this.agentAuth(id, { justProbed: true });
+    return this.agentAuth(id, { justProbedDiscovery: true });
   }
 
   /**
@@ -921,8 +957,11 @@ export class FakeState {
     if (method.type !== 'agent') {
       throw Object.assign(new Error(`Authentication method '${methodId}' uses the unsupported type '${method.type}'`), { status: 400 });
     }
+    // A real `authenticate` call connects live, like an explicit refresh
+    // does, so it opportunistically confirms discovery too.
+    this.markAuthChecked(id);
     this.setObservedAuth(id, 'authenticated');
-    return this.agentAuth(id, { justProbed: true });
+    return this.agentAuth(id, { justProbedDiscovery: true, justProbedObserved: true });
   }
 
   logoutAgent(id) {
@@ -930,8 +969,9 @@ export class FakeState {
     if (!auth.logout_supported) {
       throw Object.assign(new Error(`Agent '${id}' does not support logout`), { status: 409 });
     }
+    this.markAuthChecked(id);
     this.setObservedAuth(id, 'authentication_required');
-    return this.agentAuth(id, { justProbed: true });
+    return this.agentAuth(id, { justProbedDiscovery: true, justProbedObserved: true });
   }
 
   startTerminalFlow(id, methodId) {

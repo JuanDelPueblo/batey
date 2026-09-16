@@ -7,7 +7,7 @@ use axum::{
 };
 use batey::{
     agents::{AgentDefinition, AgentRegistry, AgentSource, InstalledAgent},
-    auth::TERMINAL_AUTH_SUPPORTED,
+    auth::{AuthFreshness, TERMINAL_AUTH_SUPPORTED},
     config::{BateyPaths, Config, PathOverrides},
     events::EventLog,
     service::HubService,
@@ -1057,5 +1057,198 @@ async fn a_failed_probe_preserves_the_existing_cache() {
     let (status, after) = harness.request("GET", "/api/agents/full/auth").await;
     assert_eq!(status, 200, "{after}");
     assert_eq!(after["methods"], methods_before);
+    harness.sessions.shutdown_all().await;
+}
+
+/// A bare discovery probe (an `initialize` that only reconfirms the method
+/// list) must never make old authentication evidence look freshly verified.
+/// After a restart, an explicit refresh discovers methods fresh, but the
+/// still-`authenticated` evidence from before the restart stays historical:
+/// its own freshness is never `fresh` just because something else was
+/// probed in the same call.
+#[tokio::test]
+async fn a_bare_discovery_refresh_never_freshens_old_auth_evidence() {
+    let tempdir = tempfile::tempdir().unwrap();
+    let harness = Harness::at(tempdir.path(), &[("full", "auth")]);
+    let (status, body) = harness
+        .request("POST", "/api/agents/full/auth/api-key")
+        .await;
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["observed_state"], "authenticated");
+    harness.sessions.shutdown_all().await;
+    drop(harness);
+
+    let harness = Harness::at(tempdir.path(), &[("full", "auth")]);
+    let (status, refreshed) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{refreshed}");
+    // The discovery probe itself is fresh: it just ran.
+    assert_eq!(refreshed["freshness"], "fresh");
+    // But it carries no new login evidence, so the old `authenticated`
+    // observation must not be relabeled as freshly verified.
+    assert_eq!(refreshed["observed_state"], "authenticated");
+    assert_ne!(
+        refreshed["observed_freshness"], "fresh",
+        "a bare discovery probe freshened unrelated auth evidence: {refreshed}"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// The inverse: recording new observed evidence must never clear a
+/// mutation's stale marker on the (still unverified) discovered methods.
+/// Discovery freshness and observed-evidence freshness age independently.
+#[tokio::test]
+async fn observed_evidence_never_clears_a_mutations_discovery_stale_marker() {
+    let harness = Harness::new(&[("gated", "auth-required")]);
+    let store = harness.sessions.store.as_ref().unwrap();
+    let record = InstalledAgent::new("gated".into(), AgentSource::Registry, "python3".into());
+    store.insert_agent(&record).unwrap();
+
+    let (status, refreshed) = harness
+        .request("POST", "/api/agents/gated/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{refreshed}");
+    assert_eq!(refreshed["freshness"], "fresh");
+
+    // A mutation invalidates the discovered methods.
+    harness
+        .hub
+        .update_agent_env(
+            "gated",
+            vec![AgentEnvEdit {
+                name: "SOME_VALUE".into(),
+                value: Some("1".into()),
+                action: AgentEnvAction::Replace,
+            }],
+        )
+        .await
+        .unwrap();
+    let (status, stale) = harness.request("GET", "/api/agents/gated/auth").await;
+    assert_eq!(status, 200, "{stale}");
+    assert_eq!(stale["freshness"], "stale");
+
+    // A chat session hits the stable `auth_required` error: this records
+    // new observed evidence, and nothing else.
+    let project = harness
+        .hub
+        .create_project("demo".into(), harness.root.display().to_string())
+        .unwrap();
+    let chat = harness
+        .hub
+        .create_chat(&project.id, "gated", None)
+        .await
+        .unwrap();
+    let (status, _) = harness
+        .request("POST", &format!("/api/chats/{}/resume", chat.chat.id))
+        .await;
+    assert_eq!(status, 409);
+
+    // Observed evidence updated, but the mutation's discovery staleness
+    // must survive untouched.
+    let (status, after) = harness.request("GET", "/api/agents/gated/auth").await;
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["observed_state"], "authentication_required");
+    assert_ne!(after["observed_freshness"], "unknown", "{after}");
+    assert_eq!(
+        after["freshness"], "stale",
+        "recording observed evidence cleared the mutation's discovery stale marker: {after}"
+    );
+    harness.sessions.shutdown_all().await;
+}
+
+/// A probe that a racing mutation supersedes must report the preserved
+/// (pre-mutation) cache as stale, never as freshly refreshed: the write was
+/// deliberately skipped, so the response must not claim otherwise.
+#[tokio::test]
+async fn a_mutation_racing_a_probe_reports_the_result_as_stale_not_fresh() {
+    let harness = Harness::new(&[("full", "auth-slow")]);
+    let store = harness.sessions.store.as_ref().unwrap();
+    let record = InstalledAgent::new("full".into(), AgentSource::Registry, "python3".into());
+    store.insert_agent(&record).unwrap();
+
+    // Prime the cache with an initial, uncontested probe.
+    let (status, primed) = harness
+        .request("POST", "/api/agents/full/auth/refresh")
+        .await;
+    assert_eq!(status, 200, "{primed}");
+    assert_eq!(primed["freshness"], "fresh");
+
+    // Start a slow probe (auth-slow sleeps ~1s on `initialize`) in the
+    // background, then race a mutation while it is still in flight.
+    let hub = harness.hub.clone();
+    let probe_task = tokio::spawn(async move { hub.refresh_agent_auth("full").await });
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    harness
+        .hub
+        .update_agent_env(
+            "full",
+            vec![AgentEnvEdit {
+                name: "SOME_VALUE".into(),
+                value: Some("1".into()),
+                action: AgentEnvAction::Replace,
+            }],
+        )
+        .await
+        .unwrap();
+
+    let result = probe_task.await.unwrap().unwrap();
+    assert_ne!(
+        result.auth.freshness,
+        AuthFreshness::Fresh,
+        "a superseded probe claimed to be fresh: {:?}",
+        result.auth
+    );
+    assert_eq!(result.auth.freshness, AuthFreshness::Stale);
+
+    let (status, after) = harness.request("GET", "/api/agents/full/auth").await;
+    assert_eq!(status, 200, "{after}");
+    assert_eq!(after["freshness"], "stale");
+    harness.sessions.shutdown_all().await;
+}
+
+/// Concurrent refreshes coalesce into one probe even when that probe fails:
+/// waiters must reuse the completed attempt's outcome, success or failure,
+/// instead of each starting their own failing process.
+#[tokio::test]
+async fn concurrent_refreshes_of_a_failing_probe_result_in_one_attempt() {
+    let harness = Harness::new(&[("full", "auth")]);
+    let counter = harness.history("full").join("attempts.txt");
+    let script = format!(
+        "import pathlib\np = pathlib.Path('{counter}')\np.write_text(str(int(p.read_text()) + 1) if p.exists() else '1')\nraise SystemExit(1)\n",
+        counter = counter.display()
+    );
+    let broken = AgentDefinition::new("full", "python3").with_args(vec!["-c".into(), script]);
+    harness.agents.replace(broken).unwrap();
+
+    let (a, b, c, d, e) = tokio::join!(
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+        harness.request("POST", "/api/agents/full/auth/refresh"),
+    );
+    let mut errors = Vec::new();
+    for (status, body) in [a, b, c, d, e] {
+        assert_eq!(status, 200, "{body}");
+        let error = body["refresh_error"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned();
+        assert!(!error.is_empty(), "{body}");
+        errors.push(error);
+    }
+    // Every response reports the same coalesced failure.
+    assert!(
+        errors.windows(2).all(|pair| pair[0] == pair[1]),
+        "{errors:?}"
+    );
+
+    let attempts = std::fs::read_to_string(&counter).unwrap_or_default();
+    assert_eq!(
+        attempts.trim(),
+        "1",
+        "concurrent failing refreshes spawned more than one attempt"
+    );
     harness.sessions.shutdown_all().await;
 }

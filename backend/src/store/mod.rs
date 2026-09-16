@@ -455,10 +455,28 @@ impl Store {
         auth_cache::get(&self.conn.lock().unwrap(), agent_id)
     }
 
-    /// Replaces the cache row with fresh data from a live probe or from
-    /// explicit evidence, and clears `stale`.
+    /// Replaces the cache row with fresh discovery data (methods, logout
+    /// capability) from a completed live probe, and clears the discovery
+    /// `stale` marker.
     pub fn save_agent_auth_cache(&self, entry: &AuthCacheEntry) -> StoreResult<()> {
         auth_cache::save(&self.conn.lock().unwrap(), entry)
+    }
+
+    /// Records new observed-authentication evidence, independent of the
+    /// discovery `checked_at`/`stale` columns: recording it never clears a
+    /// mutation's stale marker on the (still unverified) method list.
+    pub fn save_agent_auth_observed(
+        &self,
+        agent_id: &str,
+        observed_state: crate::acp::auth::ObservedAuthState,
+        observed_checked_at: &str,
+    ) -> StoreResult<()> {
+        auth_cache::save_observed(
+            &self.conn.lock().unwrap(),
+            agent_id,
+            observed_state,
+            observed_checked_at,
+        )
     }
 
     /// Marks one agent's cache stale without erasing it. A mutation that can

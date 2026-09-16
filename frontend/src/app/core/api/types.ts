@@ -184,9 +184,23 @@ export interface AgentAuthState {
   logout_supported: boolean;
   terminal_supported: boolean;
   observed_state: ObservedAuthState;
+  /** Freshness of `methods`/`logout_supported` only. */
   freshness: AuthFreshness;
-  /** When this data was last confirmed, absent when never checked. */
+  /** When the methods/logout capability were last confirmed, absent when
+   * never checked. */
   checked_at?: string | null;
+  /**
+   * Freshness of `observed_state` specifically, independent of `freshness`:
+   * a bare discovery check that only reconfirms the method list never makes
+   * old sign-in evidence look freshly verified, and new sign-in evidence
+   * never clears a mutation's staleness on the method list. Use this field,
+   * not `freshness`, to decide whether `authenticated` is current or merely
+   * historical ("previously signed in").
+   */
+  observed_freshness: AuthFreshness;
+  /** When `observed_state` was last set by real evidence, absent when
+   * Batey has never observed anything for this agent. */
+  observed_checked_at?: string | null;
   /** The one unfinished auth flow for this agent, when one exists. */
   active_flow?: ActiveAuthFlow | null;
 }

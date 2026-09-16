@@ -65,11 +65,16 @@ export class AgentCardComponent {
   readonly isAuthenticated = computed(() => this.observed() === 'authenticated');
   readonly logoutSupported = computed(() => this.auth()?.logout_supported === true);
   /** This agent has never been explicitly checked: there is no cache entry
-   * to show, so the card offers a check instead of guessing at methods. */
+   * to show, so the card offers a check instead of guessing at methods.
+   * Discovery-only: whether sign-in evidence exists is a separate question,
+   * shown through `observed_freshness`/`authStatusLabel` regardless. */
   readonly neverChecked = computed(() => (this.auth()?.freshness ?? 'unknown') === 'unknown');
-  /** Cached evidence that has aged past trust, or that a mutation
-   * invalidated. Authenticated-but-stale is never shown as timeless truth. */
-  readonly isStale = computed(() => this.auth()?.freshness === 'stale');
+  /** Whether the observed sign-in evidence itself (not the method list) has
+   * aged past trust or was invalidated. A bare method-list check never
+   * freshens this, and recording new evidence never freshens the method
+   * list, so this is judged on its own timestamp. Authenticated-but-stale
+   * is never shown as timeless truth. */
+  readonly isStale = computed(() => this.auth()?.observed_freshness === 'stale');
   readonly canManageEnv = computed(() => {
     const mutability = this.mutability();
     return mutability === 'editable' || mutability === 'registry_managed';

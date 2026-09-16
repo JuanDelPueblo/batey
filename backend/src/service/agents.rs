@@ -51,6 +51,10 @@ impl HubService {
         request: InstallRequest,
     ) -> ServiceResult<AgentSummary> {
         let summary = self.agent_manager.install(request).await?;
+        // A reinstall over a previously known id may change initialization
+        // or authentication methods. A brand-new id has no cache yet, so
+        // this is a no-op for it.
+        self.agent_auth.invalidate_agent(&summary.id);
         self.notify_metadata_changed();
         Ok(summary)
     }
@@ -71,6 +75,10 @@ impl HubService {
                 self.agent_manager
                     .remove_install_files(outcome.previous_install_dir.as_deref());
             }
+            // A new version may change initialization or authentication
+            // methods, so the cached discovery data can no longer be
+            // trusted as current.
+            self.agent_auth.invalidate_agent(id);
             self.sessions
                 .invalidate_stopped_sessions_for_agent(id)
                 .await;
@@ -91,6 +99,16 @@ impl HubService {
             )));
         }
         let outcome = self.agent_manager.remove(id).await?;
+        if outcome.deleted {
+            // Nothing durable references this agent anymore: the discovery
+            // cache goes away with it.
+            self.agent_auth.forget_agent(id);
+        } else {
+            // Retired: durable chats still name it. Keep the last known
+            // methods as historical evidence, marked stale, since it will
+            // never run a new process again under this id's old identity.
+            self.agent_auth.invalidate_agent(id);
+        }
         self.sessions
             .invalidate_stopped_sessions_for_agent(id)
             .await;
@@ -148,6 +166,10 @@ impl HubService {
         input: CustomAgentInput,
     ) -> ServiceResult<AgentSummary> {
         let summary = self.agent_manager.edit_custom(id, input).await?;
+        // The edited definition can change initialization or authentication
+        // methods, so the cached discovery data can no longer be trusted as
+        // current.
+        self.agent_auth.invalidate_agent(id);
         self.sessions
             .invalidate_stopped_sessions_for_agent(id)
             .await;

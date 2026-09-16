@@ -98,9 +98,11 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     return this.state.protocolLoading().has(id);
   }
 
+  /** The user explicitly asked to check this agent, so this is the one
+   * place a card click may start its ACP process. */
   async reloadAuth(agent: AgentSummary): Promise<void> {
     try {
-      await this.state.loadAgentAuth(agent.id);
+      await this.state.refreshAgentAuth(agent.id);
     } catch {
       // The card shows the error from the store.
     }

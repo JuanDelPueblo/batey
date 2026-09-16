@@ -180,6 +180,7 @@ export class AgentStore {
     return updated;
   }
 
+  /** A plain cache-only read. Never starts an agent process. */
   async loadAuth(id: string): Promise<AgentAuthState> {
     this.setLoading(id, true);
     try {
@@ -189,6 +190,32 @@ export class AgentStore {
       return state;
     } catch (error) {
       this.setAuthError(id, this.message(error, 'Failed to load authentication state'));
+      throw error;
+    } finally {
+      this.setLoading(id, false);
+    }
+  }
+
+  /**
+   * Explicit refresh: the only user-triggered action that may start this
+   * agent's ACP process just to check its authentication state. A failed
+   * probe still updates the card with the last known data instead of
+   * throwing, so a stale cache never looks like a broken agent.
+   */
+  async refreshAuth(id: string): Promise<AgentAuthState> {
+    this.setLoading(id, true);
+    try {
+      const result = await this.api.refreshAgentAuth(id);
+      const { refresh_error, ...state } = result;
+      this.authByAgent.update((current) => ({ ...current, [id]: state }));
+      if (refresh_error) {
+        this.setAuthError(id, refresh_error);
+      } else {
+        this.clearAuthError(id);
+      }
+      return state;
+    } catch (error) {
+      this.setAuthError(id, this.message(error, 'Failed to refresh authentication state'));
       throw error;
     } finally {
       this.setLoading(id, false);

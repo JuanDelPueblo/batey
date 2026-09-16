@@ -10,8 +10,8 @@
 use super::hub::{hub, Result};
 use super::AppState;
 use crate::auth::{
-    AgentAuthView, ProtocolAuthFlowView, ProtocolElicitationView, PtyWindow, TerminalAuthFlow,
-    TerminalAuthFlowView,
+    AgentAuthRefreshView, AgentAuthView, ProtocolAuthFlowView, ProtocolElicitationView, PtyWindow,
+    TerminalAuthFlow, TerminalAuthFlowView,
 };
 use axum::{
     extract::{
@@ -89,6 +89,15 @@ pub async fn agent_auth(
     Path(id): Path<String>,
 ) -> Result<Json<AgentAuthView>> {
     Ok(Json(hub(&s)?.agent_auth(&id).await?))
+}
+
+/// Explicit refresh: the only cache-refreshing action a client can trigger
+/// besides an actual authentication or session lifecycle event.
+pub async fn refresh_agent_auth(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<AgentAuthRefreshView>> {
+    Ok(Json(hub(&s)?.refresh_agent_auth(&id).await?))
 }
 
 pub async fn authenticate_agent(

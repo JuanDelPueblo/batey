@@ -110,6 +110,7 @@ export class AppStateService {
   createCustomAgent(input: import('../core/api/types').CustomAgentInput) { return this.agentStore.createCustomAgent(input); }
   editCustomAgent(id: string, input: import('../core/api/types').CustomAgentInput) { return this.agentStore.editCustomAgent(id, input); }
   loadAgentAuth(id: string) { return this.agentStore.loadAuth(id); }
+  refreshAgentAuth(id: string) { return this.agentStore.refreshAuth(id); }
   authenticateAgent(id: string, methodId: string) { return this.agentStore.authenticate(id, methodId); }
   logoutAgent(id: string) { return this.agentStore.logout(id); }
   startTerminalAgentAuth(id: string, methodId: string) { return this.agentStore.startTerminalAuth(id, methodId); }

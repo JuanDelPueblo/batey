@@ -453,11 +453,18 @@ describe('fake backend seed history', () => {
     assert.equal(outcome.updated, true);
     assert.equal(outcome.to_version, '1.2.0');
 
+    // The seed data gives 'example-acp' a durable chat, so removal retires
+    // it instead of deleting it: the row stays, marked unavailable, so that
+    // chat's history stays readable.
     const removal = state.removeAgent('example-acp');
-    assert.equal(removal.deleted, true);
-    assert.equal(state.agent('example-acp'), undefined);
+    assert.equal(removal.deleted, false);
+    assert.ok(removal.retained_chats > 0);
+    assert.ok(state.agent('example-acp'));
+    assert.equal(state.agent('example-acp').availability, 'unavailable');
 
-    state.removeAgent(installed.id);
+    // The newly installed agent has no chats, so removal deletes it outright.
+    const cleanRemoval = state.removeAgent(installed.id);
+    assert.equal(cleanRemoval.deleted, true);
     assert.equal(state.agent(installed.id), undefined);
   });
 
@@ -544,6 +551,122 @@ describe('fake backend seed history', () => {
     assert.throws(() => state.authenticateAgent('opencode', 'device-code'), /unsupported/i);
     assert.throws(() => state.authenticateAgent('codex', 'api-key'), /terminal/i);
     assert.throws(() => state.logoutAgent('opencode'), /does not support logout/);
+  });
+
+  it('T140: reports freshness truthfully across an explicit refresh and a plain read', () => {
+    const state = new FakeState();
+
+    // Never checked yet.
+    const initial = state.agentAuth('codex');
+    assert.equal(initial.freshness, 'unknown');
+    assert.equal(initial.checked_at, null);
+
+    // An explicit refresh is the direct result of a live check.
+    const refreshed = state.refreshAgentAuth('codex');
+    assert.equal(refreshed.freshness, 'fresh');
+    assert.ok(refreshed.checked_at);
+
+    // A later plain read answers from the cache, not as a fresh check.
+    const cached = state.agentAuth('codex');
+    assert.equal(cached.freshness, 'cached');
+    assert.equal(cached.checked_at, refreshed.checked_at);
+
+    // Authenticating is itself a live check, so its own response is fresh,
+    // and a later plain read is cached again.
+    const afterAuth = state.authenticateAgent('codex', 'openai-oauth');
+    assert.equal(afterAuth.freshness, 'fresh');
+    assert.equal(state.agentAuth('codex').freshness, 'cached');
+
+    assert.throws(() => state.refreshAgentAuth('missing-agent'), /Agent not found/);
+  });
+
+  it('T140: mutations mark the cache stale without erasing it, and removal forgets it', () => {
+    const state = new FakeState();
+    state.refreshAgentAuth('my-custom');
+    assert.equal(state.agentAuth('my-custom').freshness, 'cached');
+
+    // An environment change marks the cache stale.
+    state.applyAgentEnvEdits('my-custom', [{ name: 'NO_BROWSER', value: '1', action: 'replace' }]);
+    assert.equal(state.agentAuth('my-custom').freshness, 'stale');
+
+    // A fresh check clears the stale marker again.
+    state.refreshAgentAuth('my-custom');
+    assert.equal(state.agentAuth('my-custom').freshness, 'cached');
+
+    // An edited definition marks the cache stale too.
+    state.editCustomAgent('my-custom', {
+      id: 'my-custom',
+      display_name: 'My Custom',
+      command: 'my-agent',
+      args: [],
+      env: {},
+    });
+    assert.equal(state.agentAuth('my-custom').freshness, 'stale');
+
+    // Removing the agent forgets the cache entirely, rather than leaving a
+    // stale row nothing can ever refresh again.
+    state.removeAgent('my-custom');
+    assert.equal(state.authCheckedAt.has('my-custom'), false);
+  });
+
+  it('T140: retiring an agent (durable chats still reference it) marks the cache stale instead of forgetting it', () => {
+    const state = new FakeState();
+    state.createChat('scratch', 'my-custom', 'still referenced');
+    state.refreshAgentAuth('my-custom');
+    assert.equal(state.agentAuth('my-custom').freshness, 'cached');
+
+    const outcome = state.removeAgent('my-custom');
+    assert.equal(outcome.deleted, false);
+    assert.equal(outcome.retained_chats, 1);
+    // The agent row survives, marked unavailable, and its cache survives
+    // too, as historical evidence, marked stale.
+    assert.ok(state.agent('my-custom'));
+    assert.equal(state.agent('my-custom').availability, 'unavailable');
+    assert.equal(state.authCheckedAt.has('my-custom'), true);
+    assert.equal(state.agentAuth('my-custom').freshness, 'stale');
+  });
+
+  it('T140: discovery and observed-evidence freshness age independently', () => {
+    const state = new FakeState();
+
+    // Authenticating is itself a live check for both halves at once.
+    const authed = state.authenticateAgent('codex', 'openai-oauth');
+    assert.equal(authed.freshness, 'fresh');
+    assert.equal(authed.observed_freshness, 'fresh');
+    assert.equal(authed.observed_state, 'authenticated');
+
+    // A bare discovery refresh must never make old sign-in evidence look
+    // freshly verified: it carries no new login evidence.
+    const refreshed = state.refreshAgentAuth('codex');
+    assert.equal(refreshed.freshness, 'fresh');
+    assert.equal(refreshed.observed_state, 'authenticated');
+    assert.notEqual(
+      refreshed.observed_freshness,
+      'fresh',
+      'a bare discovery refresh freshened unrelated auth evidence',
+    );
+  });
+
+  it("T140: recording observed evidence never clears a mutation's discovery stale marker", () => {
+    const state = new FakeState();
+    state.refreshAgentAuth('my-custom');
+    assert.equal(state.agentAuth('my-custom').freshness, 'cached');
+
+    // A mutation invalidates the discovered methods.
+    state.applyAgentEnvEdits('my-custom', [{ name: 'NO_BROWSER', value: '1', action: 'replace' }]);
+    assert.equal(state.agentAuth('my-custom').freshness, 'stale');
+
+    // Evidence recorded elsewhere (e.g. a chat hitting `auth_required`)
+    // touches only the observed half of the cache.
+    state.setObservedAuth('my-custom', 'authentication_required');
+    const after = state.agentAuth('my-custom');
+    assert.equal(after.observed_state, 'authentication_required');
+    assert.notEqual(after.observed_freshness, 'unknown');
+    assert.equal(
+      after.freshness,
+      'stale',
+      "recording observed evidence cleared the mutation's discovery stale marker",
+    );
   });
 
   it('exposes safe active-flow discovery without private material', () => {

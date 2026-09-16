@@ -10,7 +10,7 @@ use batey::{
         registry::{default_fetch, RegistryClient},
         AgentCatalog, AgentManager, CustomAgentInput, HostRuntimeProbe,
     },
-    auth::AgentAuthService,
+    auth::{AgentAuthService, AuthFreshness},
     config::{BateyPaths, Config, PathOverrides},
     events::EventLog,
     service::HubService,
@@ -368,8 +368,9 @@ async fn auth_probe_and_terminal_env_receive_overrides() {
         .await
         .unwrap();
 
-    // The probe writes probe-env.json on initialize.
-    harness.hub.agent_auth("codex").await.unwrap();
+    // The probe writes probe-env.json on initialize. A plain read never
+    // probes, so this exercises the explicit refresh operation.
+    harness.hub.refresh_agent_auth("codex").await.unwrap();
     let probe: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(history.join("probe-env.json")).unwrap())
             .unwrap();
@@ -549,27 +550,36 @@ async fn http_environment_routes_are_redacted() {
     assert_eq!(status, 404);
 }
 
-/// Changing an override invalidates auth cache and stopped sessions.
+/// Changing an override marks the durable discovery cache stale and
+/// invalidates stopped sessions, so the next explicit check and the next
+/// launch both observe the new value.
 #[tokio::test]
 async fn env_changes_invalidate_auth_cache_and_stopped_sessions() {
     let harness = Harness::new();
     let history = harness.install_auth_agent("codex").await;
 
-    // First probe caches state and writes env without the override.
-    harness.hub.agent_auth("codex").await.unwrap();
+    // A first explicit refresh caches state and writes env without the
+    // override.
+    harness.hub.refresh_agent_auth("codex").await.unwrap();
     let first: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(history.join("probe-env.json")).unwrap())
             .unwrap();
     assert!(first.get("CODEX_API_KEY").is_none());
 
-    // Changing the override must drop the 15s cache, so the next read probes
-    // again and observes the new value.
+    // Changing the override marks the cache stale. A plain read never
+    // probes, so the next explicit refresh observes the new value.
     harness
         .hub
         .update_agent_env("codex", vec![replace("CODEX_API_KEY", "fresh")])
         .await
         .unwrap();
-    harness.hub.agent_auth("codex").await.unwrap();
+    let stale = harness.hub.agent_auth("codex").await.unwrap();
+    assert_eq!(
+        stale.freshness,
+        AuthFreshness::Stale,
+        "the environment change never marked the cache stale"
+    );
+    harness.hub.refresh_agent_auth("codex").await.unwrap();
     let second: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(history.join("probe-env.json")).unwrap())
             .unwrap();

@@ -6,6 +6,7 @@
 //! never take the lock themselves, because `std::sync::Mutex` is not reentrant.
 mod agent_env;
 mod agents;
+mod auth_cache;
 mod chats;
 mod envrc_grants;
 mod events;
@@ -19,6 +20,7 @@ pub use agent_env::{
     is_valid_env_name, AgentEnvAction, AgentEnvEdit, AgentEnvPresence, MAX_AGENT_ENV_VALUE_LENGTH,
     MAX_AGENT_ENV_VARS,
 };
+pub use auth_cache::{AuthCacheData, AuthCacheEntry, CachedAuthMethod};
 pub use chats::Chat;
 pub use envrc_grants::ProjectEnvrcGrant;
 pub use projects::Project;
@@ -445,6 +447,49 @@ impl Store {
 
     pub fn max_event_seq(&self) -> StoreResult<u64> {
         events::max_seq(&self.conn.lock().unwrap())
+    }
+
+    /// The durable authentication discovery cache for one agent, if any.
+    /// Never spawns a process; this is a plain read.
+    pub fn agent_auth_cache(&self, agent_id: &str) -> StoreResult<Option<AuthCacheEntry>> {
+        auth_cache::get(&self.conn.lock().unwrap(), agent_id)
+    }
+
+    /// Replaces the cache row with fresh discovery data (methods, logout
+    /// capability) from a completed live probe, clears the discovery `stale`
+    /// marker, and retains the latest independently recorded observed fields.
+    /// The merge and write share this store lock.
+    pub fn save_agent_auth_cache(&self, entry: &AuthCacheEntry) -> StoreResult<()> {
+        auth_cache::save(&self.conn.lock().unwrap(), entry)
+    }
+
+    /// Records new observed-authentication evidence, independent of the
+    /// discovery `checked_at`/`stale` columns: recording it never clears a
+    /// mutation's stale marker on the (still unverified) method list.
+    pub fn save_agent_auth_observed(
+        &self,
+        agent_id: &str,
+        observed_state: crate::acp::auth::ObservedAuthState,
+        observed_checked_at: &str,
+    ) -> StoreResult<()> {
+        auth_cache::save_observed(
+            &self.conn.lock().unwrap(),
+            agent_id,
+            observed_state,
+            observed_checked_at,
+        )
+    }
+
+    /// Marks one agent's cache stale without erasing it. A mutation that can
+    /// affect initialization or authentication methods calls this.
+    pub fn mark_agent_auth_cache_stale(&self, agent_id: &str) -> StoreResult<()> {
+        auth_cache::mark_stale(&self.conn.lock().unwrap(), agent_id)
+    }
+
+    /// Deletes one agent's cache row outright. Only a full removal calls
+    /// this; a retired agent keeps its row, marked stale.
+    pub fn delete_agent_auth_cache(&self, agent_id: &str) -> StoreResult<()> {
+        auth_cache::delete(&self.conn.lock().unwrap(), agent_id)
     }
 
     #[cfg(test)]

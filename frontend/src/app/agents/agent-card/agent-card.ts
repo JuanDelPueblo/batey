@@ -1,6 +1,5 @@
 import { Component, computed, input, output } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
-import { MatChipsModule } from '@angular/material/chips';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import { MatTooltipModule } from '@angular/material/tooltip';
@@ -19,7 +18,6 @@ import type {
   selector: 'hub-agent-card',
   imports: [
     MatButtonModule,
-    MatChipsModule,
     MatIconModule,
     MatProgressSpinnerModule,
     MatTooltipModule,

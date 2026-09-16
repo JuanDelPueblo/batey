@@ -5,9 +5,9 @@
       <span class="id">{{ agent().id }}</span>
     </div>
     @if (available()) {
-      <span class="badge status available">Available</span>
+      <span class="availability available">Available</span>
     } @else {
-      <span class="badge status unavailable-badge">Unavailable</span>
+      <span class="availability unavailable">Unavailable</span>
     }
   </header>
 
@@ -21,14 +21,15 @@
     </p>
   }
 
-  <div class="tags">
-    <span class="badge" [attr.data-source]="agent().source">{{ sourceLabel(agent().source) }}</span>
+  <p class="provenance">
+    <span>Source: {{ sourceLabel(agent().source) }}</span>
+    <span aria-hidden="true">·</span>
     @switch (mutability()) {
-      @case ('editable') { <span class="badge">Editable</span> }
-      @case ('registry_managed') { <span class="badge">Registry-managed</span> }
-      @default { <span class="badge">Read-only</span> }
+      @case ('editable') { <span>Editable</span> }
+      @case ('registry_managed') { <span>Registry-managed</span> }
+      @default { <span>Read-only</span> }
     }
-  </div>
+  </p>
 
   @if (agent().display || agent().usage_provider) {
     <ul class="meta">
@@ -66,19 +67,23 @@
     tabindex="-1"
     aria-label="Sign-in"
   >
-    <h4>Sign-in</h4>
+    <div class="auth-heading">
+      <h4>Sign-in</h4>
+      @if (authStatusLabel(); as label) {
+        <p class="auth-status" [class.authenticated]="isAuthenticated()" [class.required]="!isAuthenticated()" role="status">
+          {{ label }}
+        </p>
+      }
+    </div>
 
-    @if (authLoading() && !protocolFlow()) {
-      <div class="auth-row"><mat-spinner diameter="18" /> <span>Checking sign-in…</span></div>
+    @if ((authLoading() || protocolLoading()) && !protocolFlow()) {
+      <div class="auth-row loading"><mat-spinner diameter="18" /> <span>Checking sign-in…</span></div>
     } @else if (authError()) {
       <div class="auth-row error" role="alert">
         <span>{{ authError() }}</span>
         <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
       </div>
     } @else if (auth(); as state) {
-      @if (authStatusLabel(); as label) {
-        <p class="auth-status" role="status">{{ label }}</p>
-      }
       @if (protocolFlow(); as flow) {
         <div class="protocol-flow" role="status">
           @switch (flow.state) {
@@ -93,7 +98,7 @@
               </div>
             }
             @case ('succeeded') {
-              <div class="auth-row"><span>Authentication finished. Status refreshed.</span>
+              <div class="auth-row success"><span>Authentication finished. Status refreshed.</span>
                 <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
               </div>
             }
@@ -103,7 +108,7 @@
               </div>
             }
             @case ('cancelled') {
-              <div class="auth-row"><span>Authentication cancelled.</span>
+              <div class="auth-row neutral"><span>Authentication cancelled.</span>
                 <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
               </div>
             }
@@ -114,7 +119,7 @@
             }
           }
           @if (protocolElicitations().length > 0) {
-            <div class="elicitations">
+            <div class="elicitations" role="group" aria-label="Sign-in action required">
               @for (elicitation of protocolElicitations(); track elicitation.id) {
                 <div class="elicitation">
                   <p class="elicitation-message">{{ elicitation.message || 'Input needed' }}</p>
@@ -224,14 +229,14 @@
         </div>
       }
     } @else {
-      <div class="auth-row">
+      <div class="auth-row loading">
         <span class="auth-hint">Sign-in status is not loaded.</span>
         <button mat-button type="button" (click)="retryAuth.emit()">Check</button>
       </div>
     }
   </section>
 
-  <footer class="card-actions">
+  <footer class="card-actions" aria-label="Agent management">
     @if (canManageEnv()) {
       <button mat-button type="button" (click)="environment.emit()"><mat-icon>key</mat-icon> Environment</button>
     }

@@ -87,15 +87,27 @@ describe('AgentCardComponent', () => {
     expect(text).toContain('Command missing.');
   });
 
-  it('keeps the availability badge as the single status cue in the header', () => {
+  it('keeps availability as the single status treatment in the header', () => {
     render(summary('builtin', { display: { description: 'A builtin.' } }));
     const head = fixture.nativeElement.querySelector('.card-head') as HTMLElement;
     expect(head.textContent).toContain('Available');
     expect(head.textContent).not.toContain('Read-only');
     expect(head.textContent).not.toContain('Built-in');
-    const tags = fixture.nativeElement.querySelector('.tags') as HTMLElement;
-    expect(tags.textContent).toContain('Built-in');
-    expect(tags.textContent).toContain('Read-only');
+    expect(head.querySelector('.availability')).not.toBeNull();
+    const provenance = fixture.nativeElement.querySelector('.provenance') as HTMLElement;
+    expect(provenance.textContent).toContain('Source: Built-in');
+    expect(provenance.textContent).toContain('Read-only');
+    expect(fixture.nativeElement.querySelectorAll('.availability').length).toBe(1);
+  });
+
+  it('keeps a targeted sign-in section focusable for authentication deep links', () => {
+    fixture.componentRef.setInput('agent', summary('builtin'));
+    fixture.componentRef.setInput('targeted', true);
+    fixture.detectChanges();
+    const auth = fixture.nativeElement.querySelector('.auth') as HTMLElement;
+    expect(auth.id).toBe('agent-auth-builtin-agent');
+    expect(auth.tabIndex).toBe(-1);
+    expect(auth.classList.contains('targeted')).toBe(true);
   });
 
   it('represents agent, terminal, and unsupported methods honestly', () => {
@@ -302,6 +314,31 @@ describe('AgentCardComponent', () => {
     expect(retryAuth).toHaveBeenCalled();
   });
 
+  it('shows checking sign-in while a protocol flow starts, unless the flow is available', () => {
+    fixture.componentRef.setInput('agent', summary('builtin'));
+    fixture.componentRef.setInput('auth', {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: false,
+      observed_state: 'unknown',
+      methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
+    });
+    fixture.componentRef.setInput('protocolLoading', true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Checking sign-in…');
+
+    fixture.componentRef.setInput('protocolFlow', {
+      flow_id: 'flow-1',
+      agent_id: 'x',
+      method_id: 'oauth',
+      state: 'running',
+      reason: null,
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Signing in…');
+    expect(fixture.nativeElement.textContent).not.toContain('Checking sign-in…');
+  });
+
   it('places each method label on the left and its action on the right', () => {
     render(summary('builtin'), {
       agent_id: 'x',
@@ -408,6 +445,9 @@ describe('AgentCardComponent', () => {
     expect(text).toContain('https://example.invalid/device?code=ABCD-1234');
     expect(text).toContain('example.invalid');
     expect(text).toContain('Batey never opens or fetches it automatically');
+    const elicitations = fixture.nativeElement.querySelector('.elicitations') as HTMLElement;
+    expect(elicitations.getAttribute('role')).toBe('group');
+    expect(elicitations.getAttribute('aria-label')).toBe('Sign-in action required');
     const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
     buttons.find((button) => button.textContent?.includes('Cancel'))?.click();
     expect(cancel).toHaveBeenCalled();

@@ -369,6 +369,21 @@ describe('AgentCardComponent', () => {
     expect(text).not.toContain('Authenticated');
   });
 
+  it('shows stale authentication-required evidence as historical too, not as a current claim', () => {
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: true,
+      terminal_supported: true,
+      observed_state: 'authentication_required',
+      freshness: 'stale',
+      observed_freshness: 'stale',
+      methods: [],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Previously required sign-in');
+    expect(text).not.toContain('Authentication required');
+  });
+
   it('shows checking sign-in while a protocol flow starts, unless the flow is available', () => {
     fixture.componentRef.setInput('agent', summary('builtin'));
     fixture.componentRef.setInput('auth', {

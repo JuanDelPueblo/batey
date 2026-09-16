@@ -97,7 +97,7 @@ export class AgentCardComponent {
       case 'authenticated':
         return this.isStale() ? 'Previously signed in' : 'Authenticated';
       case 'authentication_required':
-        return 'Authentication required';
+        return this.isStale() ? 'Previously required sign-in' : 'Authentication required';
       default:
         return null;
     }

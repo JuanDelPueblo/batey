@@ -669,11 +669,32 @@ export class FakeState {
     return { ...this.customDetails.get(id), id };
   }
 
+  /** Durable chats still name this agent when at least one references it.
+   * Mirrors the Rust manager's `chat_count_for_agent` check before it
+   * decides between deleting a row and retiring it. */
+  chatCountForAgent(id) {
+    return [...this.chats.values()].filter((chat) => chat.agent === id).length;
+  }
+
   removeAgent(id) {
     const index = AGENTS.findIndex((agent) => agent.id === id);
     if (index < 0) throw Object.assign(new Error('Agent not found'), { status: 404 });
     const agent = AGENTS[index];
     if (agent.mutability === 'read_only') throw Object.assign(new Error('This agent is read-only'), { status: 409 });
+
+    const retainedChats = this.chatCountForAgent(id);
+    if (retainedChats > 0) {
+      // Durable chats still refer to it: retire instead of delete, so
+      // their history stays readable. The discovery cache stays too, as
+      // historical evidence, marked stale since it will never run a new
+      // process again under this id's old identity.
+      agent.availability = 'unavailable';
+      agent.unavailable_reason = `This agent was uninstalled. ${retainedChats} chat(s) still refer to it, so their history stays readable.`;
+      this.markAuthStale(id);
+      this.metadataChanged();
+      return { id, deleted: false, retained_chats: retainedChats, agent };
+    }
+
     AGENTS.splice(index, 1);
     this.customDetails.delete(id);
     this.authByAgent.delete(id);

@@ -453,11 +453,18 @@ describe('fake backend seed history', () => {
     assert.equal(outcome.updated, true);
     assert.equal(outcome.to_version, '1.2.0');
 
+    // The seed data gives 'example-acp' a durable chat, so removal retires
+    // it instead of deleting it: the row stays, marked unavailable, so that
+    // chat's history stays readable.
     const removal = state.removeAgent('example-acp');
-    assert.equal(removal.deleted, true);
-    assert.equal(state.agent('example-acp'), undefined);
+    assert.equal(removal.deleted, false);
+    assert.ok(removal.retained_chats > 0);
+    assert.ok(state.agent('example-acp'));
+    assert.equal(state.agent('example-acp').availability, 'unavailable');
 
-    state.removeAgent(installed.id);
+    // The newly installed agent has no chats, so removal deletes it outright.
+    const cleanRemoval = state.removeAgent(installed.id);
+    assert.equal(cleanRemoval.deleted, true);
     assert.equal(state.agent(installed.id), undefined);
   });
 
@@ -600,6 +607,23 @@ describe('fake backend seed history', () => {
     // stale row nothing can ever refresh again.
     state.removeAgent('my-custom');
     assert.equal(state.authCheckedAt.has('my-custom'), false);
+  });
+
+  it('T140: retiring an agent (durable chats still reference it) marks the cache stale instead of forgetting it', () => {
+    const state = new FakeState();
+    state.createChat('scratch', 'my-custom', 'still referenced');
+    state.refreshAgentAuth('my-custom');
+    assert.equal(state.agentAuth('my-custom').freshness, 'cached');
+
+    const outcome = state.removeAgent('my-custom');
+    assert.equal(outcome.deleted, false);
+    assert.equal(outcome.retained_chats, 1);
+    // The agent row survives, marked unavailable, and its cache survives
+    // too, as historical evidence, marked stale.
+    assert.ok(state.agent('my-custom'));
+    assert.equal(state.agent('my-custom').availability, 'unavailable');
+    assert.equal(state.authCheckedAt.has('my-custom'), true);
+    assert.equal(state.agentAuth('my-custom').freshness, 'stale');
   });
 
   it('T140: discovery and observed-evidence freshness age independently', () => {

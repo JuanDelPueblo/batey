@@ -333,17 +333,11 @@ impl AcpSession {
             &secrets,
             &overrides,
         );
-        let policy = if let Some(store) = &self.store {
-            store.chat(&self.id)?.permission_policy
-        } else {
-            self.runtime.default_permission_policy.clone()
-        };
         let client = match AcpClient::spawn(
             &self.runtime.launch.command,
             &self.runtime.launch.args,
             &agent_env,
             &self.key.cwd,
-            policy,
             self.id.clone(),
             self.key.agent.clone(),
             self.event_log.clone(),
@@ -889,12 +883,12 @@ impl AcpSession {
         );
     }
 
-    pub async fn respond_to_permission(&self, perm_id: &str, granted: bool) -> bool {
+    pub async fn respond_to_permission(&self, perm_id: &str, option_id: &str) -> bool {
         let client = self.client.read().await;
         if let Some(c) = client.as_ref() {
             return c
                 .callback_handler()
-                .respond_permission(perm_id, granted)
+                .respond_permission(perm_id, option_id)
                 .await;
         }
         false
@@ -948,15 +942,10 @@ impl AcpSession {
         &self,
         title: Option<String>,
         archived: Option<bool>,
-        policy: Option<crate::acp::callbacks::CallbackPolicy>,
     ) -> anyhow::Result<crate::store::Chat> {
         // A title is display metadata and can be changed while the agent is
-        // working. Archive and permission-policy changes affect session
-        // behavior, so keep the existing turn guard for those fields. When a
-        // request combines both kinds of edits, acquire this guard before the
-        // store mutation so the compound patch remains atomic.
-        let needs_turn_guard = archived.is_some() || policy.is_some();
-        let policy_changed = policy.is_some();
+        // working. Archive changes retain the existing turn guard.
+        let needs_turn_guard = archived.is_some();
         let _guard = needs_turn_guard
             .then(|| {
                 self.turn_guard.try_lock().map_err(|_| {
@@ -976,17 +965,7 @@ impl AcpSession {
             if let Some(archived) = archived {
                 c.archived = archived;
             }
-            if let Some(policy) = policy {
-                c.permission_policy = policy;
-            }
         })?;
-        if policy_changed {
-            if let Some(client) = self.client.read().await.as_ref() {
-                client
-                    .callback_handler()
-                    .set_policy(c.permission_policy.clone());
-            }
-        }
         Ok(c)
     }
 

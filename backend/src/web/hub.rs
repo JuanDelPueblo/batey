@@ -1,10 +1,7 @@
 use super::AppState;
-use crate::{
-    acp::callbacks::CallbackPolicy,
-    service::{
-        ChatEdit, ChatView, HubService, ServiceError, WorkspaceOptions, WorkspaceSelection,
-        DEFAULT_HISTORY_PAGE_SIZE, MAX_HISTORY_PAGE_SIZE,
-    },
+use crate::service::{
+    ChatEdit, ChatView, HubService, ServiceError, WorkspaceOptions, WorkspaceSelection,
+    DEFAULT_HISTORY_PAGE_SIZE, MAX_HISTORY_PAGE_SIZE,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -351,7 +348,6 @@ pub async fn history(
 pub struct ChatEditInput {
     title: Option<String>,
     archived: Option<bool>,
-    permission_policy: Option<CallbackPolicy>,
 }
 pub async fn edit_chat(
     State(s): State<AppState>,
@@ -361,7 +357,6 @@ pub async fn edit_chat(
     let edit = ChatEdit {
         title: edit.title,
         archived: edit.archived,
-        permission_policy: edit.permission_policy,
     };
     Ok(Json(hub(&s)?.edit_chat(&id, edit).await?))
 }

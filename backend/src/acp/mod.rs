@@ -25,7 +25,7 @@ use tokio::task::JoinHandle;
 
 use crate::events::{EventLog, EventPayload};
 
-use self::callbacks::{CallbackHandler, CallbackPolicy};
+use self::callbacks::CallbackHandler;
 pub use self::process::StderrPolicy;
 use self::process::{drain_stderr, AcpProcess, StderrTail};
 use self::protocol::{
@@ -179,7 +179,6 @@ impl AcpClient {
         args: &[String],
         env_vars: &HashMap<String, String>,
         cwd: &Path,
-        policy: CallbackPolicy,
         session_id: String,
         agent_name: String,
         event_log: Arc<EventLog>,
@@ -196,7 +195,6 @@ impl AcpClient {
         let connected = Arc::new(AtomicBool::new(true));
 
         let callback_handler = Arc::new(CallbackHandler::new_with_roots(
-            policy,
             session_id.clone(),
             agent_name.clone(),
             event_log.clone(),
@@ -1959,7 +1957,6 @@ mod tests {
 
         let tracker = Arc::new(crate::tasks::TerminalTaskTracker::default());
         let handler = CallbackHandler::new(
-            CallbackPolicy::ReadOnly,
             "session-1".into(),
             "codex".into(),
             Arc::new(EventLog::new(100)),

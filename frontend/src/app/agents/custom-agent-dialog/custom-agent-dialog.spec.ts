@@ -54,7 +54,6 @@ describe('CustomAgentDialogComponent', () => {
     expect(component.argsText()).toBe('--acp\n--verbose');
     expect(component.envText()).toBe('MY_AGENT_TOKEN=secret');
     expect(component.idleTimeout()).toBe('600');
-    expect(component.policy()).toBe('read-only');
     expect(component.description()).toBe('A custom agent.');
   });
 

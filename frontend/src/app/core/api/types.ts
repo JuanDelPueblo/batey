@@ -1,5 +1,7 @@
 export type ProcessState = 'STARTING' | 'RUNNING' | 'STOPPED' | 'DEAD';
 export type TurnState = 'IDLE' | 'PROMPTING' | 'CANCELLING';
+/** Legacy agent/database value. It is accepted for compatibility but never
+ * controls ACP callbacks. */
 export type PermissionPolicy = 'ask' | 'read-only' | 'auto-approve' | 'deny-all';
 export type AgentSource = 'builtin' | 'file' | 'batey_managed' | 'registry' | 'declarative';
 export type AgentAvailability = 'available' | 'unavailable';
@@ -295,7 +297,8 @@ export interface Chat {
   created_at: string;
   updated_at: string;
   archived: boolean;
-  permission_policy: PermissionPolicy;
+  /** Legacy persisted value; ignored by the ACP runtime. */
+  permission_policy?: PermissionPolicy;
   config_values: Record<string, unknown>;
   title_overridden?: boolean;
   turn_started_at?: string | null;
@@ -486,6 +489,15 @@ export interface TurnEntryPermission {
   decision?: string;
   title?: string;
   kind?: string;
+  options?: AgentPermissionOption[];
+}
+
+/** The exact option object advertised by an ACP agent. */
+export interface AgentPermissionOption {
+  optionId: string;
+  name: string;
+  kind: string;
+  [key: string]: unknown;
 }
 
 export type TurnEntry =
@@ -573,7 +585,6 @@ export interface SessionPayload {
   output?: unknown;
   method?: unknown;
   description?: unknown;
-  granted?: unknown;
   process?: unknown;
   turn?: unknown;
   stop_reason?: unknown;

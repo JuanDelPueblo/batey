@@ -7,7 +7,7 @@ import type { TurnEntryPermission } from '../../core/api/types';
 describe('PermissionCardComponent', () => {
   let fixture: ComponentFixture<PermissionCardComponent>;
   let component: PermissionCardComponent;
-  const responded: Array<{ chatId: string; requestId: string; granted: boolean }> = [];
+  const responded: Array<{ chatId: string; requestId: string; optionId: string }> = [];
 
   beforeEach(async () => {
     responded.length = 0;
@@ -17,8 +17,8 @@ describe('PermissionCardComponent', () => {
         {
           provide: AppStateService,
           useValue: {
-            respondPermission: async (chatId: string, requestId: string, granted: boolean) => {
-              responded.push({ chatId, requestId, granted });
+            respondPermission: async (chatId: string, requestId: string, optionId: string) => {
+              responded.push({ chatId, requestId, optionId });
             },
           },
         },
@@ -38,6 +38,10 @@ describe('PermissionCardComponent', () => {
       title: 'Approve Plan',
       kind: 'switch_mode',
       description: '### Proposed Plan\n\n1. Step one\n2. Step two',
+      options: [
+        { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
+        { optionId: 'approve', name: 'Approve Plan', kind: 'allow_once' },
+      ],
       responded: false,
     };
     fixture.componentRef.setInput('permission', planPerm);
@@ -59,7 +63,7 @@ describe('PermissionCardComponent', () => {
 
     buttons[1].click();
     await fixture.whenStable();
-    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-1', granted: true }]);
+    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-1', optionId: 'approve' }]);
   });
 
   it('renders generic permission with Allow and Deny buttons', async () => {
@@ -69,6 +73,10 @@ describe('PermissionCardComponent', () => {
       requestId: 'perm-2',
       method: 'bash',
       description: 'cargo build',
+      options: [
+        { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+        { optionId: 'allow', name: 'Allow', kind: 'allow_once' },
+      ],
       responded: false,
     };
 
@@ -87,6 +95,6 @@ describe('PermissionCardComponent', () => {
 
     buttons[0].click();
     await fixture.whenStable();
-    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', granted: false }]);
+    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', optionId: 'deny' }]);
   });
 });

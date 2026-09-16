@@ -352,7 +352,7 @@ describe('ChatSessionStore', () => {
     }));
     expect(store.chatActivity('chat-1')).toBe('waiting');
 
-    store.handleIncomingEvent(event(2, { type: 'permission_response', id: 'permission-1', granted: true }));
+    store.handleIncomingEvent(event(2, { type: 'permission_response', id: 'permission-1', option_id: 'allow-once' }));
     expect(store.chatActivity('chat-1')).toBe('working');
   });
 

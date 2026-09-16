@@ -438,7 +438,6 @@ export class FakeState {
       created_at: now(),
       updated_at: now(),
       archived: false,
-      permission_policy: 'ask',
       config_values: {},
       title_overridden: hasExplicitTitle,
       workspace: workspace ? {
@@ -1222,7 +1221,6 @@ export class FakeState {
     this.setManagedWorkspace(archived, '1111111111111111111111111111111111111111');
     archived.acp_session_id = 'acp-session-archived-migrations';
     archived.archived = true;
-    archived.permission_policy = 'read-only';
     this.seedConversation(archived, {
       user: 'How do we port the store to versioned migrations?',
       thought: 'The store opens SQLite directly. I must list the tables before I draft the migration steps.',
@@ -1232,7 +1230,6 @@ export class FakeState {
 
     const firmwareReview = this.createChat(firmware.id, 'claude', 'Inspect the Corolla calibration checksum');
     firmwareReview.acp_session_id = 'acp-session-calibration';
-    firmwareReview.permission_policy = 'read-only';
     this.seedConversation(firmwareReview, {
       user: 'Can you inspect the calibration checksum without changing the dump?',
       thought: 'This is a read-only review. I will compare the checksum routine with the captured bytes.',
@@ -1404,6 +1401,10 @@ export class FakeState {
       title: 'Write WebSocket sender loop',
       kind: 'edit',
       description: 'Write backend/src/web/websocket.rs to preserve the reconnect high-water mark.',
+      options: [
+        { optionId: 'seed-allow-once', name: 'Allow once', kind: 'allow_once' },
+        { optionId: 'seed-reject-once', name: 'Reject once', kind: 'reject_once' },
+      ],
     }, timestamp(4));
     this.seededTurns.set(chat.id, { kind: 'waiting', permission_id: permissionId });
   }

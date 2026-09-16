@@ -30,6 +30,7 @@ pub enum EventPayload {
         message: String,
     },
     ConfigOptions {
+        #[serde(default)]
         options: serde_json::Value,
     },
     MetadataChanged {},
@@ -127,10 +128,15 @@ pub enum EventPayload {
         title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         kind: Option<String>,
+        /// The exact ACP permission options advertised by the agent.
+        options: serde_json::Value,
     },
     PermissionResponse {
         id: String,
-        granted: bool,
+        /// The exact agent-supplied option selected by the user. `None` is a
+        /// cancellation marker, never an implicit denial.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        option_id: Option<String>,
     },
     TurnComplete {
         stop_reason: String,
@@ -246,7 +252,10 @@ impl EventLog {
             log.append(
                 &chat,
                 &agent,
-                EventPayload::PermissionResponse { id, granted: false },
+                EventPayload::PermissionResponse {
+                    id,
+                    option_id: None,
+                },
             )?;
         }
         for (id, (chat, agent)) in pending_elicitations {
@@ -651,6 +660,7 @@ mod tests {
                         id: "p1".into(),
                         method: "edit".into(),
                         description: "edit a file".into(),
+                        options: serde_json::json!([]),
                         title: None,
                         kind: None,
                     },
@@ -694,7 +704,7 @@ mod tests {
         assert_eq!(denied.session_id, "chat-a");
         assert!(matches!(
             &denied.payload,
-            EventPayload::PermissionResponse { id, granted: false } if id == "p1"
+            EventPayload::PermissionResponse { id, option_id: None } if id == "p1"
         ));
         let completed = &durable[8];
         assert_eq!(completed.seq, 9);
@@ -752,6 +762,7 @@ mod tests {
                         id: "p1".into(),
                         method: "edit".into(),
                         description: "edit a file".into(),
+                        options: serde_json::json!([]),
                         title: None,
                         kind: None,
                     },
@@ -763,7 +774,7 @@ mod tests {
                     "codex",
                     EventPayload::PermissionResponse {
                         id: "p1".into(),
-                        granted: true,
+                        option_id: Some("allow-once".into()),
                     },
                 )
                 .unwrap();
@@ -800,7 +811,7 @@ mod tests {
         assert_eq!(durable.len(), 9);
         assert!(!durable.iter().any(|e| matches!(
             &e.payload,
-            EventPayload::PermissionResponse { id, granted: false } if id == "p1"
+            EventPayload::PermissionResponse { id, option_id: None } if id == "p1"
         )));
         assert!(!durable.iter().any(|e| matches!(
             &e.payload,

@@ -10,7 +10,7 @@ use batey::{
         HostRuntimeProbe,
     },
     config::{BateyPaths, Config, PathOverrides, RegistryConfig},
-    events::{EventLog, EventPayload},
+    events::{EventLog, EventPayload, ReplayResult},
     session::SessionManager,
     store::Store,
     web::{router, AppState},
@@ -416,7 +416,7 @@ async fn independent_sessions_resume_config_permission_and_idle_cleanup() {
     })
     .await
     .unwrap();
-    one.respond_to_permission(&permission, true).await;
+    one.respond_to_permission(&permission, "yes").await;
     assert_eq!(prompt.await.unwrap().unwrap(), "yes");
     mgr.reap_idle().await;
     assert_eq!(db.chats().unwrap().len(), 2);
@@ -462,13 +462,13 @@ async fn unsupported_resume_never_creates_another_conversation() {
         batey::state::ProcessState::Running,
         "a non-resumable chat must not be made unusable by idle reaping"
     );
-    s.edit_metadata(None, Some(true), None).await.unwrap();
+    s.edit_metadata(None, Some(true)).await.unwrap();
     assert_eq!(
         s.process_state().await,
         batey::state::ProcessState::Running,
         "archiving a live chat must not terminate its process"
     );
-    s.edit_metadata(None, Some(false), None).await.unwrap();
+    s.edit_metadata(None, Some(false)).await.unwrap();
     assert_eq!(
         s.process_state().await,
         batey::state::ProcessState::Running,
@@ -558,7 +558,6 @@ async fn api_validation_and_chat_identity() {
     let (_, a) = call(&app, "POST", &path, json!({"agent":"codex","title":"a"})).await;
     let (_, b) = call(&app, "POST", &path, json!({"agent":"codex","title":"b"})).await;
     assert_ne!(a["id"], b["id"]);
-    assert_eq!(a["permission_policy"], "ask");
 
     let (list_status, list) = call(&app, "GET", "/api/projects", json!({})).await;
     assert_eq!(list_status, 200);
@@ -1313,18 +1312,26 @@ async fn http_permission_endpoint_accepts_frontend_payload() {
         tokio::spawn(async move { session.ask("permission".into(), None).await })
     };
 
-    let perm_id = tokio::time::timeout(Duration::from_secs(10), async {
+    let (perm_id, options) = tokio::time::timeout(Duration::from_secs(10), async {
         loop {
-            if let EventPayload::PermissionRequest { id, .. } = events.recv().await.unwrap().payload
+            if let EventPayload::PermissionRequest { id, options, .. } =
+                events.recv().await.unwrap().payload
             {
-                break id;
+                break (id, options);
             }
         }
     })
     .await
     .unwrap();
+    let option_ids: Vec<_> = options
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|option| option["optionId"].as_str().unwrap())
+        .collect();
+    assert_eq!(option_ids, ["yes", "always", "no", "never"]);
 
-    // Call HTTP permission endpoint with exact frontend payload: {"id": "<id>", "granted": true}
+    // Select the exact option ID supplied by the ACP agent.
     let req = Request::builder()
         .method("POST")
         .uri(format!("/api/chats/{}/permission", chat.id))
@@ -1333,7 +1340,7 @@ async fn http_permission_endpoint_accepts_frontend_payload() {
         .body(Body::from(
             json!({
                 "id": perm_id,
-                "granted": true
+                "option_id": "always"
             })
             .to_string(),
         ))
@@ -1346,7 +1353,16 @@ async fn http_permission_endpoint_accepts_frontend_payload() {
     assert_eq!(resp_json["success"], true);
 
     // Prompt finishes successfully because permission was granted
-    assert_eq!(prompt_task.await.unwrap().unwrap(), "yes");
+    assert_eq!(prompt_task.await.unwrap().unwrap(), "always");
+    let response = match mgr.event_log().replay_from(0) {
+        ReplayResult::Complete(events) | ReplayResult::Partial { events, .. } => {
+            events.into_iter().find_map(|event| match event.payload {
+                EventPayload::PermissionResponse { id, option_id } if id == perm_id => option_id,
+                _ => None,
+            })
+        }
+    };
+    assert_eq!(response.as_deref(), Some("always"));
 
     // Second response to already handled perm_id returns 409 CONFLICT
     let req_stale = Request::builder()
@@ -1357,7 +1373,7 @@ async fn http_permission_endpoint_accepts_frontend_payload() {
         .body(Body::from(
             json!({
                 "id": perm_id,
-                "granted": true
+                "option_id": "always"
             })
             .to_string(),
         ))

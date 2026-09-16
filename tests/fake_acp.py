@@ -363,8 +363,10 @@ for line in sys.stdin:
             pending_prompt = id
             send({"id": "permission-1", "method": "session/request_permission", "params": {
                 "sessionId": current, "toolCall": {"toolCallId": "tool-1", "title": "Write file", "kind": "edit"},
-                "options": [{"optionId": "yes", "name": "Approve", "kind": "allow_once"},
-                            {"optionId": "no", "name": "Deny", "kind": "reject_once"}]}})
+                "options": [{"optionId": "yes", "name": "Approve once", "kind": "allow_once"},
+                            {"optionId": "always", "name": "Always approve", "kind": "allow_always"},
+                            {"optionId": "no", "name": "Reject once", "kind": "reject_once"},
+                            {"optionId": "never", "name": "Always reject", "kind": "reject_always"}]}})
         elif text.startswith("title:"):
             new_title = text[6:]
             update("session_info_update", title=new_title)

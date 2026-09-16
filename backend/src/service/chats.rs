@@ -2,7 +2,6 @@
 use super::{
     workspaces::workspace_error, ChatHistoryPage, ChatView, HubService, ServiceError, ServiceResult,
 };
-use crate::acp::callbacks::CallbackPolicy;
 use crate::store::{
     validate_name, AdditionalRoot, Chat, ChatWorkspace, McpServerConfig, McpServerInput,
     McpServerView, McpTransport, SecretEdit, SecretField, WorkspaceMode,
@@ -26,7 +25,6 @@ pub struct WorkspaceSelection {
 pub struct ChatEdit {
     pub title: Option<String>,
     pub archived: Option<bool>,
-    pub permission_policy: Option<CallbackPolicy>,
 }
 
 /// A prompt must fit this range. The limit keeps one request from filling the
@@ -611,9 +609,7 @@ impl HubService {
             .map(|title| validate_name(&title).map(|()| title.trim().to_string()))
             .transpose()?;
         let live = self.live(chat_id).await?;
-        let chat = live
-            .edit_metadata(title, edit.archived, edit.permission_policy)
-            .await?;
+        let chat = live.edit_metadata(title, edit.archived).await?;
         self.notify_metadata_changed();
         Ok(self.view(chat).await)
     }

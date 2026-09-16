@@ -87,7 +87,6 @@ describe('fake backend seed history', () => {
     const archived = byTitle('Port the store to versioned migrations');
     assert.equal(archived.archived, true);
     assert.equal(state.chatView(archived).process_state, 'STOPPED');
-    assert.equal(archived.permission_policy, 'read-only');
 
     const rich = byTitle('Compare the dashboard render trace and screenshot');
     const richEvents = historyFor(state, rich.id);

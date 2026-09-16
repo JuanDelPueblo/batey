@@ -30,7 +30,8 @@ pub enum CallbackPolicy {
 }
 
 pub struct PendingPermission {
-    pub tx: oneshot::Sender<Option<bool>>,
+    pub tx: oneshot::Sender<Option<PermissionOptionId>>,
+    pub option_ids: HashSet<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -54,7 +55,6 @@ struct PendingElicitation {
 }
 
 pub struct CallbackHandler {
-    policy: std::sync::RwLock<CallbackPolicy>,
     session_id: String,
     agent_name: String,
     event_log: Arc<EventLog>,
@@ -68,14 +68,7 @@ pub struct CallbackHandler {
 }
 
 impl CallbackHandler {
-    fn policy(&self) -> CallbackPolicy {
-        self.policy.read().unwrap().clone()
-    }
-    pub fn set_policy(&self, policy: CallbackPolicy) {
-        *self.policy.write().unwrap() = policy;
-    }
     pub fn new(
-        policy: CallbackPolicy,
         session_id: String,
         agent_name: String,
         event_log: Arc<EventLog>,
@@ -85,7 +78,6 @@ impl CallbackHandler {
     ) -> Self {
         let roots = vec![cwd.canonicalize().unwrap_or_else(|_| cwd.clone())];
         Self::new_with_roots(
-            policy,
             session_id,
             agent_name,
             event_log,
@@ -97,7 +89,6 @@ impl CallbackHandler {
     }
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_roots(
-        policy: CallbackPolicy,
         session_id: String,
         agent_name: String,
         event_log: Arc<EventLog>,
@@ -107,7 +98,6 @@ impl CallbackHandler {
         task_tracker: Arc<TerminalTaskTracker>,
     ) -> Self {
         Self {
-            policy: std::sync::RwLock::new(policy),
             session_id,
             agent_name,
             event_log,
@@ -228,14 +218,16 @@ impl CallbackHandler {
         description: String,
         title: Option<String>,
         kind: Option<String>,
-    ) -> Option<bool> {
+        options: serde_json::Value,
+        option_ids: HashSet<String>,
+    ) -> Option<PermissionOptionId> {
         let (tx, rx) = oneshot::channel();
         let perm_id = uuid::Uuid::new_v4().to_string();
 
         self.pending_permissions
             .write()
             .await
-            .insert(perm_id.clone(), PendingPermission { tx });
+            .insert(perm_id.clone(), PendingPermission { tx, option_ids });
 
         if let Err(e) = self.event_log.append(
             &self.session_id,
@@ -246,11 +238,12 @@ impl CallbackHandler {
                 description,
                 title,
                 kind,
+                options,
             },
         ) {
             tracing::error!("Failed to emit PermissionRequest event: {}", e);
             self.pending_permissions.write().await.remove(&perm_id);
-            return Some(false);
+            return None;
         }
 
         // None means the turn was cancelled: the caller must answer with
@@ -258,140 +251,39 @@ impl CallbackHandler {
         rx.await.unwrap_or(None)
     }
 
-    async fn with_write_permission(
-        &self,
-        tool_name: &str,
-        description: String,
-    ) -> agent_client_protocol_schema::Result<()> {
-        match self.policy() {
-            CallbackPolicy::DenyAll => Err(agent_client_protocol_schema::Error::new(
-                -32001,
-                "Permission denied by policy",
-            )),
-            CallbackPolicy::ReadOnly => Err(agent_client_protocol_schema::Error::new(
-                -32001,
-                "Write operations not allowed in ReadOnly mode",
-            )),
-            CallbackPolicy::Ask => {
-                match self
-                    .request_user_permission(tool_name, description, None, None)
-                    .await
-                {
-                    Some(true) => Ok(()),
-                    Some(false) => Err(agent_client_protocol_schema::Error::new(
-                        -32001,
-                        "Permission denied by user",
-                    )),
-                    // Turn cancellation is not a denial. Report the
-                    // protocol cancellation code so the agent can tell them
-                    // apart.
-                    None => Err(agent_client_protocol_schema::Error::new(
-                        -32800,
-                        "Request cancelled",
-                    )),
-                }
-            }
-            CallbackPolicy::AutoApprove => Ok(()),
-        }
-    }
-
     pub async fn handle_request_permission(
         &self,
         req: RequestPermissionRequest,
     ) -> RequestPermissionResponse {
-        let make_response = |option_id: PermissionOptionId| {
-            RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
+        let (title, description, kind) = format_permission_tool_call(&req.tool_call);
+        let options = serde_json::to_value(&req.options).unwrap_or_else(|error| {
+            tracing::warn!(%error, "Failed to serialize ACP permission options");
+            serde_json::json!([])
+        });
+        let option_ids = req
+            .options
+            .iter()
+            .filter_map(|option| {
+                serde_json::to_value(&option.option_id)
+                    .ok()
+                    .and_then(|value| value.as_str().map(str::to_owned))
+            })
+            .collect();
+        let selected = self
+            .request_user_permission(
+                "session/request_permission",
+                description,
+                title,
+                kind,
+                options,
+                option_ids,
+            )
+            .await;
+        match selected {
+            None => RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
+            Some(option_id) => RequestPermissionResponse::new(RequestPermissionOutcome::Selected(
                 SelectedPermissionOutcome::new(option_id),
-            ))
-        };
-
-        let deny_option = req
-            .options
-            .iter()
-            .find(|o| {
-                matches!(
-                    o.kind,
-                    agent_client_protocol_schema::PermissionOptionKind::RejectOnce
-                )
-            })
-            .or_else(|| {
-                req.options.iter().find(|o| {
-                    matches!(
-                        o.kind,
-                        agent_client_protocol_schema::PermissionOptionKind::RejectAlways
-                    )
-                })
-            })
-            .map(|o| o.option_id.clone());
-
-        let approve_option = req
-            .options
-            .iter()
-            .find(|o| {
-                matches!(
-                    o.kind,
-                    agent_client_protocol_schema::PermissionOptionKind::AllowOnce
-                )
-            })
-            .or_else(|| {
-                req.options.iter().find(|o| {
-                    matches!(
-                        o.kind,
-                        agent_client_protocol_schema::PermissionOptionKind::AllowAlways
-                    )
-                })
-            })
-            .map(|o| o.option_id.clone());
-
-        match self.policy() {
-            CallbackPolicy::DenyAll => {
-                if let Some(deny_id) = deny_option {
-                    make_response(deny_id)
-                } else {
-                    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-                }
-            }
-            CallbackPolicy::ReadOnly => {
-                if let Some(deny_id) = deny_option {
-                    make_response(deny_id)
-                } else {
-                    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-                }
-            }
-            CallbackPolicy::Ask => {
-                let (title, description, kind) = format_permission_tool_call(&req.tool_call);
-                match self
-                    .request_user_permission("session/request_permission", description, title, kind)
-                    .await
-                {
-                    // Cancellation must surface as ACP `cancelled`, never as
-                    // a user denial.
-                    None => RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled),
-                    Some(true) => {
-                        if let Some(approve_id) = approve_option {
-                            make_response(approve_id)
-                        } else {
-                            RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-                        }
-                    }
-                    Some(false) => {
-                        if let Some(deny_id) = deny_option {
-                            make_response(deny_id)
-                        } else {
-                            RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-                        }
-                    }
-                }
-            }
-            CallbackPolicy::AutoApprove => {
-                if let Some(approve_id) = approve_option {
-                    make_response(approve_id)
-                } else if let Some(first) = req.options.first() {
-                    make_response(first.option_id.clone())
-                } else {
-                    RequestPermissionResponse::new(RequestPermissionOutcome::Cancelled)
-                }
-            }
+            )),
         }
     }
 
@@ -399,23 +291,15 @@ impl CallbackHandler {
         &self,
         req: ReadTextFileRequest,
     ) -> agent_client_protocol_schema::Result<ReadTextFileResponse> {
-        match self.policy() {
-            CallbackPolicy::DenyAll => Err(agent_client_protocol_schema::Error::new(
-                -32001,
-                "File read denied by policy",
-            )),
-            _ => {
-                let path = self.resolve_path(&req.path, false)?;
-                let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
-                    agent_client_protocol_schema::Error::new(-32002, format!("Read failed: {}", e))
-                })?;
-                // Honor stable `line` (1-based) and `limit` semantics,
-                // including boundary and error cases.
-                let sliced = apply_read_window(&content, req.line, req.limit)
-                    .map_err(|message| agent_client_protocol_schema::Error::new(-32002, message))?;
-                Ok(ReadTextFileResponse::new(sliced))
-            }
-        }
+        let path = self.resolve_path(&req.path, false)?;
+        let content = tokio::fs::read_to_string(&path).await.map_err(|e| {
+            agent_client_protocol_schema::Error::new(-32002, format!("Read failed: {}", e))
+        })?;
+        // Honor stable `line` (1-based) and `limit` semantics,
+        // including boundary and error cases.
+        let sliced = apply_read_window(&content, req.line, req.limit)
+            .map_err(|message| agent_client_protocol_schema::Error::new(-32002, message))?;
+        Ok(ReadTextFileResponse::new(sliced))
     }
 
     pub async fn handle_write_file(
@@ -423,8 +307,6 @@ impl CallbackHandler {
         req: WriteTextFileRequest,
     ) -> agent_client_protocol_schema::Result<WriteTextFileResponse> {
         let path = self.resolve_path(&req.path, true)?;
-        self.with_write_permission("fs/write_text_file", format!("Write to {}", path.display()))
-            .await?;
         tokio::fs::write(&path, &req.content).await.map_err(|e| {
             agent_client_protocol_schema::Error::new(-32002, format!("Write failed: {}", e))
         })?;
@@ -435,12 +317,6 @@ impl CallbackHandler {
         &self,
         req: CreateTerminalRequest,
     ) -> agent_client_protocol_schema::Result<CreateTerminalResponse> {
-        self.with_write_permission(
-            "terminal/create",
-            format!("Execute {} {:?}", req.command, req.args),
-        )
-        .await?;
-
         let cwd = match req.cwd.as_ref() {
             Some(cwd) => self.resolve_path(cwd, false)?,
             None => self.cwd.clone(),
@@ -552,10 +428,27 @@ impl CallbackHandler {
         }
     }
 
-    pub async fn respond_permission(&self, perm_id: &str, granted: bool) -> bool {
+    pub async fn respond_permission(&self, perm_id: &str, option_id: &str) -> bool {
         let mut pending = self.pending_permissions.write().await;
         if let Some(p) = pending.remove(perm_id) {
-            return p.tx.send(Some(granted)).is_ok();
+            if !p.option_ids.contains(option_id) {
+                pending.insert(perm_id.to_string(), p);
+                return false;
+            }
+            let option_id = option_id.to_string();
+            if let Err(error) = self.event_log.append(
+                &self.session_id,
+                &self.agent_name,
+                EventPayload::PermissionResponse {
+                    id: perm_id.to_string(),
+                    option_id: Some(option_id.clone()),
+                },
+            ) {
+                tracing::error!(%error, "Failed to emit PermissionResponse event");
+                pending.insert(perm_id.to_string(), p);
+                return false;
+            }
+            return p.tx.send(Some(option_id.into())).is_ok();
         }
         false
     }
@@ -564,7 +457,17 @@ impl CallbackHandler {
     /// originating turn is cancelled; never records cancellation as denial.
     pub async fn cancel_pending_permissions(&self) {
         let mut pending = self.pending_permissions.write().await;
-        for (_, p) in pending.drain() {
+        for (id, p) in pending.drain() {
+            if let Err(error) = self.event_log.append(
+                &self.session_id,
+                &self.agent_name,
+                EventPayload::PermissionResponse {
+                    id,
+                    option_id: None,
+                },
+            ) {
+                tracing::error!(%error, "Failed to emit cancelled PermissionResponse event");
+            }
             let _ = p.tx.send(None);
         }
     }
@@ -1281,11 +1184,10 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn make_handler(policy: CallbackPolicy) -> CallbackHandler {
+    fn make_handler(_policy: CallbackPolicy) -> CallbackHandler {
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
         CallbackHandler::new(
-            policy,
             "test-session".into(),
             "test-agent".into(),
             event_log,
@@ -1328,11 +1230,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_read_only_rejects_write() {
+    async fn test_direct_write_is_not_gated_by_batey_policy() {
         let handler = make_handler(CallbackPolicy::ReadOnly);
-        let req = WriteTextFileRequest::new("s1", std::path::PathBuf::from("/tmp/test"), "data");
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let req = WriteTextFileRequest::new("s1", tmp.path().to_path_buf(), "data");
         let result = handler.handle_write_file(req).await;
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert!(handler.pending_permissions.read().await.is_empty());
     }
 
     #[tokio::test]
@@ -1352,7 +1256,6 @@ mod tests {
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
         let handler = CallbackHandler::new(
-            CallbackPolicy::AutoApprove,
             "test-session".into(),
             "test-agent".into(),
             event_log,
@@ -1376,7 +1279,6 @@ mod tests {
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
         let handler = CallbackHandler::new_with_roots(
-            CallbackPolicy::AutoApprove,
             "test-session".into(),
             "test-agent".into(),
             event_log,
@@ -1428,8 +1330,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_approve_prefers_allow_once_over_allow_always() {
-        let handler = make_handler(CallbackPolicy::AutoApprove);
+    async fn test_request_permission_preserves_agent_options_and_waits_for_choice() {
+        let handler = Arc::new(make_handler(CallbackPolicy::AutoApprove));
 
         let request = RequestPermissionRequest::new(
             SchemaSessionId::new("s1"),
@@ -1451,29 +1353,36 @@ mod tests {
             ],
         );
 
-        let response = handler.handle_request_permission(request).await;
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            async move { handler.handle_request_permission(request).await }
+        });
+        tokio::task::yield_now().await;
+        let permission_id = handler
+            .pending_permissions
+            .read()
+            .await
+            .keys()
+            .next()
+            .cloned()
+            .expect("request must wait for a browser choice");
+        assert!(
+            handler
+                .respond_permission(&permission_id, "allow-always")
+                .await
+        );
+        let response = task.await.unwrap();
         match response.outcome {
             RequestPermissionOutcome::Selected(selected) => {
-                assert_eq!(selected.option_id, "allow-once".into());
+                assert_eq!(selected.option_id, "allow-always".into());
             }
             other => panic!("unexpected outcome: {:?}", other),
         }
     }
 
     #[tokio::test]
-    async fn test_read_only_denies_permission_requests() {
-        let event_log = Arc::new(crate::events::EventLog::new(100));
-        let tracker = Arc::new(TerminalTaskTracker::default());
-        let handler = CallbackHandler::new(
-            CallbackPolicy::ReadOnly,
-            "test-session".into(),
-            "test-agent".into(),
-            event_log,
-            std::env::temp_dir(),
-            Arc::new(std::env::vars().collect()),
-            tracker,
-        );
-
+    async fn test_request_permission_can_select_a_reject_always_option() {
+        let handler = Arc::new(make_handler(CallbackPolicy::ReadOnly));
         let request = RequestPermissionRequest::new(
             SchemaSessionId::new("s1"),
             agent_client_protocol_schema::ToolCallUpdate::new(
@@ -1491,13 +1400,36 @@ mod tests {
                     "Reject once",
                     agent_client_protocol_schema::PermissionOptionKind::RejectOnce,
                 ),
+                PermissionOption::new(
+                    "deny-always",
+                    "Always reject",
+                    agent_client_protocol_schema::PermissionOptionKind::RejectAlways,
+                ),
             ],
         );
 
-        let response = handler.handle_request_permission(request).await;
+        let task = tokio::spawn({
+            let handler = handler.clone();
+            async move { handler.handle_request_permission(request).await }
+        });
+        tokio::task::yield_now().await;
+        let permission_id = handler
+            .pending_permissions
+            .read()
+            .await
+            .keys()
+            .next()
+            .cloned()
+            .expect("request must wait for a browser choice");
+        assert!(
+            handler
+                .respond_permission(&permission_id, "deny-always")
+                .await
+        );
+        let response = task.await.unwrap();
         match response.outcome {
             RequestPermissionOutcome::Selected(selected) => {
-                assert_eq!(selected.option_id, "deny-1".into());
+                assert_eq!(selected.option_id, "deny-always".into());
             }
             other => panic!("unexpected outcome: {:?}", other),
         }
@@ -1509,6 +1441,7 @@ mod tests {
         let (command, args) = terminal_echo_command("hello-from-terminal");
         let create = CreateTerminalRequest::new("s1", command).args(args);
         let created = handler.handle_create_terminal(create).await.unwrap();
+        assert!(handler.pending_permissions.read().await.is_empty());
 
         let waited = handler
             .handle_wait_for_terminal_exit(WaitForTerminalExitRequest::new(
@@ -1585,10 +1518,19 @@ mod tests {
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut pending = handler.pending_permissions.write().await;
-            pending.insert("perm-1".into(), PendingPermission { tx });
+            pending.insert(
+                "perm-1".into(),
+                PendingPermission {
+                    tx,
+                    option_ids: ["allow-once".to_string()].into_iter().collect(),
+                },
+            );
         }
-        handler.respond_permission("perm-1", true).await;
-        assert_eq!(rx.await.unwrap(), Some(true));
+        assert!(handler.respond_permission("perm-1", "allow-once").await);
+        assert_eq!(
+            rx.await.unwrap().map(|id| id.to_string()),
+            Some("allow-once".into())
+        );
     }
 
     #[tokio::test]
@@ -1598,8 +1540,20 @@ mod tests {
         let (tx2, rx2) = tokio::sync::oneshot::channel();
         {
             let mut pending = handler.pending_permissions.write().await;
-            pending.insert("p1".into(), PendingPermission { tx: tx1 });
-            pending.insert("p2".into(), PendingPermission { tx: tx2 });
+            pending.insert(
+                "p1".into(),
+                PendingPermission {
+                    tx: tx1,
+                    option_ids: ["allow".to_string()].into_iter().collect(),
+                },
+            );
+            pending.insert(
+                "p2".into(),
+                PendingPermission {
+                    tx: tx2,
+                    option_ids: ["allow".to_string()].into_iter().collect(),
+                },
+            );
         }
         handler.cancel_all_pending().await;
         // Cancellation resolves as None so the permission layer can answer
@@ -1885,7 +1839,6 @@ mod tests {
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
         let handler = Arc::new(CallbackHandler::new(
-            CallbackPolicy::Ask,
             "s1".into(),
             "codex".into(),
             event_log,
@@ -1957,7 +1910,6 @@ mod tests {
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
         let handler = CallbackHandler::new(
-            CallbackPolicy::ReadOnly,
             "s1".into(),
             "codex".into(),
             event_log,
@@ -2113,7 +2065,6 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let tracker = Arc::new(TerminalTaskTracker::default());
         let handler = CallbackHandler::new(
-            CallbackPolicy::AutoApprove,
             "session-1".into(),
             "codex".into(),
             Arc::new(crate::events::EventLog::new(100)),

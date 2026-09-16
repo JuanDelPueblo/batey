@@ -4,11 +4,9 @@ import { MAT_DIALOG_DATA, MatDialogModule, MatDialogRef } from '@angular/materia
 import { MatFormFieldModule } from '@angular/material/form-field';
 import { MatInputModule } from '@angular/material/input';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
-import { MatSelectModule } from '@angular/material/select';
 import type {
   AgentManagementDetail,
   CustomAgentInput,
-  PermissionPolicy,
   ValidationReport,
 } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
@@ -25,7 +23,6 @@ export interface CustomAgentDialogData {
     MatFormFieldModule,
     MatInputModule,
     MatProgressSpinnerModule,
-    MatSelectModule,
   ],
   templateUrl: './custom-agent-dialog.html',
   styleUrl: './custom-agent-dialog.scss',
@@ -47,7 +44,6 @@ export class CustomAgentDialogComponent {
   readonly idleTimeout = signal(String(this.detail?.idle_timeout ?? 900));
   readonly usageProvider = signal(this.detail?.usage_provider ?? '');
   readonly description = signal(this.detail?.description ?? '');
-  readonly policy = signal<PermissionPolicy>(this.detail?.default_permission_policy ?? 'ask');
   readonly metadataText = signal(
     this.detail && this.detail.metadata != null ? JSON.stringify(this.detail.metadata, null, 2) : '',
   );
@@ -117,7 +113,6 @@ export class CustomAgentDialogComponent {
       idle_timeout: Number.isFinite(timeout) && timeout > 0 ? timeout : null,
       usage_provider: this.usageProvider().trim() || null,
       metadata,
-      default_permission_policy: this.policy(),
       description: this.description().trim() || null,
     };
   }

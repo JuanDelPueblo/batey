@@ -290,6 +290,20 @@ impl TerminalAuthFlows {
             .cloned()
     }
 
+    /// One unfinished flow for this agent, when one exists. Used for
+    /// recovery after navigation or reload. Finished flows are never
+    /// returned; only `running` counts as active.
+    pub fn active_for_agent(&self, agent_id: &str) -> Option<Arc<TerminalAuthFlow>> {
+        self.flows
+            .lock()
+            .expect("terminal auth registry lock poisoned")
+            .values()
+            .filter(|flow| flow.agent_id == agent_id)
+            .filter(|flow| !flow.state().is_finished())
+            .max_by_key(|flow| flow.started_at)
+            .cloned()
+    }
+
     /// Starts one flow for one prepared command.
     ///
     /// The caller has already derived the command from the installed runtime

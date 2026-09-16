@@ -59,12 +59,17 @@ function makeState() {
     protocolFlowsByAgent: signal<Record<string, import('../../core/api/types').ProtocolAuthFlow>>({}),
     protocolElicitationsByFlow: signal<Record<string, import('../../core/api/types').ProtocolAuthElicitation[]>>({}),
     protocolLoading: signal<ReadonlySet<string>>(new Set()),
+    terminalFlowsByAgent: signal<Record<string, import('../../core/api/types').AgentAuthFlow>>({}),
     loadAgents: vi.fn(async () => undefined),
     loadAgentAuth: vi.fn(async () => ({ agent_id: 'codex', methods: [], logout_supported: true, terminal_supported: true, observed_state: 'unknown' as const })),
     authenticateAgent: vi.fn(async () => ({ agent_id: 'codex', methods: [], logout_supported: true, terminal_supported: true, observed_state: 'unknown' as const })),
     logoutAgent: vi.fn(async () => ({ agent_id: 'codex', methods: [], logout_supported: true, terminal_supported: true, observed_state: 'authentication_required' as const })),
     startTerminalAgentAuth: vi.fn(async () => ({ flow_id: 'f', agent_id: 'codex', method_id: 'api-key', state: 'running' as const })),
+    fetchTerminalAgentFlow: vi.fn(async () => ({ flow_id: 't', agent_id: 'codex', method_id: 'tui', state: 'running' as const })),
+    setTerminalAgentFlow: vi.fn(() => undefined),
+    cancelTerminalAgentAuth: vi.fn(async () => ({ flow_id: 't', agent_id: 'codex', method_id: 'tui', state: 'cancelled' as const })),
     startProtocolAgentAuth: vi.fn(async () => ({ flow_id: 'p', agent_id: 'codex', method_id: 'oauth', state: 'running' as const })),
+    setProtocolFlowFromActive: vi.fn(() => undefined),
     refreshProtocolAgentAuth: vi.fn(async () => ({ flow_id: 'p', agent_id: 'codex', method_id: 'oauth', state: 'succeeded' as const })),
     cancelProtocolAgentAuth: vi.fn(async () => ({ flow_id: 'p', agent_id: 'codex', method_id: 'oauth', state: 'cancelled' as const })),
     clearProtocolAgentAuth: vi.fn(() => undefined),
@@ -212,5 +217,48 @@ describe('AgentsPageComponent', () => {
     state.updateAgent.mockRejectedValueOnce(new Error('registry unavailable'));
     await fixture.componentInstance.update(registry);
     expect(fixture.componentInstance.actionError()).toContain('registry unavailable');
+  });
+
+  it('rediscovers an active terminal flow after a simulated reload', async () => {
+    state.authByAgent.set({
+      codex: {
+        agent_id: 'codex',
+        methods: [],
+        logout_supported: false,
+        terminal_supported: true,
+        observed_state: 'unknown',
+        active_flow: { flow_id: 't', kind: 'terminal', method_id: 'tui', state: 'running' },
+      },
+    });
+    await fixture.componentInstance.recoverActiveFlows();
+    expect(state.fetchTerminalAgentFlow).toHaveBeenCalledWith('t');
+    expect(state.setTerminalAgentFlow).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ flow_id: 't', state: 'running' }),
+    );
+  });
+
+  it('rediscovers an active protocol flow after a simulated reload', async () => {
+    state.authByAgent.set({
+      codex: {
+        agent_id: 'codex',
+        methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
+        logout_supported: false,
+        terminal_supported: true,
+        observed_state: 'unknown',
+        active_flow: {
+          flow_id: 'p',
+          kind: 'protocol',
+          method_id: 'oauth',
+          state: 'waiting_for_user',
+        },
+      },
+    });
+    await fixture.componentInstance.recoverActiveFlows();
+    expect(state.setProtocolFlowFromActive).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ flow_id: 'p', method_id: 'oauth' }),
+    );
+    expect(state.refreshProtocolAgentAuth).toHaveBeenCalledWith('codex', 'p');
   });
 });

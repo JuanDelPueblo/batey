@@ -5,6 +5,7 @@ import { MatDialog } from '@angular/material/dialog';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import type {
+  AgentAuthFlow,
   AgentAuthState,
   AgentSummary,
   ProtocolAuthElicitation,
@@ -83,6 +84,10 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   protocolFlowFor(id: string): ProtocolAuthFlow | null {
     return this.state.protocolFlowsByAgent()[id] ?? null;
+  }
+
+  terminalFlowFor(id: string): AgentAuthFlow | null {
+    return this.state.terminalFlowsByAgent()[id] ?? null;
   }
 
   protocolElicitationsFor(flowId: string): ProtocolAuthElicitation[] {
@@ -227,23 +232,85 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     this.actionError.set('');
     this.notice.set('');
     try {
-      const auth = this.authFor(agent.id);
-      const method = auth?.methods.find((m) => m.id === methodId) ?? {
-        id: methodId,
-        name: methodId,
-        type: 'terminal',
-        supported: true,
-      };
+      // Reconnect to an existing terminal flow instead of starting another.
+      const existing = this.terminalFlowFor(agent.id);
+      if (existing && existing.state === 'running') {
+        await this.resumeTerminalAuth(agent, existing.flow_id);
+        return;
+      }
       const flow = await this.state.startTerminalAgentAuth(agent.id, methodId);
-      this.dialog.open(AuthTerminalDialogComponent, {
-        data: { flow, method },
-        disableClose: true,
-        width: 'min(900px, calc(100vw - 16px))',
-        maxWidth: '96vw',
-      });
+      this.state.setTerminalAgentFlow(agent.id, flow);
+      this.openTerminalDialog(agent, flow, methodId, false);
     } catch (error: unknown) {
       this.actionError.set(this.message(error, `Failed to start terminal authentication for ${agent.display_name}`));
     }
+  }
+
+  /** Reconnects to an existing terminal flow rather than starting a new process. */
+  async resumeTerminalAuth(agent: AgentSummary, flowId: string): Promise<void> {
+    this.actionError.set('');
+    this.notice.set('');
+    try {
+      const flow = await this.state.fetchTerminalAgentFlow(flowId);
+      this.state.setTerminalAgentFlow(agent.id, flow);
+      this.openTerminalDialog(agent, flow, flow.method_id, true);
+    } catch (error: unknown) {
+      this.actionError.set(this.message(error, `Failed to resume terminal authentication for ${agent.display_name}`));
+    }
+  }
+
+  async cancelTerminalAuth(agent: AgentSummary): Promise<void> {
+    this.actionError.set('');
+    try {
+      const flow = this.terminalFlowFor(agent.id);
+      if (flow) {
+        await this.state.cancelTerminalAgentAuth(agent.id, flow.flow_id);
+      }
+    } catch {
+      // The card reflects the flow state.
+    } finally {
+      this.state.setTerminalAgentFlow(agent.id, null);
+      await this.state.loadAgentAuth(agent.id).catch(() => undefined);
+    }
+  }
+
+  private openTerminalDialog(
+    agent: AgentSummary,
+    flow: AgentAuthFlow,
+    methodId: string,
+    resumed: boolean,
+  ): void {
+    const auth = this.authFor(agent.id);
+    const method = auth?.methods.find((m) => m.id === methodId) ?? {
+      id: methodId,
+      name: methodId,
+      type: 'terminal',
+      supported: true,
+    };
+    const ref = this.dialog.open(AuthTerminalDialogComponent, {
+      data: { flow, method, resumed },
+      disableClose: true,
+      width: 'min(900px, calc(100vw - 16px))',
+      maxWidth: '96vw',
+    });
+    ref.afterClosed().subscribe(() => void this.refreshTerminalFlowState(agent));
+  }
+
+  /** Reconciles the card's terminal-flow state after the dialog closes. */
+  private async refreshTerminalFlowState(agent: AgentSummary): Promise<void> {
+    const current = this.terminalFlowFor(agent.id);
+    if (!current) return;
+    try {
+      const flow = await this.state.fetchTerminalAgentFlow(current.flow_id);
+      if (flow.state === 'running') {
+        this.state.setTerminalAgentFlow(agent.id, flow);
+      } else {
+        this.state.setTerminalAgentFlow(agent.id, null);
+      }
+    } catch {
+      this.state.setTerminalAgentFlow(agent.id, null);
+    }
+    await this.state.loadAgentAuth(agent.id).catch(() => undefined);
   }
 
   private targetAgentAuthSection(agentId: string): void {
@@ -360,6 +427,34 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
 
   private async loadAuthForAll(): Promise<void> {
     await Promise.allSettled(this.state.agents().map((agent) => this.state.loadAgentAuth(agent.id)));
+    await this.recoverActiveFlows();
+  }
+
+  /**
+   * Rediscovers any active authentication flow on page initialization or
+   * reload, so a user never returns to an agent stuck behind an
+   * "already has an authentication flow running" conflict with no way out.
+   * Covers both protocol and terminal flows.
+   */
+  async recoverActiveFlows(): Promise<void> {
+    for (const agent of this.state.agents()) {
+      const active = this.authFor(agent.id)?.active_flow;
+      if (!active) continue;
+      if (active.kind === 'protocol') {
+        if (this.protocolFlowFor(agent.id)) continue;
+        this.state.setProtocolFlowFromActive(agent.id, active);
+        this.pollProtocolFlow(agent, active.flow_id);
+        await this.state.refreshProtocolAgentAuth(agent.id, active.flow_id).catch(() => undefined);
+      } else if (active.kind === 'terminal') {
+        if (this.terminalFlowFor(agent.id)) continue;
+        try {
+          const flow = await this.state.fetchTerminalAgentFlow(active.flow_id);
+          this.state.setTerminalAgentFlow(agent.id, flow);
+        } catch {
+          // The flow ended between discovery and fetch; the card stays clear.
+        }
+      }
+    }
   }
 
   private confirm(title: string, message: string, confirmLabel: string): Promise<boolean> {

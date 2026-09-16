@@ -76,7 +76,9 @@
         <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
       </div>
     } @else if (auth(); as state) {
-      <p class="auth-status" role="status">{{ observedLabel() }}</p>
+      @if (authStatusLabel(); as label) {
+        <p class="auth-status" role="status">{{ label }}</p>
+      }
       @if (protocolFlow(); as flow) {
         <div class="protocol-flow" role="status">
           @switch (flow.state) {
@@ -141,54 +143,75 @@
           }
         </div>
       }
-      <div class="auth-list">
-        @for (method of state.methods; track method.id) {
-          <div class="method">
-            <div class="method-text">
-              <span class="method-name">{{ method.name }}</span>
-              @if (methodTypeLabel(method); as typeLabel) {
-                <span class="method-type">{{ typeLabel }}</span>
-              }
-              @if (method.description) { <span class="method-description">{{ method.description }}</span> }
-            </div>
-            <div class="method-action">
-              @if (!method.supported) {
-                <button
-                  mat-stroked-button
-                  type="button"
-                  disabled
-                  matTooltip="This client cannot handle this authentication method"
-                >
-                  Unsupported
-                </button>
-              } @else {
-                @switch (method.type) {
-                  @case ('agent') {
-                    <button mat-flat-button type="button" (click)="authenticate.emit(method.id)">Sign in</button>
-                  }
-                  @case ('terminal') {
-                    <button mat-stroked-button type="button" (click)="terminal.emit(method.id)">Open terminal</button>
-                  }
-                  @default {
-                    <button
-                      mat-stroked-button
-                      type="button"
-                      disabled
-                      matTooltip="This client cannot handle this authentication method"
-                    >
-                      Unsupported
-                    </button>
-                  }
-                }
-              }
+      @if (terminalFlow(); as tflow) {
+        @if (tflow.state === 'running') {
+          <div class="terminal-flow" role="status">
+            <div class="auth-row">
+              <mat-spinner diameter="18" />
+              <span>Authentication is still running in a terminal.</span>
+              <button mat-stroked-button type="button" (click)="resumeTerminal.emit(tflow.flow_id)">Resume terminal</button>
+              <button mat-button type="button" (click)="cancelTerminal.emit()">Cancel</button>
             </div>
           </div>
-        } @empty {
-          @if (!logoutSupported()) {
-            <p class="auth-hint">No sign-in options available.</p>
-          }
         }
-        @if (showLogout()) {
+      }
+      @if (showMethods()) {
+        <div class="auth-list">
+          @for (method of state.methods; track method.id) {
+            <div class="method">
+              <div class="method-text">
+                <span class="method-name">{{ method.name }}</span>
+                @if (methodTypeLabel(method); as typeLabel) {
+                  <span class="method-type">{{ typeLabel }}</span>
+                }
+                @if (method.description) { <span class="method-description">{{ method.description }}</span> }
+                @if (method.warning) { <span class="method-warning" role="note">{{ method.warning }}</span> }
+              </div>
+              <div class="method-action">
+                @if (!method.supported) {
+                  <button
+                    mat-stroked-button
+                    type="button"
+                    disabled
+                    matTooltip="This client cannot handle this authentication method"
+                  >
+                    Unsupported
+                  </button>
+                } @else {
+                  @switch (method.type) {
+                    @case ('agent') {
+                      <button mat-flat-button type="button" (click)="authenticate.emit(method.id)">Sign in</button>
+                    }
+                    @case ('terminal') {
+                      <button mat-stroked-button type="button" (click)="terminal.emit(method.id)">Open terminal</button>
+                    }
+                    @default {
+                      <button
+                        mat-stroked-button
+                        type="button"
+                        disabled
+                        matTooltip="This client cannot handle this authentication method"
+                      >
+                        Unsupported
+                      </button>
+                    }
+                  }
+                }
+              </div>
+            </div>
+          } @empty {
+            @if (!logoutSupported()) {
+              <p class="auth-hint">No sign-in options available.</p>
+            }
+          }
+          @if (showClear()) {
+            <div class="auth-clear">
+              <button mat-button type="button" (click)="clearCredentials.emit()">Clear saved sign-in</button>
+            </div>
+          }
+        </div>
+      } @else if (showLogout()) {
+        <div class="auth-list">
           <div class="method logout">
             <div class="method-text">
               <span class="method-name">Log out</span>
@@ -198,12 +221,8 @@
               <button mat-stroked-button type="button" (click)="logout.emit()">Log out</button>
             </div>
           </div>
-        } @else if (showClear()) {
-          <div class="auth-clear">
-            <button mat-button type="button" (click)="clearCredentials.emit()">Clear saved sign-in</button>
-          </div>
-        }
-      </div>
+        </div>
+      }
     } @else {
       <div class="auth-row">
         <span class="auth-hint">Sign-in status is not loaded.</span>

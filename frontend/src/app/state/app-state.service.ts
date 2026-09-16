@@ -35,6 +35,7 @@ export class AppStateService {
   readonly protocolFlowsByAgent = this.agentStore.protocolFlowsByAgent;
   readonly protocolElicitationsByFlow = this.agentStore.protocolElicitationsByFlow;
   readonly protocolLoading = this.agentStore.protocolLoading;
+  readonly terminalFlowsByAgent = this.agentStore.terminalFlowsByAgent;
   readonly loadingProjects = this.projectStore.loading;
   readonly projectsError = this.projectStore.error;
   readonly chatsByProject = this.chatStore.chatsByProject;
@@ -112,7 +113,11 @@ export class AppStateService {
   authenticateAgent(id: string, methodId: string) { return this.agentStore.authenticate(id, methodId); }
   logoutAgent(id: string) { return this.agentStore.logout(id); }
   startTerminalAgentAuth(id: string, methodId: string) { return this.agentStore.startTerminalAuth(id, methodId); }
+  fetchTerminalAgentFlow(flowId: string) { return this.agentStore.fetchTerminalFlow(flowId); }
+  setTerminalAgentFlow(id: string, flow: import('../core/api/types').AgentAuthFlow | null) { return this.agentStore.setTerminalFlow(id, flow); }
+  cancelTerminalAgentAuth(id: string, flowId: string) { return this.agentStore.cancelTerminalFlow(id, flowId); }
   startProtocolAgentAuth(id: string, methodId: string) { return this.agentStore.startProtocolAuth(id, methodId); }
+  setProtocolFlowFromActive(id: string, active: import('../core/api/types').ActiveAuthFlow) { return this.agentStore.setProtocolFlowFromActive(id, active); }
   refreshProtocolAgentAuth(agentId: string, flowId: string) { return this.agentStore.refreshProtocolFlow(agentId, flowId); }
   cancelProtocolAgentAuth(agentId: string, flowId: string) { return this.agentStore.cancelProtocolAuth(agentId, flowId); }
   clearProtocolAgentAuth(agentId: string) { return this.agentStore.clearProtocolFlow(agentId); }

@@ -27,6 +27,19 @@ describe('fake agent authentication', () => {
     assert.equal(method.supported, false);
   });
 
+  it('exposes a safe active flow for recovery', () => {
+    const auth = new FakeAgentAuth();
+    assert.equal(auth.agentView('claude').active_flow, null);
+    const { flow } = auth.startFlow('claude', 'claude-terminal');
+    const view = auth.agentView('claude');
+    assert.equal(view.active_flow.kind, 'terminal');
+    assert.equal(view.active_flow.flow_id, flow.flow_id);
+    assert.equal(view.active_flow.method_id, 'claude-terminal');
+    const serialized = JSON.stringify(view);
+    assert.equal(serialized.includes('scrollback'), false);
+    assert.equal(serialized.includes('"output"'), false);
+  });
+
   it('bounds concurrent flows per agent and frees the slot on cancel', () => {
     const auth = new FakeAgentAuth();
     const { flow } = auth.startFlow('claude', 'claude-terminal');

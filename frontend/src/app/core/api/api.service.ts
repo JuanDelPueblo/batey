@@ -382,8 +382,8 @@ export class ApiService {
     return this.request<AgentAuthFlow>(`/api/agent-auth/${encodeURIComponent(flowId)}`);
   }
 
-  async cancelAgentAuthFlow(flowId: string): Promise<void> {
-    await this.request(`/api/agent-auth/${encodeURIComponent(flowId)}/cancel`, {
+  async cancelAgentAuthFlow(flowId: string): Promise<AgentAuthFlow> {
+    return this.request<AgentAuthFlow>(`/api/agent-auth/${encodeURIComponent(flowId)}/cancel`, {
       method: 'POST',
     });
   }

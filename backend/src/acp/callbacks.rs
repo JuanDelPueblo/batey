@@ -1186,7 +1186,7 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    fn make_handler(_policy: CallbackPolicy) -> CallbackHandler {
+    fn make_handler() -> CallbackHandler {
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
         CallbackHandler::new(
@@ -1213,16 +1213,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_deny_all_rejects_read() {
-        let handler = make_handler(CallbackPolicy::DenyAll);
+    async fn test_read_rejects_path_outside_workspace() {
+        let handler = make_handler();
         let req = ReadTextFileRequest::new("s1", std::path::PathBuf::from("/nonexistent"));
         let result = handler.handle_read_file(req).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_read_only_allows_read() {
-        let handler = make_handler(CallbackPolicy::ReadOnly);
+    async fn test_read_resolves_and_reads_file() {
+        let handler = make_handler();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         std::fs::write(tmp.path(), "hello").unwrap();
         let req = ReadTextFileRequest::new("s1", tmp.path().to_path_buf());
@@ -1232,8 +1232,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_direct_write_is_not_gated_by_batey_policy() {
-        let handler = make_handler(CallbackPolicy::ReadOnly);
+    async fn test_write_resolves_existing_file_without_permission_request() {
+        let handler = make_handler();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let req = WriteTextFileRequest::new("s1", tmp.path().to_path_buf(), "data");
         let result = handler.handle_write_file(req).await;
@@ -1242,8 +1242,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_approve_allows_write() {
-        let handler = make_handler(CallbackPolicy::AutoApprove);
+    async fn test_write_resolves_and_writes_existing_file() {
+        let handler = make_handler();
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let req = WriteTextFileRequest::new("s1", tmp.path().to_path_buf(), "written");
         let result = handler.handle_write_file(req).await;
@@ -1253,7 +1253,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_approve_allows_creating_new_file() {
+    async fn test_write_creates_new_file() {
         let temp = tempfile::tempdir().unwrap();
         let event_log = Arc::new(crate::events::EventLog::new(100));
         let tracker = Arc::new(TerminalTaskTracker::default());
@@ -1333,7 +1333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_permission_preserves_agent_options_and_waits_for_choice() {
-        let handler = Arc::new(make_handler(CallbackPolicy::AutoApprove));
+        let handler = Arc::new(make_handler());
 
         let request = RequestPermissionRequest::new(
             SchemaSessionId::new("s1"),
@@ -1384,7 +1384,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_request_permission_can_select_a_reject_always_option() {
-        let handler = Arc::new(make_handler(CallbackPolicy::ReadOnly));
+        let handler = Arc::new(make_handler());
         let request = RequestPermissionRequest::new(
             SchemaSessionId::new("s1"),
             agent_client_protocol_schema::ToolCallUpdate::new(
@@ -1438,8 +1438,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_auto_approve_terminal_callbacks_work() {
-        let handler = make_handler(CallbackPolicy::AutoApprove);
+    async fn test_terminal_callbacks_work() {
+        let handler = make_handler();
         let (command, args) = terminal_echo_command("hello-from-terminal");
         let create = CreateTerminalRequest::new("s1", command).args(args);
         let created = handler.handle_create_terminal(create).await.unwrap();
@@ -1471,7 +1471,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_terminal_output_is_truncated_to_limit() {
-        let handler = make_handler(CallbackPolicy::AutoApprove);
+        let handler = make_handler();
         let (command, args) = terminal_echo_command("123456789");
         let create = CreateTerminalRequest::new("s1", command)
             .args(args)
@@ -1501,7 +1501,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_shutdown_releases_terminals() {
-        let handler = make_handler(CallbackPolicy::AutoApprove);
+        let handler = make_handler();
         let (command, args) = terminal_echo_command("shutdown-check");
         let create = CreateTerminalRequest::new("s1", command).args(args);
         let created = handler.handle_create_terminal(create).await.unwrap();
@@ -1516,7 +1516,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_respond_permission() {
-        let handler = make_handler(CallbackPolicy::Ask);
+        let handler = make_handler();
         let (tx, rx) = tokio::sync::oneshot::channel();
         {
             let mut pending = handler.pending_permissions.write().await;
@@ -1537,7 +1537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cancel_all_pending_is_cancel_not_denial() {
-        let handler = make_handler(CallbackPolicy::Ask);
+        let handler = make_handler();
         let (tx1, rx1) = tokio::sync::oneshot::channel();
         let (tx2, rx2) = tokio::sync::oneshot::channel();
         {
@@ -1930,7 +1930,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_permission_cancel_returns_cancelled_not_denial() {
-        let handler = Arc::new(make_handler(CallbackPolicy::Ask));
+        let handler = Arc::new(make_handler());
         let request = agent_client_protocol_schema::RequestPermissionRequest::new(
             SchemaSessionId::new("s1"),
             agent_client_protocol_schema::ToolCallUpdate::new(
@@ -1971,7 +1971,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_elicitation_form_accept_decline_cancel() {
-        let handler = Arc::new(make_handler(CallbackPolicy::Ask));
+        let handler = Arc::new(make_handler());
         for action in ["accept", "decline", "cancel"] {
             let schema =
                 agent_client_protocol_schema::ElicitationSchema::new().string("name", true);
@@ -2024,7 +2024,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_elicitation_url_does_not_prefetch_and_cancels_cleanly() {
-        let handler = Arc::new(make_handler(CallbackPolicy::Ask));
+        let handler = Arc::new(make_handler());
         let scope = agent_client_protocol_schema::ElicitationSessionScope::new("sess-1");
         let req = agent_client_protocol_schema::CreateElicitationRequest::new(
             agent_client_protocol_schema::ElicitationUrlMode::new(

@@ -4,6 +4,7 @@ frontend/dist/
 result
 result-*
 .batey-docker/
+.batey.wiki/
 .env
 
 # Frontend test bundles

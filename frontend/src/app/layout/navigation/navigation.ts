@@ -13,6 +13,8 @@ import { chatActivityLabel, type ChatActivity } from '../../state/chat-activity'
 import { compareChatsByRecency } from '../../state/chat-session.store';
 import { NewChatButtonComponent } from '../../chats/new-chat-button/new-chat-button';
 import { ChatStatusBadgeComponent } from '../../shared/chat-status-badge/chat-status-badge';
+import { DeleteChatDialogComponent } from '../../chats/delete-chat-dialog/delete-chat-dialog';
+import { RenameChatDialogComponent } from '../../chats/rename-chat-dialog/rename-chat-dialog';
 import { ProjectDialogComponent } from '../../projects/project-dialog/project-dialog';
 import { ConnectionStatusComponent } from '../connection-status/connection-status';
 import { ThemeService } from '../../core/theme.service';
@@ -123,5 +125,24 @@ export class NavigationComponent {
   newProject(): void {
     this.dialog.open(ProjectDialogComponent, { width: 'min(720px, calc(100vw - 32px))', panelClass: 'hub-wide-dialog' });
     this.closeRequested.emit();
+  }
+
+  renameChat(chat: Chat): void {
+    this.dialog.open(RenameChatDialogComponent, {
+      width: 'min(480px, calc(100vw - 32px))',
+      data: chat,
+    });
+  }
+
+  async archiveChat(chat: Chat): Promise<void> {
+    await this.state.archiveChat(chat.id, !chat.archived)
+      .catch((error) => console.error('Failed to archive chat', error));
+  }
+
+  removeChat(chat: Chat): void {
+    this.dialog.open(DeleteChatDialogComponent, {
+      width: 'min(520px, calc(100vw - 32px))',
+      data: chat,
+    });
   }
 }

@@ -32,6 +32,12 @@
 
 mat-nav-list { padding: 0; }
 mat-list-item { margin-bottom: 2px; border-radius: var(--mat-sys-corner-full); }
+.chat-row { position: relative; display: flex; align-items: center; margin-bottom: 2px; }
+.chat-row mat-list-item { flex: 1; min-width: 0; }
+.chat-actions-button { flex: 0 0 auto; margin-right: 4px; color: var(--mat-sys-on-surface-variant); }
+.chat-actions-button mat-icon { width: 20px; height: 20px; font-size: 20px; }
+.chat-row:not(:hover):not(:focus-within) .chat-actions-button { opacity: 0; }
+.chat-row:focus-within .chat-actions-button, .chat-row:hover .chat-actions-button { opacity: 1; }
 mat-list-item.selected { background: var(--mat-sys-secondary-container); color: var(--mat-sys-on-secondary-container); }
 mat-list-item.selected .chat-meta { color: inherit; opacity: .8; }
 .chat-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

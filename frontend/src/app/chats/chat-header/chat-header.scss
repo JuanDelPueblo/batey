@@ -21,7 +21,7 @@
 .nav-button { display: none; }
 .no-chat { color: var(--mat-sys-on-surface-variant); }
 @media (max-width: 839px) { .nav-button { display: inline-flex; } }
-@media (max-width: 599px) { :host { padding-inline: 16px; } .header-actions > button:first-child { display: none; } .title-button { max-width: 42vw; } .title-text { max-width: calc(42vw - 24px); } }
+@media (max-width: 599px) { :host { padding-inline: 16px; } .config-button { display: none; } .title-button { max-width: 42vw; } .title-text { max-width: calc(42vw - 24px); } }
 
 .tasks-badge {
   padding: 2px 8px !important;

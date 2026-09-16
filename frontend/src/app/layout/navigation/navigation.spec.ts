@@ -139,6 +139,19 @@ describe('NavigationComponent DOM check', () => {
       'Open chat Summarize the router guard, Error',
     ]);
   });
+
+  it('renders chat actions for every sidebar thread', () => {
+    const actionButtons = fixture.nativeElement.querySelectorAll('.chat-actions-button');
+    expect(actionButtons).toHaveLength(3);
+    expect(actionButtons[0].getAttribute('aria-label')).toBe(
+      'Actions for Review the WebSocket replay path',
+    );
+    (actionButtons[0] as HTMLButtonElement).click();
+    fixture.detectChanges();
+    expect(document.body.textContent).toContain('Rename chat');
+    expect(document.body.textContent).toContain('Archive chat');
+    expect(document.body.textContent).toContain('Delete chat');
+  });
 });
 
 describe('NavigationComponent project switching', () => {

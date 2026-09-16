@@ -80,23 +80,47 @@
 
     <mat-nav-list aria-labelledby="chats-heading">
       @for (chat of visibleChats(); track chat.id) {
-        <a
-          mat-list-item
-          lines="2"
-          [routerLink]="['/projects', chat.project_id, 'chats', chat.id]"
-          routerLinkActive="selected"
-          (click)="closeRequested.emit()"
-          [attr.aria-label]="chatAriaLabel(chat)"
-        >
-          <span matListItemTitle class="chat-title">{{ chat.title || 'Untitled chat' }}</span>
-          <span matListItemLine class="chat-meta-line">
-            <span class="chat-meta">
-              <span class="agent-badge">{{ agentLabel(chat.agent) }}</span>
-              <hub-chat-status-badge [status]="activityFor(chat)" [turnStartedAt]="turnStartedAtFor(chat)" />
-              @if (chat.archived) { <span class="archived-tag">Archived</span> }
+        <div class="chat-row">
+          <a
+            mat-list-item
+            lines="2"
+            [routerLink]="['/projects', chat.project_id, 'chats', chat.id]"
+            routerLinkActive="selected"
+            (click)="closeRequested.emit()"
+            [attr.aria-label]="chatAriaLabel(chat)"
+          >
+            <span matListItemTitle class="chat-title">{{ chat.title || 'Untitled chat' }}</span>
+            <span matListItemLine class="chat-meta-line">
+              <span class="chat-meta">
+                <span class="agent-badge">{{ agentLabel(chat.agent) }}</span>
+                <hub-chat-status-badge [status]="activityFor(chat)" [turnStartedAt]="turnStartedAtFor(chat)" />
+                @if (chat.archived) { <span class="archived-tag">Archived</span> }
+              </span>
             </span>
-          </span>
-        </a>
+          </a>
+          <button
+            mat-icon-button
+            class="chat-actions-button"
+            [matMenuTriggerFor]="chatActions"
+            [attr.aria-label]="'Actions for ' + (chat.title || 'Untitled chat')"
+            matTooltip="Chat actions"
+            (click)="$event.stopPropagation()"
+          >
+            <mat-icon>more_vert</mat-icon>
+          </button>
+          <mat-menu #chatActions="matMenu">
+            <button mat-menu-item type="button" (click)="renameChat(chat)">
+              <mat-icon>edit</mat-icon><span>Rename chat</span>
+            </button>
+            <button mat-menu-item type="button" (click)="archiveChat(chat)">
+              <mat-icon>{{ chat.archived ? 'unarchive' : 'archive' }}</mat-icon>
+              <span>{{ chat.archived ? 'Unarchive chat' : 'Archive chat' }}</span>
+            </button>
+            <button mat-menu-item type="button" (click)="removeChat(chat)">
+              <mat-icon class="destructive-icon">delete</mat-icon><span>Delete chat</span>
+            </button>
+          </mat-menu>
+        </div>
       } @empty {
         <p class="drawer-empty">
           {{ state.showArchived() ? 'No archived chats.' : 'No chats yet.' }}

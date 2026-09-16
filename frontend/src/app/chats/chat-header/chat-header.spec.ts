@@ -151,6 +151,15 @@ describe('ChatHeaderComponent', () => {
     expect(fixture.nativeElement.querySelector('.tasks-badge')).toBeNull();
   });
 
+  it('renders terminal tasks as a header action instead of a menu item', () => {
+    const tasksButton = fixture.nativeElement.querySelector('.tasks-button') as HTMLButtonElement;
+    const configButton = fixture.nativeElement.querySelector('.config-button') as HTMLButtonElement;
+    expect(tasksButton).toBeTruthy();
+    expect(tasksButton.getAttribute('aria-label')).toBe('Terminal tasks');
+    expect(tasksButton.compareDocumentPosition(configButton) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(fixture.nativeElement.querySelector('mat-menu')?.textContent ?? '').not.toContain('Terminal tasks');
+  });
+
   it('shows context and cost as separate compact indicators', () => {
     fixture.componentRef.setInput('usage', { used: 1200, size: 200000, cost_amount: 0.012, cost_currency: 'USD' });
     fixture.detectChanges();

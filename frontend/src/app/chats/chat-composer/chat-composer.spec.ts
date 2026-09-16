@@ -2,7 +2,7 @@ import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
 import { ChatComposerComponent } from './chat-composer';
 import { AppStateService } from '../../state/app-state.service';
-import type { ConfigOption, RichContentBlock } from '../../core/api/types';
+import type { AvailableCommand, ConfigOption, RichContentBlock } from '../../core/api/types';
 
 describe('ChatComposerComponent', () => {
   let fixture: ComponentFixture<ChatComposerComponent>;
@@ -203,11 +203,11 @@ describe('ChatComposerComponent', () => {
     expect(component.attachments()).toHaveLength(0);
   });
 
-  function setCommands(): void {
-    fixture.componentRef.setInput('commands', [
+  function setCommands(commands: AvailableCommand[] = [
       { name: 'help', description: 'Show help', input: { hint: 'topic' } },
       { name: 'clear', description: 'Clear the chat' },
-    ]);
+    ]): void {
+    fixture.componentRef.setInput('commands', commands);
     fixture.detectChanges();
   }
 
@@ -244,6 +244,20 @@ describe('ChatComposerComponent', () => {
     expect(options()[0].textContent).toContain('/help');
   });
 
+  it('shows every matching command and links the textarea to its active option', () => {
+    setCommands(commandCatalog(15));
+    type('/');
+
+    expect(options()).toHaveLength(15);
+    expect(options()[6].textContent).toContain('/command-07');
+    expect(options()[14].textContent).toContain('/command-15');
+
+    const textarea = fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement;
+    const list = fixture.nativeElement.querySelector('.command-list') as HTMLElement;
+    expect(textarea.getAttribute('aria-controls')).toBe(list.id);
+    expect(textarea.getAttribute('aria-activedescendant')).toBe(options()[0].id);
+  });
+
   it('moves the highlighted suggestion with arrow keys', () => {
     setCommands();
     type('/');
@@ -252,6 +266,52 @@ describe('ChatComposerComponent', () => {
     expect(component.highlightedCommand()?.name).toBe('clear');
     press('ArrowUp');
     expect(component.highlightedCommand()?.name).toBe('help');
+  });
+
+  it('navigates across the old six-command boundary and wraps around the full list', () => {
+    setCommands(commandCatalog(15));
+    type('/');
+
+    for (let index = 0; index < 7; index += 1) press('ArrowDown');
+    expect(component.highlightedCommand()?.name).toBe('command-08');
+
+    for (let index = 0; index < 8; index += 1) press('ArrowDown');
+    expect(component.highlightedCommand()?.name).toBe('command-01');
+
+    press('ArrowUp');
+    expect(component.highlightedCommand()?.name).toBe('command-15');
+  });
+
+  it('resets the highlight when the slash-command filter changes', () => {
+    setCommands(commandCatalog(15));
+    type('/command-0');
+    for (let index = 0; index < 7; index += 1) press('ArrowDown');
+    expect(component.highlightedCommand()?.name).toBe('command-08');
+
+    type('/command-01');
+    expect(component.highlightedCommand()?.name).toBe('command-01');
+  });
+
+  it('scrolls the command list by the minimum amount needed for the highlighted option', async () => {
+    setCommands(commandCatalog(15));
+    type('/');
+    const list = fixture.nativeElement.querySelector('.command-list') as HTMLElement;
+    Object.defineProperties(list, {
+      clientHeight: { value: 120, configurable: true },
+      scrollTop: { value: 0, writable: true, configurable: true },
+    });
+    Array.from(options()).forEach((option, index) => {
+      Object.defineProperties(option, {
+        offsetTop: { value: index * 40, configurable: true },
+        offsetHeight: { value: 40, configurable: true },
+      });
+    });
+
+    for (let index = 0; index < 7; index += 1) press('ArrowDown');
+    await Promise.resolve();
+
+    expect(component.highlightedCommand()?.name).toBe('command-08');
+    expect(list.scrollTop).toBe(200);
   });
 
   it('completes the highlighted command on Tab without inserting the hint or sending', () => {
@@ -300,4 +360,12 @@ describe('ChatComposerComponent', () => {
     expect(event.defaultPrevented).toBe(true);
     expect(sent).toEqual(['/help']);
   });
+
+  function commandCatalog(count: number): AvailableCommand[] {
+    return Array.from({ length: count }, (_, index) => ({
+      name: `command-${String(index + 1).padStart(2, '0')}`,
+      description: `Command ${index + 1}`,
+      input: { hint: 'argument' },
+    }));
+  }
 });

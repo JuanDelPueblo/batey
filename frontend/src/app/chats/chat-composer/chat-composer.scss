@@ -11,7 +11,7 @@
 .attachments button { width: 32px; height: 32px; padding: 4px; }
 .attachment-error { margin: 0; color: var(--mat-sys-error); font: var(--mat-sys-body-small); }
 .selectors { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; min-width: 0; }
-.command-list { display: flex; flex-direction: column; width: 100%; max-height: 264px; margin-bottom: 8px; padding: 4px; overflow-y: auto; border: 1px solid var(--mat-sys-outline-variant); border-radius: 16px; background: var(--mat-sys-surface-container-high); box-shadow: 0 4px 16px rgb(0 0 0 / 18%); }
+.command-list { display: flex; flex-direction: column; width: 100%; max-height: 264px; margin-bottom: 8px; padding: 4px; overflow-y: auto; overscroll-behavior: contain; touch-action: pan-y; border: 1px solid var(--mat-sys-outline-variant); border-radius: 16px; background: var(--mat-sys-surface-container-high); box-shadow: 0 4px 16px rgb(0 0 0 / 18%); }
 .command-option { display: flex; align-items: baseline; gap: 10px; width: 100%; min-width: 0; min-height: 40px; padding: 8px 12px; border: 0; border-radius: 12px; background: transparent; color: var(--mat-sys-on-surface); font: var(--mat-sys-body-medium); text-align: left; cursor: pointer; }
 .command-option:hover { background: var(--mat-sys-surface-container-highest); }
 .command-option.active { background: var(--mat-sys-secondary-container); }

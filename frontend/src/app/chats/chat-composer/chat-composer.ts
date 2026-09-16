@@ -49,6 +49,7 @@ export class ChatComposerComponent {
   private readonly state = inject(AppStateService);
   private readonly text = toSignal(this.message.valueChanges, { initialValue: this.message.value });
   private readonly messageInput = viewChild<ElementRef<HTMLTextAreaElement>>('messageInput');
+  private readonly commandList = viewChild<ElementRef<HTMLElement>>('commandList');
   private readonly highlightedIndex = signal(0);
   private readonly dismissedQuery = signal<string | null>(null);
 
@@ -66,8 +67,7 @@ export class ChatComposerComponent {
     const query = this.commandQuery();
     if (query === null) return [];
     return this.commands()
-      .filter((c) => !query || c.name.toLowerCase().startsWith(query))
-      .slice(0, 6);
+      .filter((c) => !query || c.name.toLowerCase().startsWith(query));
   });
   readonly unavailable = computed(
     () => this.disabled() || this.prompting() || this.cancelling(),
@@ -82,6 +82,13 @@ export class ChatComposerComponent {
     const list = this.filteredCommands();
     if (!list.length) return null;
     return list[Math.min(this.highlightedIndex(), list.length - 1)];
+  });
+  readonly commandListId = computed(() => `command-list-${this.chatId()}`);
+  readonly activeCommandId = computed(() => {
+    if (!this.showCommands()) return null;
+    const list = this.filteredCommands();
+    if (!list.length) return null;
+    return this.commandOptionId(Math.min(this.highlightedIndex(), list.length - 1));
   });
   readonly canSend = computed(() => !this.unavailable() && (this.text().trim().length > 0 || this.attachments().length > 0));
   readonly placeholder = computed(() => {
@@ -159,6 +166,26 @@ export class ChatComposerComponent {
     const count = this.filteredCommands().length;
     if (!count) return;
     this.highlightedIndex.update((index) => (index + delta + count) % count);
+    queueMicrotask(() => this.scrollHighlightedIntoView());
+  }
+
+  commandOptionId(index: number): string {
+    return `${this.commandListId()}-option-${index}`;
+  }
+
+  private scrollHighlightedIntoView(): void {
+    const list = this.commandList()?.nativeElement;
+    if (!list) return;
+    const index = Math.min(this.highlightedIndex(), this.filteredCommands().length - 1);
+    const option = list.children[index] as HTMLElement | undefined;
+    if (!option) return;
+
+    const optionTop = option.offsetTop;
+    const optionBottom = optionTop + option.offsetHeight;
+    const visibleTop = list.scrollTop;
+    const visibleBottom = visibleTop + list.clientHeight;
+    if (optionTop < visibleTop) list.scrollTop = optionTop;
+    else if (optionBottom > visibleBottom) list.scrollTop = optionBottom - list.clientHeight;
   }
 
   private completeHighlighted(): void {

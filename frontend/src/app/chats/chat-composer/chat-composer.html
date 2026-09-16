@@ -1,8 +1,8 @@
 <div class="composer-column">
   @if (showCommands()) {
-    <div class="command-list" role="listbox" aria-label="Slash command suggestions">
+    <div #commandList class="command-list" [id]="commandListId()" role="listbox" aria-label="Slash command suggestions">
       @for (command of filteredCommands(); track command.name) {
-        <button type="button" class="command-option" role="option" [class.active]="highlightedCommand() === command" [attr.aria-selected]="highlightedCommand() === command" [attr.data-command]="command.name" (click)="completeCommand(command)">
+        <button type="button" class="command-option" [id]="commandOptionId($index)" role="option" [class.active]="highlightedCommand() === command" [attr.aria-selected]="highlightedCommand() === command" [attr.data-command]="command.name" (click)="completeCommand(command)">
           <span class="command-name">/{{ command.name }}</span><span class="command-desc">{{ command.description }}</span>
           @if (command.input?.hint) { <span class="command-hint">{{ command.input!.hint }}</span> }
         </button>
@@ -21,6 +21,8 @@
       [placeholder]="placeholder()"
       (keydown)="keyDown($event)"
       [attr.aria-label]="placeholder()"
+      [attr.aria-controls]="showCommands() ? commandListId() : null"
+      [attr.aria-activedescendant]="activeCommandId()"
     ></textarea>
     <div class="composer-footer">
       <div class="selectors">

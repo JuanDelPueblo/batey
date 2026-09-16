@@ -1,6 +1,6 @@
 <mat-drawer-container class="chat-layout" [hasBackdrop]="compact()">
   <mat-drawer #configDrawer position="end" [mode]="compact() ? 'over' : 'side'" [opened]="configOpen()" (closed)="configOpen.set(false)" aria-label="Chat configuration">
-    <div class="config-header"><h2>Chat configuration</h2><button mat-icon-button aria-label="Close chat configuration" (click)="closeConfig(configDrawer)"><mat-icon>close</mat-icon></button></div>
+    <div class="config-header"><h2>Chat configuration</h2><button mat-icon-button type="button" aria-label="Close chat configuration" (click)="closeConfig(configDrawer)"><mat-icon>close</mat-icon></button></div>
     <div class="config-body"><hub-chat-config [chat]="chat()" [options]="options()" [modes]="modes()" /></div>
   </mat-drawer>
   <mat-drawer-content class="chat-content">

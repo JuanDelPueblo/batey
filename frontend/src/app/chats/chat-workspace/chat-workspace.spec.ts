@@ -1,5 +1,7 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { BreakpointObserver } from '@angular/cdk/layout';
+import { By } from '@angular/platform-browser';
+import { MatDrawer } from '@angular/material/sidenav';
 import { signal } from '@angular/core';
 import { provideRouter } from '@angular/router';
 import { of } from 'rxjs';
@@ -7,6 +9,7 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 import type { Chat } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
 import { ChatWorkspaceComponent } from './chat-workspace';
+import { ChatConfigComponent } from '../chat-config/chat-config';
 import { EventReducer } from '../../state/event-reducer';
 import type { SessionEvent } from '../../core/api/types';
 
@@ -109,6 +112,29 @@ describe('ChatWorkspaceComponent', () => {
   it('renders a ready Material composer once configuration is loaded', () => {
     expect(fixture.nativeElement.textContent).toContain('codex connected');
     expect((fixture.nativeElement.querySelector('textarea') as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
+  it('keeps chat configuration reachable as an overlay on phone layouts', async () => {
+    fixture.componentInstance.compact.set(true);
+    fixture.detectChanges();
+
+    const configButton = fixture.nativeElement.querySelector('.config-button') as HTMLButtonElement;
+    expect(configButton).toBeTruthy();
+    expect(configButton.getAttribute('aria-label')).toBe('Chat configuration');
+
+    configButton.click();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const drawer = fixture.debugElement.query(By.directive(MatDrawer));
+    expect((drawer.componentInstance as MatDrawer).mode).toBe('over');
+    expect(fixture.componentInstance.configOpen()).toBe(true);
+    expect(drawer.query(By.directive(ChatConfigComponent))).toBeTruthy();
+
+    const closeButton = drawer.nativeElement.querySelector('[aria-label="Close chat configuration"]') as HTMLButtonElement;
+    expect(closeButton.type).toBe('button');
+    closeButton.click();
+    expect(fixture.componentInstance.configOpen()).toBe(false);
   });
 
   it('keeps composer usable and exposes retry when the connection fails', async () => {

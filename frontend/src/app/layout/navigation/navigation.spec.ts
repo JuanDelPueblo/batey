@@ -152,6 +152,20 @@ describe('NavigationComponent DOM check', () => {
     expect(document.body.textContent).toContain('Archive chat');
     expect(document.body.textContent).toContain('Delete chat');
   });
+
+  it('prevents link navigation and drawer close when clicking chat actions', () => {
+    const actionButton = fixture.nativeElement.querySelector('.chat-actions-button') as HTMLButtonElement;
+    expect(actionButton.type).toBe('button');
+
+    const closeSpy = vi.fn();
+    fixture.componentInstance.closeRequested.subscribe(closeSpy);
+
+    const event = new MouseEvent('click', { bubbles: true, cancelable: true });
+    actionButton.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(closeSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('NavigationComponent project switching', () => {

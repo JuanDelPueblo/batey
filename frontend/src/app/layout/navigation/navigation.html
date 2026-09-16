@@ -99,11 +99,12 @@
           <button
             mat-icon-button
             matListItemMeta
+            type="button"
             class="chat-actions-button"
             [matMenuTriggerFor]="chatActions"
             [attr.aria-label]="'Actions for ' + (chat.title || 'Untitled chat')"
             matTooltip="Chat actions"
-            (click)="$event.stopPropagation()"
+            (click)="$event.preventDefault(); $event.stopPropagation()"
           >
             <mat-icon>more_vert</mat-icon>
           </button>

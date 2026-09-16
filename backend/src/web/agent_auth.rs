@@ -18,6 +18,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
+    http::{header, HeaderValue},
+    response::IntoResponse,
     Json,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -171,8 +173,12 @@ pub async fn protocol_auth_elicitations(
 pub async fn protocol_auth_interaction(
     State(s): State<AppState>,
     Path(flow_id): Path<String>,
-) -> Result<Json<Option<crate::auth::ProtocolAuthInteractionView>>> {
-    Ok(Json(hub(&s)?.protocol_auth_interaction(&flow_id)?))
+) -> Result<impl IntoResponse> {
+    let mut response = Json(hub(&s)?.protocol_auth_interaction(&flow_id)?).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
 }
 
 #[derive(Debug, Deserialize)]

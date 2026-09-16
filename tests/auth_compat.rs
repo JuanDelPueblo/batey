@@ -135,6 +135,26 @@ impl Harness {
     }
 }
 
+async fn wait_for_interaction(
+    harness: &Harness,
+    flow_id: &str,
+) -> batey::auth::ProtocolAuthInteractionView {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let flow = harness.auth.protocol_flow(flow_id).unwrap();
+            if flow.state().is_finished() {
+                panic!("protocol flow became terminal before exposing its interaction");
+            }
+            if let Some(interaction) = harness.auth.protocol_interaction(flow_id).unwrap() {
+                return interaction;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("protocol auth interaction did not appear before the test deadline")
+}
+
 /// Codex's default Batey auth environment uses `NO_BROWSER=1` so upstream
 /// advertises headless-suitable methods.
 #[tokio::test]
@@ -287,12 +307,7 @@ async fn antigravity_remote_browser_callback_is_relayed() {
         .await
         .unwrap();
 
-    let interaction = loop {
-        if let Some(interaction) = harness.auth.protocol_interaction(&flow.flow_id).unwrap() {
-            break interaction;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    };
+    let interaction = wait_for_interaction(&harness, &flow.flow_id).await;
     assert_eq!(interaction.kind, "browser");
     let authorization = Url::parse(&interaction.url).unwrap();
     let redirect = authorization
@@ -348,12 +363,7 @@ async fn antigravity_oauth_denial_is_relayed_without_exposing_callback() {
         .start_protocol_auth("anti", "oauth-personal")
         .await
         .unwrap();
-    let interaction = loop {
-        if let Some(interaction) = harness.auth.protocol_interaction(&flow.flow_id).unwrap() {
-            break interaction;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    };
+    let interaction = wait_for_interaction(&harness, &flow.flow_id).await;
     let authorization = Url::parse(&interaction.url).unwrap();
     let redirect = authorization
         .query_pairs()

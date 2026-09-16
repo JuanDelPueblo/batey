@@ -18,7 +18,11 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex as StdMutex,
+};
 use std::time::Duration;
 use tokio::sync::watch;
 use url::Url;
@@ -38,9 +42,39 @@ pub struct AuthorizationRequest {
 
 #[derive(Clone)]
 struct LoopbackRedirect {
-    host: String,
+    host: LoopbackHost,
     port: u16,
     path: String,
+}
+
+/// The exact host spelling/class accepted in the authorization request. The
+/// relay uses the corresponding literal IP, so `localhost` never reaches a
+/// resolver or a hosts-file-selected destination.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LoopbackHost {
+    Ipv4,
+    Localhost,
+    Ipv6,
+}
+
+impl LoopbackHost {
+    fn from_url(url: &Url) -> Option<Self> {
+        match url.host()? {
+            url::Host::Ipv4(ip) if ip == Ipv4Addr::LOCALHOST => Some(Self::Ipv4),
+            url::Host::Ipv6(ip) if ip == Ipv6Addr::LOCALHOST => Some(Self::Ipv6),
+            url::Host::Domain(domain) if domain.eq_ignore_ascii_case("localhost") => {
+                Some(Self::Localhost)
+            }
+            _ => None,
+        }
+    }
+
+    fn relay_ip(self) -> IpAddr {
+        match self {
+            Self::Ipv4 | Self::Localhost => IpAddr::V4(Ipv4Addr::LOCALHOST),
+            Self::Ipv6 => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        }
+    }
 }
 
 /// Safe URL-validation errors. None includes a rejected URL or query value.
@@ -119,13 +153,7 @@ pub fn parse_authorization_url(raw: &str) -> Result<AuthorizationRequest, AuthUr
     {
         return Err(AuthUrlError::InvalidRedirect);
     }
-    let host = redirect_url
-        .host_str()
-        .ok_or(AuthUrlError::InvalidRedirect)?
-        .to_ascii_lowercase();
-    if !matches!(host.as_str(), "127.0.0.1" | "localhost" | "::1") {
-        return Err(AuthUrlError::NotLoopback);
-    }
+    let host = LoopbackHost::from_url(&redirect_url).ok_or(AuthUrlError::NotLoopback)?;
     let port = redirect_url.port().ok_or(AuthUrlError::MissingPort)?;
     Ok(AuthorizationRequest {
         authorization_url: raw.trim().to_owned(),
@@ -175,10 +203,7 @@ impl AuthorizationRequest {
         {
             return Err(AuthUrlError::InvalidCallback);
         }
-        let host = callback
-            .host_str()
-            .ok_or(AuthUrlError::InvalidCallback)?
-            .to_ascii_lowercase();
+        let host = LoopbackHost::from_url(&callback).ok_or(AuthUrlError::InvalidCallback)?;
         let path = if callback.path().is_empty() {
             "/"
         } else {
@@ -204,7 +229,17 @@ impl AuthorizationRequest {
         {
             return Err(AuthUrlError::MissingResult);
         }
-        Ok(callback)
+        let relay_base = match self.redirect.host.relay_ip() {
+            IpAddr::V4(_) => "http://127.0.0.1",
+            IpAddr::V6(_) => "http://[::1]",
+        };
+        let mut relay = Url::parse(relay_base).expect("literal loopback URL is valid");
+        relay
+            .set_port(Some(self.redirect.port))
+            .map_err(|_| AuthUrlError::InvalidCallback)?;
+        relay.set_path(&self.redirect.path);
+        relay.set_query(callback.query());
+        Ok(relay)
     }
 }
 
@@ -300,6 +335,8 @@ pub struct ProtocolAuthFlow {
     status_rx: watch::Receiver<()>,
     client: tokio::sync::Mutex<Option<Arc<crate::acp::AcpClient>>>,
     interaction: StdMutex<Option<ProtocolAuthInteraction>>,
+    authorization_captured: AtomicBool,
+    finished: AtomicBool,
 }
 
 impl ProtocolAuthFlow {
@@ -339,6 +376,7 @@ impl ProtocolAuthFlow {
     /// Ends the flow. The first caller wins, so a cancel racing success
     /// never overwrites the recorded outcome.
     pub fn finish(&self, state: ProtocolFlowState, reason: Option<String>) {
+        self.finished.store(true, Ordering::Release);
         // Drop authorization URL, OAuth state, and callback target at every
         // terminal transition, including cancellation and timeout.
         self.interaction
@@ -393,7 +431,20 @@ impl ProtocolAuthFlow {
         }
     }
 
-    pub(crate) fn set_authorization_request(&self, request: AuthorizationRequest) {
+    pub(crate) fn set_authorization_request(&self, request: AuthorizationRequest) -> bool {
+        if self.finished.load(Ordering::Acquire) {
+            return false;
+        }
+        if self
+            .authorization_captured
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return false;
+        }
+        if self.finished.load(Ordering::Acquire) {
+            return false;
+        }
         *self
             .interaction
             .lock()
@@ -402,6 +453,11 @@ impl ProtocolAuthFlow {
             relaying: false,
         });
         self.note_waiting(true);
+        true
+    }
+
+    pub(crate) fn authorization_captured(&self) -> bool {
+        self.authorization_captured.load(Ordering::Acquire)
     }
 
     pub fn interaction(&self) -> Option<ProtocolAuthInteractionView> {
@@ -522,6 +578,8 @@ impl ProtocolAuthFlows {
             status_rx,
             client: tokio::sync::Mutex::new(None),
             interaction: StdMutex::new(None),
+            authorization_captured: AtomicBool::new(false),
+            finished: AtomicBool::new(false),
         });
         self.flows
             .lock()
@@ -718,6 +776,45 @@ mod tests {
                 "http://127.0.0.1:43123/oauth/callback?error=access_denied&state=state-123"
             )
             .is_ok());
+    }
+
+    #[test]
+    fn callback_relay_uses_literal_loopback_ips() {
+        let localhost = parse_authorization_url(
+            "https://accounts.example.test/authorize?redirect_uri=http%3A%2F%2Flocalhost%3A43123%2Fcallback&state=local",
+        )
+        .unwrap();
+        let relay = localhost
+            .validate_callback("http://localhost:43123/callback?code=x&state=local")
+            .unwrap();
+        assert_eq!(relay.host_str(), Some("127.0.0.1"));
+
+        let ipv6 = parse_authorization_url(
+            "https://accounts.example.test/authorize?redirect_uri=http%3A%2F%2F%5B%3A%3A1%5D%3A43123%2Fcallback&state=v6",
+        )
+        .unwrap();
+        let relay = ipv6
+            .validate_callback("http://[::1]:43123/callback?error=denied&state=v6")
+            .unwrap();
+        assert_eq!(relay.host_str(), Some("[::1]"));
+    }
+
+    #[test]
+    fn authorization_capture_is_first_valid_request_for_flow_lifetime() {
+        let flows = ProtocolAuthFlows::new();
+        let flow = flows.create("demo", "oauth").unwrap();
+        assert!(flow.set_authorization_request(parse_authorization_url(AUTH_URL).unwrap()));
+        assert!(!flow.set_authorization_request(
+            parse_authorization_url(
+                "https://accounts.example.test/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A43124%2Fcallback&state=second"
+            )
+            .unwrap()
+        ));
+        assert_eq!(flow.interaction().unwrap().url, AUTH_URL);
+        flow.finish(ProtocolFlowState::Succeeded, None);
+        assert!(flow.interaction().is_none());
+        assert!(!flow.set_authorization_request(parse_authorization_url(AUTH_URL).unwrap()));
+        flows.shutdown_all();
     }
 
     #[test]

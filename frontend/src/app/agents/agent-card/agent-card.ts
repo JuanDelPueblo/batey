@@ -1,4 +1,4 @@
-import { Component, computed, input, output, signal } from '@angular/core';
+import { Component, computed, effect, input, output, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
@@ -54,6 +54,19 @@ export class AgentCardComponent {
   readonly environment = output<void>();
   readonly retryAuth = output<void>();
   readonly callbackDraft = signal('');
+  private lastCallbackInteractionIdentity: string | null = null;
+
+  constructor() {
+    effect(() => {
+      const flowId = this.protocolFlow()?.flow_id ?? null;
+      const url = this.protocolInteraction()?.url ?? null;
+      const identity = flowId && url ? `${flowId}\u0000${url}` : null;
+      if (identity !== this.lastCallbackInteractionIdentity) {
+        this.callbackDraft.set('');
+        this.lastCallbackInteractionIdentity = identity;
+      }
+    });
+  }
 
   readonly mutability = computed<AgentMutability>(() => {
     const agent = this.agent();

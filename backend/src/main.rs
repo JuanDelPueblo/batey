@@ -34,6 +34,31 @@ fn run_browser_capture_helper() -> bool {
     };
     use std::io::Write;
     let _ = write!(stream, "{token}\n{url}");
+    // Preserve ordinary local authentication when a desktop opener exists.
+    // The capture is already delivered to Batey, and opener diagnostics are
+    // silenced so they cannot become authentication stderr.
+    #[cfg(target_os = "windows")]
+    let mut opener = {
+        let mut command = std::process::Command::new("cmd");
+        command.args(["/C", "start", ""]).arg(url);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut opener = {
+        let mut command = std::process::Command::new("open");
+        command.arg(url);
+        command
+    };
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut opener = {
+        let mut command = std::process::Command::new("xdg-open");
+        command.arg(url);
+        command
+    };
+    let _ = opener
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
     true
 }
 

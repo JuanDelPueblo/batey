@@ -531,4 +531,42 @@ describe('AgentCardComponent', () => {
     buttons.find((button) => button.textContent?.includes('Cancel'))?.click();
     expect(cancel).toHaveBeenCalled();
   });
+
+  it('wipes callback drafts when the browser interaction or flow changes', async () => {
+    render(summary('builtin'));
+    fixture.componentRef.setInput('protocolFlow', {
+      flow_id: 'flow-one',
+      agent_id: 'builtin-agent',
+      method_id: 'oauth',
+      state: 'waiting_for_user',
+      reason: null,
+    });
+    fixture.componentRef.setInput('protocolInteraction', {
+      type: 'browser',
+      url: 'https://accounts.example.test/authorize?state=one',
+      manual_callback: true,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.componentInstance.callbackDraft.set('http://localhost:43123/callback?code=secret&state=one');
+
+    // A replacement flow must clear even when the provider reuses the same
+    // authorization URL, and removal must clear the draft too.
+    fixture.componentRef.setInput('protocolFlow', {
+      flow_id: 'flow-two',
+      agent_id: 'builtin-agent',
+      method_id: 'oauth',
+      state: 'waiting_for_user',
+      reason: null,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(fixture.componentInstance.callbackDraft()).toBe('');
+
+    fixture.componentInstance.callbackDraft.set('http://localhost:43123/callback?code=secret&state=one');
+    fixture.componentRef.setInput('protocolInteraction', null);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(fixture.componentInstance.callbackDraft()).toBe('');
+  });
 });

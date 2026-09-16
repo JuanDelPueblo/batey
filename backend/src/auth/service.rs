@@ -60,6 +60,7 @@ const INVALID_AUTH_URL_REASON: &str =
     "The agent provided an authentication URL that Batey could not validate.";
 const AUTH_BROWSER_ADDR_ENV: &str = "BATEY_AUTH_BROWSER_CAPTURE_ADDR";
 const AUTH_BROWSER_TOKEN_ENV: &str = "BATEY_AUTH_BROWSER_CAPTURE_TOKEN";
+const AUTH_BROWSER_CAPTURE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(2);
 
 struct BrowserCapture {
     addr: std::net::SocketAddr,
@@ -75,25 +76,29 @@ async fn start_browser_capture(sender: UnboundedSender<String>) -> Option<Browse
     let token = uuid::Uuid::new_v4().simple().to_string();
     let expected_token = token.clone();
     let task = tokio::spawn(async move {
-        let Ok((stream, _)) = listener.accept().await else {
-            return;
-        };
-        let mut bytes = Vec::new();
         let limit = (crate::auth::MAX_AUTH_URL_BYTES + 256) as u64;
-        if stream.take(limit).read_to_end(&mut bytes).await.is_err()
-            || bytes.len() > crate::auth::MAX_AUTH_URL_BYTES + 256
-        {
-            return;
-        }
-        let Ok(message) = String::from_utf8(bytes) else {
-            return;
-        };
-        let mut lines = message.splitn(2, '\n');
-        if lines.next() != Some(expected_token.as_str()) {
-            return;
-        }
-        if let Some(url) = lines.next().map(str::trim).filter(|url| !url.is_empty()) {
-            let _ = sender.send(url.to_owned());
+        loop {
+            let Ok((stream, _)) = listener.accept().await else {
+                return;
+            };
+            let mut bytes = Vec::new();
+            let mut limited = stream.take(limit);
+            let read = limited.read_to_end(&mut bytes);
+            let read = tokio::time::timeout(AUTH_BROWSER_CAPTURE_CONNECTION_TIMEOUT, read).await;
+            if !matches!(read, Ok(Ok(_))) || bytes.len() > crate::auth::MAX_AUTH_URL_BYTES + 256 {
+                continue;
+            }
+            let Ok(message) = String::from_utf8(bytes) else {
+                continue;
+            };
+            let mut lines = message.splitn(2, '\n');
+            if lines.next() != Some(expected_token.as_str()) {
+                continue;
+            }
+            if let Some(url) = lines.next().map(str::trim).filter(|url| !url.is_empty()) {
+                let _ = sender.send(url.to_owned());
+                return;
+            }
         }
     });
     Some(BrowserCapture { addr, token, task })
@@ -1146,8 +1151,16 @@ impl AgentAuthService {
                     }
                     captured = next_capture(&mut capture_rx, compatibility.is_some()) => {
                         let Some(captured) = captured else { continue; };
+                        // Browser interception and stderr capture can report
+                        // the same request. Once one valid request won, all
+                        // later candidates are irrelevant for this flow.
+                        if flow.authorization_captured() {
+                            continue;
+                        }
                         match parse_authorization_url(&captured) {
-                            Ok(request) => flow.set_authorization_request(request),
+                            Ok(request) => {
+                                let _ = flow.set_authorization_request(request);
+                            }
                             Err(_) => {
                                 flow.finish(
                                     ProtocolFlowState::Failed,
@@ -1787,12 +1800,52 @@ fn validate_legacy_program(program: &str) -> anyhow::Result<()> {
 mod tests {
     use super::*;
     use crate::agents::AgentDefinition;
+    use tokio::io::AsyncWriteExt;
 
     fn runtime() -> AgentRuntime {
         AgentDefinition::new("demo", "demo-acp")
             .with_args(vec!["acp".into(), "--stdio".into()])
             .with_env(HashMap::from([("BASE_ONLY".into(), "base".into())]))
             .runtime()
+    }
+
+    #[tokio::test]
+    async fn browser_capture_survives_bad_and_stalled_connections() {
+        let (sender, mut receiver) = mpsc::unbounded_channel();
+        let capture = start_browser_capture(sender)
+            .await
+            .expect("capture listener");
+
+        let mut wrong_token = tokio::net::TcpStream::connect(capture.addr)
+            .await
+            .expect("wrong-token connection");
+        wrong_token.write_all(b"wrong-token\nurl").await.unwrap();
+        wrong_token.shutdown().await.unwrap();
+
+        // A client that never closes must not prevent the next browser launch
+        // from being accepted after the per-connection inactivity timeout.
+        let stalled = tokio::net::TcpStream::connect(capture.addr)
+            .await
+            .expect("stalled connection");
+        let mut valid = tokio::net::TcpStream::connect(capture.addr)
+            .await
+            .expect("valid connection");
+        valid
+            .write_all(format!("{}\nvalid-url", capture.token).as_bytes())
+            .await
+            .unwrap();
+        valid.shutdown().await.unwrap();
+
+        let received = tokio::time::timeout(
+            AUTH_BROWSER_CAPTURE_CONNECTION_TIMEOUT + Duration::from_secs(2),
+            receiver.recv(),
+        )
+        .await
+        .expect("capture listener stalled after an invalid connection")
+        .expect("capture channel closed");
+        assert_eq!(received, "valid-url");
+        drop(stalled);
+        capture.task.abort();
     }
 
     #[test]

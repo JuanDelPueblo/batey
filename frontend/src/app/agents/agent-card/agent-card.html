@@ -119,7 +119,7 @@
             }
           }
           @if (protocolElicitations().length > 0) {
-            <div class="elicitations" aria-label="Sign-in action required">
+            <div class="elicitations" role="group" aria-label="Sign-in action required">
               @for (elicitation of protocolElicitations(); track elicitation.id) {
                 <div class="elicitation">
                   <p class="elicitation-message">{{ elicitation.message || 'Input needed' }}</p>

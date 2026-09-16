@@ -420,6 +420,9 @@ describe('AgentCardComponent', () => {
     expect(text).toContain('https://example.invalid/device?code=ABCD-1234');
     expect(text).toContain('example.invalid');
     expect(text).toContain('Batey never opens or fetches it automatically');
+    const elicitations = fixture.nativeElement.querySelector('.elicitations') as HTMLElement;
+    expect(elicitations.getAttribute('role')).toBe('group');
+    expect(elicitations.getAttribute('aria-label')).toBe('Sign-in action required');
     const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
     buttons.find((button) => button.textContent?.includes('Cancel'))?.click();
     expect(cancel).toHaveBeenCalled();

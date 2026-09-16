@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -897,6 +897,8 @@ fn is_disposable_runtime_status(worktree: &Path, status: &str) -> Result<bool, W
             cache.display()
         ))
     })?;
+    let mut profile_generation = None;
+    let mut generations = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|error| {
             WorkspaceError::Failed(format!(
@@ -905,8 +907,8 @@ fn is_disposable_runtime_status(worktree: &Path, status: &str) -> Result<bool, W
             ))
         })?;
         let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !is_nix_direnv_profile_name(&name) {
+        let name_string = name.to_string_lossy();
+        if !is_nix_direnv_profile_name(&name_string) {
             return Ok(false);
         }
         let entry_metadata = std::fs::symlink_metadata(entry.path()).map_err(|error| {
@@ -915,16 +917,70 @@ fn is_disposable_runtime_status(worktree: &Path, status: &str) -> Result<bool, W
                 entry.path().display()
             ))
         })?;
-        let target = match entry.path().canonicalize() {
-            Ok(target) => target,
-            Err(_) => return Ok(false),
-        };
-        if !entry_metadata.file_type().is_symlink() || !target.is_dir() {
+        if !entry_metadata.file_type().is_symlink() {
             return Ok(false);
+        }
+        if name_string == "flake-profile" {
+            let target = std::fs::read_link(entry.path()).map_err(|error| {
+                WorkspaceError::Failed(format!(
+                    "cannot inspect disposable direnv profile {}: {error}",
+                    entry.path().display()
+                ))
+            })?;
+            let mut components = target.components();
+            let Some(Component::Normal(generation)) = components.next() else {
+                return Ok(false);
+            };
+            if components.next().is_some()
+                || !is_nix_direnv_profile_name(&generation.to_string_lossy())
+            {
+                return Ok(false);
+            }
+            profile_generation = Some(generation.to_os_string());
+        } else {
+            if !is_nix_direnv_generation_link(&entry.path()) {
+                return Ok(false);
+            }
+            generations.push(name);
         }
     }
 
-    Ok(true)
+    Ok(profile_generation.is_some_and(|profile_generation| {
+        generations
+            .iter()
+            .any(|generation| generation == &profile_generation)
+    }))
+}
+
+/// A nix-direnv generation is a symlink into the immutable Nix store. Keep
+/// the lexical check even when the store path is not present (as in CI): a
+/// dangling link under `/nix/store` cannot refer to an arbitrary worktree or
+/// user path, while an existing target must still resolve to a directory in
+/// the store.
+fn is_nix_direnv_generation_link(path: &Path) -> bool {
+    let Ok(target) = std::fs::read_link(path) else {
+        return false;
+    };
+    let store = Path::new("/nix/store");
+    if !target.is_absolute() || !target.starts_with(store) {
+        return false;
+    }
+    let Ok(remainder) = target.strip_prefix(store) else {
+        return false;
+    };
+    if remainder.as_os_str().is_empty()
+        || remainder
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return false;
+    }
+
+    match target.canonicalize() {
+        Ok(resolved) => resolved.starts_with(store) && resolved.is_dir(),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(_) => false,
+    }
 }
 
 fn is_nix_direnv_profile_name(name: &str) -> bool {

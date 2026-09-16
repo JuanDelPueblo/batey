@@ -154,12 +154,26 @@ fn only_the_generated_nix_direnv_profile_is_disposable() {
     let managed = provision_managed(td.path(), ws.path(), "runtime", &base).unwrap();
     let cache = managed.worktree.join(".direnv");
     fs::create_dir(&cache).unwrap();
-    let profile_target = tempfile::tempdir().unwrap();
-    std::os::unix::fs::symlink(profile_target.path(), cache.join("flake-profile-1-link")).unwrap();
+    std::os::unix::fs::symlink(
+        "/nix/store/batey-test-profile",
+        cache.join("flake-profile-1-link"),
+    )
+    .unwrap();
     std::os::unix::fs::symlink("flake-profile-1-link", cache.join("flake-profile")).unwrap();
 
     git(&managed.worktree, &["status", "--porcelain"]);
     assert!(!worktree_dirty(&managed.worktree).unwrap());
+
+    fs::remove_file(cache.join("flake-profile")).unwrap();
+    std::os::unix::fs::symlink("flake-profile-2-link", cache.join("flake-profile")).unwrap();
+    assert!(worktree_dirty(&managed.worktree).unwrap());
+    fs::remove_file(cache.join("flake-profile")).unwrap();
+    std::os::unix::fs::symlink("flake-profile-1-link", cache.join("flake-profile")).unwrap();
+
+    fs::remove_file(cache.join("flake-profile-1-link")).unwrap();
+    let important = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(important.path(), cache.join("flake-profile-1-link")).unwrap();
+    assert!(worktree_dirty(&managed.worktree).unwrap());
 
     fs::write(cache.join("agent-note.txt"), "keep\n").unwrap();
     assert!(worktree_dirty(&managed.worktree).unwrap());

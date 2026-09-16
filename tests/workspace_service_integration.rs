@@ -53,7 +53,7 @@ fn git_repo_with_direnv_runtime_cache(root: &Path) -> std::path::PathBuf {
     std::fs::write(
         repo.join(".envrc"),
         format!(
-            "export PATH=\"{path}\"\nmkdir -p .direnv\nln -sfn /tmp .direnv/flake-profile-1-link\nln -sfn flake-profile-1-link .direnv/flake-profile\n"
+            "export PATH=\"{path}\"\nmkdir -p .direnv\nln -sfn /nix/store/batey-test-profile .direnv/flake-profile-1-link\nln -sfn flake-profile-1-link .direnv/flake-profile\n"
         ),
     )
     .unwrap();

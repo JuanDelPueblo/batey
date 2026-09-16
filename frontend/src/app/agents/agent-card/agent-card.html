@@ -76,7 +76,7 @@
       }
     </div>
 
-    @if (authLoading() && !protocolFlow()) {
+    @if ((authLoading() || protocolLoading()) && !protocolFlow()) {
       <div class="auth-row loading"><mat-spinner diameter="18" /> <span>Checking sign-in…</span></div>
     } @else if (authError()) {
       <div class="auth-row error" role="alert">

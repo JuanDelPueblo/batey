@@ -314,6 +314,31 @@ describe('AgentCardComponent', () => {
     expect(retryAuth).toHaveBeenCalled();
   });
 
+  it('shows checking sign-in while a protocol flow starts, unless the flow is available', () => {
+    fixture.componentRef.setInput('agent', summary('builtin'));
+    fixture.componentRef.setInput('auth', {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: false,
+      observed_state: 'unknown',
+      methods: [{ id: 'oauth', name: 'OAuth', type: 'agent', supported: true }],
+    });
+    fixture.componentRef.setInput('protocolLoading', true);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Checking sign-in…');
+
+    fixture.componentRef.setInput('protocolFlow', {
+      flow_id: 'flow-1',
+      agent_id: 'x',
+      method_id: 'oauth',
+      state: 'running',
+      reason: null,
+    });
+    fixture.detectChanges();
+    expect(fixture.nativeElement.textContent).toContain('Signing in…');
+    expect(fixture.nativeElement.textContent).not.toContain('Checking sign-in…');
+  });
+
   it('places each method label on the left and its action on the right', () => {
     render(summary('builtin'), {
       agent_id: 'x',

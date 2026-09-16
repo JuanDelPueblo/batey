@@ -488,10 +488,6 @@ mod tests {
             Some("remote-one")
         );
         assert!(db.chat(&b.id).unwrap().acp_session_id.is_none());
-        assert_eq!(
-            b.permission_policy,
-            crate::acp::callbacks::CallbackPolicy::Ask
-        );
     }
 
     #[test]

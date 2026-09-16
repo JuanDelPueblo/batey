@@ -31,7 +31,7 @@ enum ClientMessage {
     PermissionResponse {
         session_id: String,
         id: String,
-        granted: bool,
+        option_id: String,
     },
 }
 
@@ -206,10 +206,10 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                 ClientMessage::PermissionResponse {
                     session_id,
                     id,
-                    granted,
+                    option_id,
                 } => {
                     if let Some(session) = sm.get_by_id(&session_id).await {
-                        session.respond_to_permission(&id, granted).await;
+                        session.respond_to_permission(&id, &option_id).await;
                     }
                 }
                 ClientMessage::Prompt { .. } | ClientMessage::Cancel { .. } => {

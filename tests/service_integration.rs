@@ -255,7 +255,6 @@ async fn title_rename_is_live_but_guarded_compound_edits_are_atomic() {
             ChatEdit {
                 title: Some("Must not apply".into()),
                 archived: Some(true),
-                ..Default::default()
             },
         )
         .await;
@@ -1104,7 +1103,6 @@ async fn authorize_chat_environment_security_and_path_validation() {
         ChatEdit {
             title: None,
             archived: Some(true),
-            permission_policy: None,
         },
     )
     .await

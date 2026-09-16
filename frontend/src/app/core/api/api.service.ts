@@ -12,7 +12,6 @@ import type {
   CustomAgentInput,
   DirectoryListing,
   InstallRegistryAgentInput,
-  PermissionPolicy,
   Project,
   ChatWorkspaceSelection,
   RegistryCatalog,
@@ -140,7 +139,7 @@ export class ApiService {
 
   editChat(
     chatId: string,
-    edit: { title?: string; archived?: boolean; permission_policy?: PermissionPolicy },
+    edit: { title?: string; archived?: boolean },
   ): Promise<Chat> {
     return this.request<Chat>(`/api/chats/${encodeURIComponent(chatId)}`, {
       method: 'PATCH',
@@ -203,10 +202,10 @@ export class ApiService {
     await this.request(`/api/chats/${encodeURIComponent(chatId)}/cancel`, { method: 'POST' });
   }
 
-  async respondPermission(chatId: string, id: string, granted: boolean): Promise<void> {
+  async respondPermission(chatId: string, id: string, optionId: string): Promise<void> {
     await this.request(`/api/chats/${encodeURIComponent(chatId)}/permission`, {
       method: 'POST',
-      body: { id, granted },
+      body: { id, option_id: optionId },
     });
   }
 

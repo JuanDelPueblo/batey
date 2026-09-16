@@ -5,7 +5,6 @@ import type {
   AuthRequiredInfo,
   Chat,
   ConfigOption,
-  PermissionPolicy,
   ProcessState,
   SessionEvent,
   TurnState,
@@ -387,10 +386,6 @@ export class ChatSessionStore {
     this.applyChatPatch(chatId, { process_state: 'STOPPED', turn_state: 'IDLE' });
   }
 
-  async setChatPolicy(chatId: string, policy: PermissionPolicy): Promise<void> {
-    this.applyChatPatch(chatId, await this.api.editChat(chatId, { permission_policy: policy }));
-  }
-
   async renameChat(chatId: string, title: string): Promise<void> {
     this.applyChatPatch(chatId, await this.api.editChat(chatId, { title }));
   }
@@ -439,8 +434,8 @@ export class ChatSessionStore {
     return created;
   }
 
-  respondPermission(chatId: string, requestId: string, granted: boolean): Promise<void> {
-    return this.api.respondPermission(chatId, requestId, granted);
+  respondPermission(chatId: string, requestId: string, optionId: string): Promise<void> {
+    return this.api.respondPermission(chatId, requestId, optionId);
   }
 
   removeProject(projectId: string): void {

@@ -30,11 +30,11 @@ export class PermissionCardComponent {
   readonly icon = computed(() => (this.isPlanApproval() ? 'assignment_turned_in' : 'shield_person'));
 
 
-  async respond(granted: boolean): Promise<void> {
+  async respond(optionId: string): Promise<void> {
     if (!this.chatId() || !this.permission().requestId) return;
     this.responding.set(true);
     try {
-      await this.state.respondPermission(this.chatId(), this.permission().requestId, granted);
+      await this.state.respondPermission(this.chatId(), this.permission().requestId, optionId);
     } catch (error) {
       console.error('Failed to respond to permission request', error);
     } finally {

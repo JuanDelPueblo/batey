@@ -18,7 +18,6 @@ use super::pty::{PtyCommand, TERMINAL_AUTH_SUPPORTED};
 use crate::acp::auth::{
     AgentAuthState, AuthMethodKind, LegacyTerminalAuth, ObservedAuthState, TerminalAuthMethod,
 };
-use crate::acp::callbacks::CallbackPolicy;
 use crate::acp::{AcpClient, StderrPolicy};
 use crate::agents::{AgentCatalog, AgentRuntime};
 use crate::events::EventLog;
@@ -792,7 +791,6 @@ impl AgentAuthService {
                 &runtime.launch.args,
                 &env,
                 &cwd,
-                CallbackPolicy::DenyAll,
                 format!("protocol-auth:{flow_id}"),
                 agent_id.to_owned(),
                 self.events.clone(),
@@ -969,9 +967,6 @@ impl AgentAuthService {
                 &runtime.launch.args,
                 &env,
                 &cwd,
-                // The probe process never receives a prompt, so it has no
-                // legitimate reason to edit a file or run a command.
-                CallbackPolicy::DenyAll,
                 format!("agent-auth:{agent_id}"),
                 agent_id.to_owned(),
                 self.events.clone(),

@@ -54,11 +54,12 @@ export function cancel(chatId) {
   return true;
 }
 
-/** Resolves a permission request that the running turn waits on. */
-export function answerPermission(chatId, requestId, granted) {
+/** Resolves a permission request with the exact agent option id. */
+export function answerPermission(chatId, requestId, optionId) {
   const turn = active.get(chatId);
   if (!turn || turn.permissionId !== requestId) return false;
-  turn.resolvePermission?.(granted);
+  if (!turn.permissionOptionIds?.has(optionId)) return false;
+  turn.resolvePermission?.(optionId);
   return true;
 }
 
@@ -96,6 +97,7 @@ export function startTurn(state, chat, text, latency, content = undefined) {
     cancelled: false,
     permissionId: null,
     resolvePermission: null,
+    permissionOptionIds: new Set(['seed-allow-once', 'seed-reject-once']),
     resolveHold: null,
   };
   active.set(chat.id, turn);
@@ -152,24 +154,24 @@ export function seedActiveTurn(state, chat, seed) {
   return turn;
 }
 
-async function finishSeededPermission(state, chat, turn, granted) {
+async function finishSeededPermission(state, chat, turn, optionId) {
   const emit = (payload) => state.emit(chat.id, chat.agent, payload);
   const requestId = turn.permissionId;
   turn.permissionId = null;
   turn.resolvePermission = null;
 
-  if (granted === null || turn.cancelled) {
+  if (optionId === null || turn.cancelled) {
     finishCancelled(emit);
     return;
   }
 
-  emit({ type: 'permission_response', id: requestId, granted });
+  emit({ type: 'permission_response', id: requestId, option_id: optionId });
   await sleep(150);
   if (turn.cancelled) {
     finishCancelled(emit);
     return;
   }
-  if (!granted) {
+  if (optionId === 'seed-reject-once') {
     emit({ type: 'message_chunk', text: 'I stopped because the WebSocket edit was denied.' });
     emit({ type: 'turn_complete', stop_reason: 'refusal' });
     return;
@@ -303,6 +305,7 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
 
     const requestId = randomUUID();
     turn.permissionId = requestId;
+    turn.permissionOptionIds = new Set(['plan-allow-once', 'plan-reject-once']);
     const answered = new Promise((resolve) => {
       turn.resolvePermission = resolve;
     });
@@ -314,24 +317,28 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
       title: 'Approve Plan',
       kind: 'switch_mode',
       description: '### Proposed Implementation Plan\n\n1. **Inspect Codebase**: Check backend ACP handlers and session timeouts.\n2. **Frontend Updates**: Render plans with rich markdown and provide dedicated approve/reject actions.\n3. **Validation**: Run end-to-end and unit test suites.',
+      options: [
+        { optionId: 'plan-allow-once', name: 'Approve once', kind: 'allow_once' },
+        { optionId: 'plan-reject-once', name: 'Reject once', kind: 'reject_once' },
+      ],
     });
 
-    const granted = await answered;
+    const optionId = await answered;
     turn.permissionId = null;
     turn.resolvePermission = null;
 
     // Cancellation is not a denial: finish as cancelled without recording
     // a denial response.
-    if (granted === null || turn.cancelled) return finishCancelled(emit);
+    if (optionId === null || turn.cancelled) return finishCancelled(emit);
 
     state.emit(chat.id, chat.agent, {
       type: 'permission_response',
       id: requestId,
-      granted,
+      option_id: optionId,
     });
     await pause(200);
 
-    if (!granted) {
+    if (optionId === 'plan-reject-once') {
       await stream('message_chunk', 'Plan was rejected. Please provide feedback on what to change.');
       emit({ type: 'turn_complete', stop_reason: 'refusal' });
       return;
@@ -547,10 +554,10 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
 
   if (scenario === 'permission' || scenario === 'full' || scenario === 'long') {
     if (turn.cancelled) return finishCancelled(emit);
-    const granted = await requestPermission(state, chat, turn, pause);
-    if (granted === null || turn.cancelled) return finishCancelled(emit);
+    const optionId = await requestPermission(state, chat, turn, pause);
+    if (optionId === null || turn.cancelled) return finishCancelled(emit);
 
-    if (!granted) {
+    if (optionId.startsWith('write-reject')) {
       await stream('message_chunk', 'I stopped, because the edit was denied.');
       emit({ type: 'turn_complete', stop_reason: 'refusal' });
       return;
@@ -586,16 +593,16 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
   emit({ type: 'turn_complete', stop_reason: 'end_turn' });
 }
 
-/** Emits a request and waits for the browser, or for the chat policy. */
+/** Emits an agent-owned permission request and waits for the browser. */
 async function requestPermission(state, chat, turn, pause) {
-  // The policy of the chat can answer without the browser, like the real
-  // callback layer in `backend/src/acp/callbacks.rs`.
-  if (chat.permission_policy === 'auto-approve') return true;
-  if (chat.permission_policy === 'deny-all') return false;
-  if (chat.permission_policy === 'read-only') return false;
-
   const requestId = randomUUID();
   turn.permissionId = requestId;
+  turn.permissionOptionIds = new Set([
+    'write-once',
+    'write-always',
+    'write-reject-once',
+    'write-reject-always',
+  ]);
 
   const answered = new Promise((resolve) => {
     turn.resolvePermission = resolve;
@@ -608,21 +615,27 @@ async function requestPermission(state, chat, turn, pause) {
     title: 'Write backend/src/web/hub.rs',
     kind: 'edit',
     description: 'Write backend/src/web/hub.rs',
+    options: [
+      { optionId: 'write-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'write-always', name: 'Always allow', kind: 'allow_always' },
+      { optionId: 'write-reject-once', name: 'Reject once', kind: 'reject_once' },
+      { optionId: 'write-reject-always', name: 'Always reject', kind: 'reject_always' },
+    ],
   });
 
 
-  const granted = await answered;
+  const optionId = await answered;
   turn.permissionId = null;
   turn.resolvePermission = null;
 
-  if (granted === null || turn.cancelled) return null;
+  if (optionId === null || turn.cancelled) return null;
   state.emit(chat.id, chat.agent, {
     type: 'permission_response',
     id: requestId,
-    granted,
+    option_id: optionId,
   });
   await pause(200);
-  return granted;
+  return optionId;
 }
 
 function finishCancelled(emit) {

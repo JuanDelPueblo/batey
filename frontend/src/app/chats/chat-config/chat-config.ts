@@ -7,7 +7,7 @@ import { MatIconModule } from '@angular/material/icon';
 import { MatSelectModule } from '@angular/material/select';
 import { MatSlideToggleModule } from '@angular/material/slide-toggle';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import type { AdditionalRoot, Chat, ConfigOption, ConfigOptionSelectGroup, McpServer, McpTransport, PermissionPolicy, Project, SessionModes } from '../../core/api/types';
+import type { AdditionalRoot, Chat, ConfigOption, ConfigOptionSelectGroup, McpServer, McpTransport, Project, SessionModes } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
 import { ApiService } from '../../core/api/api.service';
 import { McpServerDialogComponent } from '../mcp-server-dialog/mcp-server-dialog';
@@ -154,13 +154,6 @@ export class ChatConfigComponent {
     } catch (error: unknown) {
       this.errorMessage.set(error instanceof Error ? error.message : 'Failed to update session mode');
     }
-  }
-
-  async changePolicy(policy: PermissionPolicy): Promise<void> {
-    const chat = this.chat();
-    if (!chat) return;
-    this.errorMessage.set('');
-    try { await this.state.setChatPolicy(chat.id, policy); } catch (error: unknown) { this.errorMessage.set(error instanceof Error ? error.message : 'Failed to update permission policy'); }
   }
 
   async changeOption(option: ConfigOption, value: unknown): Promise<void> {

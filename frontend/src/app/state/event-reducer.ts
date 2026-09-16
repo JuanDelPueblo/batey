@@ -347,6 +347,7 @@ export class EventReducer {
             description: this.stringValue(payload.description) ?? '',
             title: this.stringValue(payload['title']),
             kind: this.stringValue(payload['kind']),
+            options: this.permissionOptions(payload.options),
             responded: false,
           },
         ],
@@ -408,9 +409,28 @@ export class EventReducer {
     next[index] = {
       ...next[index],
       responded: true,
-      decision: payload.granted ? 'Allowed' : 'Denied',
+      decision: this.permissionDecision(payload),
     } as TurnEntry;
     return next;
+  }
+
+  private permissionDecision(payload: SessionEvent['payload']): string {
+    const optionId = this.stringValue(payload['option_id']);
+    if (optionId) return optionId;
+    if (typeof payload['granted'] === 'boolean') {
+      return payload['granted'] ? 'Allowed' : 'Denied';
+    }
+    return 'Cancelled';
+  }
+
+  private permissionOptions(value: unknown): import('../core/api/types').AgentPermissionOption[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((option): option is import('../core/api/types').AgentPermissionOption =>
+      typeof option === 'object' && option !== null
+      && typeof (option as Record<string, unknown>)['optionId'] === 'string'
+      && typeof (option as Record<string, unknown>)['name'] === 'string'
+      && typeof (option as Record<string, unknown>)['kind'] === 'string',
+    );
   }
 
   private markPermissionInItems(

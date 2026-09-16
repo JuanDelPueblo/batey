@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 
 import { upgrade } from './websocket.mjs';
-import { AGENTS, FakeState, PERMISSION_POLICIES, PROJECT_ROOT, defaultConfigOptions, validateCustomInput } from './state.mjs';
+import { AGENTS, FakeState, PROJECT_ROOT, defaultConfigOptions, validateCustomInput } from './state.mjs';
 import { answerElicitation, answerPermission, cancel, isRunning, listPendingElicitations, seedActiveTurn, startTurn } from './turns.mjs';
 
 const options = parseArgs(process.argv.slice(2));
@@ -191,7 +191,7 @@ function handleWebSocket(request, rawSocket, head) {
     }
 
     if (message.type === 'permission_response') {
-      answerPermission(message.session_id, message.id, Boolean(message.granted));
+      answerPermission(message.session_id, message.id, message.option_id);
     }
     // Prompt and cancel over the WebSocket are unsupported, as in the backend.
   };
@@ -454,14 +454,7 @@ function editChat({ params, body }) {
     throw httpError(400, 'Name must contain 1–200 bytes');
   }
   const archived = body.archived !== undefined ? Boolean(body.archived) : undefined;
-  let policy;
-  if (body.permission_policy !== undefined) {
-    if (!PERMISSION_POLICIES.includes(body.permission_policy)) {
-      throw httpError(400, 'Unknown permission policy');
-    }
-    policy = body.permission_policy;
-  }
-  if ((archived !== undefined || policy !== undefined) && isRunning(chat.id)) {
+  if (archived !== undefined && isRunning(chat.id)) {
     throw httpError(409, 'Wait for or cancel the active turn before editing the chat');
   }
 
@@ -471,9 +464,6 @@ function editChat({ params, body }) {
   }
   if (archived !== undefined) {
     chat.archived = archived;
-  }
-  if (policy !== undefined) {
-    chat.permission_policy = policy;
   }
 
   chat.updated_at = new Date().toISOString();
@@ -679,7 +669,10 @@ function stopChat({ params }) {
 function respondPermission({ params, body }) {
   const chat = requireChat(params[0]);
   const id = requireString(body, 'id');
-  answerPermission(chat.id, id, Boolean(body.granted));
+  const optionId = requireString(body, 'option_id');
+  if (!answerPermission(chat.id, id, optionId)) {
+    throw httpError(409, 'Permission request is stale or the option is not advertised by the agent');
+  }
   return json({ success: true });
 }
 

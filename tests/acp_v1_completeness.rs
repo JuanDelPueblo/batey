@@ -620,7 +620,7 @@ fn observed_cancels(log: &std::path::Path) -> Vec<String> {
 
 #[tokio::test]
 async fn timed_out_requests_emit_cancel_request() {
-    use batey::acp::{callbacks::CallbackPolicy, AcpClient, RequestTimedOut, StderrPolicy};
+    use batey::acp::{AcpClient, RequestTimedOut, StderrPolicy};
 
     let tmp = tempfile::tempdir().unwrap();
     let script = tmp.path().join("hang_peer.py");
@@ -637,7 +637,6 @@ async fn timed_out_requests_emit_cancel_request() {
         ],
         &env,
         tmp.path(),
-        CallbackPolicy::Ask,
         "sess".into(),
         "test-agent".into(),
         Arc::new(EventLog::new(100)),

@@ -58,16 +58,6 @@
   </div>
 
   <mat-form-field appearance="outline">
-    <mat-label>Default permission policy</mat-label>
-    <mat-select [value]="policy()" (selectionChange)="policy.set($event.value)">
-      <mat-option value="ask">Ask</mat-option>
-      <mat-option value="read-only">Read only</mat-option>
-      <mat-option value="auto-approve">Auto-approve</mat-option>
-      <mat-option value="deny-all">Deny all</mat-option>
-    </mat-select>
-  </mat-form-field>
-
-  <mat-form-field appearance="outline">
     <mat-label>Description</mat-label>
     <textarea matInput rows="2" [value]="description()" (input)="description.set($any($event.target).value)"></textarea>
     @if (issueFor('description')) { <mat-error>{{ issueFor('description') }}</mat-error> }

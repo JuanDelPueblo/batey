@@ -135,7 +135,7 @@ pub async fn api_prompt_session(
 #[derive(Debug, Deserialize)]
 pub struct PermissionPayload {
     pub id: String,
-    pub granted: bool,
+    pub option_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -155,7 +155,7 @@ pub async fn api_permission_response(
         .ok_or(StatusCode::NOT_FOUND)?;
 
     let success = session
-        .respond_to_permission(&payload.id, payload.granted)
+        .respond_to_permission(&payload.id, &payload.option_id)
         .await;
     if !success {
         return Err(StatusCode::CONFLICT);

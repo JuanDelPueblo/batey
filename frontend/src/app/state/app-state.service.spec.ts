@@ -13,7 +13,7 @@ describe('AppStateService', () => {
   let projects: Project[];
   let chats: Chat[];
   let resumeCalls: number;
-  let permissionCalls: Array<{ chatId: string; requestId: string; granted: boolean }>;
+  let permissionCalls: Array<{ chatId: string; requestId: string; optionId: string }>;
   let events: Subject<SessionEvent>;
   let replayGaps: Subject<void>;
 
@@ -37,7 +37,7 @@ describe('AppStateService', () => {
       resumeChat: async () => { resumeCalls++; return { ...chats[0], process_state: 'RUNNING' as const }; },
       editChat: async (id: string, edit: Partial<Chat>) => ({ ...(chats.find((chat) => chat.id === id) ?? chats[0]), ...edit }),
       stopChat: async () => undefined, cancelChat: async () => undefined, promptChat: async () => undefined,
-      respondPermission: async (chatId: string, requestId: string, granted: boolean) => { permissionCalls.push({ chatId, requestId, granted }); }, setChatConfig: async () => [], cloneProject: async () => projects[0],
+      respondPermission: async (chatId: string, requestId: string, optionId: string) => { permissionCalls.push({ chatId, requestId, optionId }); }, setChatConfig: async () => [], cloneProject: async () => projects[0],
       authorizeChatEnvironment: async () => undefined,
       forgetProjectEnvrcGrant: async () => undefined,
     } as unknown as ApiService;
@@ -89,13 +89,13 @@ describe('AppStateService', () => {
 
     events.next({ seq: 1, session_id: 'chat-1', agent: 'codex', timestamp: '2026-09-13T12:00:00Z', payload: { type: 'permission_request', id: 'permission-1', method: 'terminal/run_command', description: 'Run tests' } });
     expect(state.activeReducer().items()[0]).toMatchObject({ type: 'turn' });
-    await state.respondPermission('chat-1', 'permission-1', true);
-    expect(permissionCalls).toEqual([{ chatId: 'chat-1', requestId: 'permission-1', granted: true }]);
+    await state.respondPermission('chat-1', 'permission-1', 'allow-once');
+    expect(permissionCalls).toEqual([{ chatId: 'chat-1', requestId: 'permission-1', optionId: 'allow-once' }]);
 
-    events.next({ seq: 2, session_id: 'chat-1', agent: 'codex', timestamp: '2026-09-13T12:00:01Z', payload: { type: 'permission_response', id: 'permission-1', granted: true } });
+    events.next({ seq: 2, session_id: 'chat-1', agent: 'codex', timestamp: '2026-09-13T12:00:01Z', payload: { type: 'permission_response', id: 'permission-1', option_id: 'allow-once' } });
     const turn = state.activeReducer().items()[0];
     expect(turn).toMatchObject({ type: 'turn' });
-    if (turn.type === 'turn') expect(turn.entries[0]).toMatchObject({ responded: true, decision: 'Allowed' });
+    if (turn.type === 'turn') expect(turn.entries[0]).toMatchObject({ responded: true, decision: 'allow-once' });
 
     events.next({ seq: 3, session_id: 'chat-1', agent: 'codex', timestamp: '2026-09-13T12:00:02Z', payload: { type: 'state_change', process: 'RUNNING', turn: 'IDLE' } });
     expect(state.findChat('chat-1')?.process_state).toBe('RUNNING');

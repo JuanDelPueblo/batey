@@ -15,9 +15,6 @@
       <mat-divider />
     }
 
-    <div class="config-item"><mat-form-field appearance="outline"><mat-label>Permission policy</mat-label><mat-select [value]="chat.permission_policy" (selectionChange)="changePolicy($event.value)"><mat-option value="ask">Ask every time</mat-option><mat-option value="read-only">Read-only (deny writes)</mat-option><mat-option value="auto-approve">Auto-approve all permissions</mat-option><mat-option value="deny-all">Deny all actions</mat-option></mat-select></mat-form-field><p>Controls whether the agent must ask before running commands or editing files.</p></div>
-    <mat-divider />
-
     @if (showModes() && modes(); as sessionModes) {
       <div class="config-item"><mat-form-field appearance="outline"><mat-label>Session mode</mat-label><mat-select [value]="sessionModes.current_mode_id" (selectionChange)="changeMode($event.value)">@for (mode of sessionModes.available_modes; track mode.id) { <mat-option [value]="mode.id">{{ mode.name }}</mat-option> }</mat-select></mat-form-field><p>Legacy mode selector. Hidden when a mode config option already covers it.</p></div>
       <mat-divider />

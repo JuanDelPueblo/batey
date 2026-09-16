@@ -24,17 +24,16 @@
     </div>
   } @else {
     <mat-card-actions align="end">
-      <button mat-stroked-button type="button" (click)="respond(false)" [disabled]="responding()">
-        {{ isPlanApproval() ? 'Reject' : 'Deny' }}
-      </button>
-      <button mat-flat-button type="button" (click)="respond(true)" [disabled]="responding()">
-        @if (responding()) {
-          <mat-spinner diameter="18" />
-        } @else {
-          {{ isPlanApproval() ? 'Approve Plan' : 'Allow' }}
-        }
-      </button>
+      @for (option of permission().options ?? []; track option.optionId) {
+        <button
+          mat-stroked-button
+          type="button"
+          (click)="respond(option.optionId)"
+          [disabled]="responding()"
+        >
+          @if (responding()) { <mat-spinner diameter="18" /> } @else { {{ option.name }} }
+        </button>
+      }
     </mat-card-actions>
   }
 </mat-card>
-

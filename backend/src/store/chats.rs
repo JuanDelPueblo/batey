@@ -16,7 +16,6 @@ pub struct Chat {
     pub created_at: String,
     pub updated_at: String,
     pub archived: bool,
-    pub permission_policy: crate::acp::callbacks::CallbackPolicy,
     pub config_values: Value,
     #[serde(default)]
     pub title_overridden: bool,
@@ -56,7 +55,6 @@ pub(crate) fn new(
         created_at: now.clone(),
         updated_at: now,
         archived: false,
-        permission_policy: Default::default(),
         config_values: serde_json::json!({}),
         title_overridden,
     })

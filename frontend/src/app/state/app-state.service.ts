@@ -2,7 +2,7 @@ import { computed, inject, Service } from '@angular/core';
 import { NavigationEnd, Router } from '@angular/router';
 import { filter } from 'rxjs';
 import { EventSocketService } from '../core/event-socket.service';
-import type { ChatWorkspaceSelection, CloneProjectInput, PermissionPolicy, RichContentBlock, SessionEvent } from '../core/api/types';
+import type { ChatWorkspaceSelection, CloneProjectInput, RichContentBlock, SessionEvent } from '../core/api/types';
 import { EventReducer } from './event-reducer';
 import type { ChatActivity } from './chat-activity';
 import { AgentStore } from './agent.store';
@@ -151,7 +151,6 @@ export class AppStateService {
   sendPrompt(chatId: string, text: string | RichContentBlock[]): Promise<void> { return this.chatStore.sendPrompt(chatId, text); }
   cancelActiveTurn(chatId: string): Promise<void> { return this.chatStore.cancelActiveTurn(chatId); }
   stopChatProcess(chatId: string): Promise<void> { return this.chatStore.stopChatProcess(chatId); }
-  setChatPolicy(chatId: string, policy: PermissionPolicy): Promise<void> { return this.chatStore.setChatPolicy(chatId, policy); }
   renameChat(chatId: string, title: string): Promise<void> { return this.chatStore.renameChat(chatId, title); }
   archiveChat(chatId: string, archived: boolean): Promise<void> { return this.chatStore.archiveChat(chatId, archived); }
 
@@ -188,8 +187,8 @@ export class AppStateService {
     }
   }
 
-  respondPermission(chatId: string, requestId: string, granted: boolean): Promise<void> {
-    return this.chatStore.respondPermission(chatId, requestId, granted);
+  respondPermission(chatId: string, requestId: string, optionId: string): Promise<void> {
+    return this.chatStore.respondPermission(chatId, requestId, optionId);
   }
 
   loadChatCommands(chatId: string): Promise<void> { return this.chatStore.loadChatCommands(chatId); }

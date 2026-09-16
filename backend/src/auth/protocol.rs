@@ -336,7 +336,6 @@ pub struct ProtocolAuthFlow {
     client: tokio::sync::Mutex<Option<Arc<crate::acp::AcpClient>>>,
     interaction: StdMutex<Option<ProtocolAuthInteraction>>,
     authorization_captured: AtomicBool,
-    finished: AtomicBool,
 }
 
 impl ProtocolAuthFlow {
@@ -376,27 +375,26 @@ impl ProtocolAuthFlow {
     /// Ends the flow. The first caller wins, so a cancel racing success
     /// never overwrites the recorded outcome.
     pub fn finish(&self, state: ProtocolFlowState, reason: Option<String>) {
-        self.finished.store(true, Ordering::Release);
-        // Drop authorization URL, OAuth state, and callback target at every
-        // terminal transition, including cancellation and timeout.
+        // Keep the terminal transition and interaction cleanup in the same
+        // critical section as interaction installation. This prevents a
+        // capture which started before cancellation from restoring sensitive
+        // OAuth material after the flow is terminal.
+        let mut status = self
+            .status
+            .lock()
+            .expect("protocol auth status lock poisoned");
+        if status.state.is_finished() {
+            return;
+        }
+        // `WaitingForUser` is still unfinished; any finished state may
+        // replace it. A finished state never replaces another finished one.
+        status.state = state;
+        status.reason = reason;
+        status.completed_at = Some(Utc::now());
         self.interaction
             .lock()
             .expect("protocol auth interaction lock poisoned")
             .take();
-        {
-            let mut status = self
-                .status
-                .lock()
-                .expect("protocol auth status lock poisoned");
-            if status.state.is_finished() {
-                return;
-            }
-            // `WaitingForUser` is still unfinished; any finished state may
-            // replace it. A finished state never replaces another finished one.
-            status.state = state;
-            status.reason = reason;
-            status.completed_at = Some(Utc::now());
-        }
         let _ = self.status_tx.send(());
         tracing::info!(
             flow = %self.id,
@@ -432,26 +430,33 @@ impl ProtocolAuthFlow {
     }
 
     pub(crate) fn set_authorization_request(&self, request: AuthorizationRequest) -> bool {
-        if self.finished.load(Ordering::Acquire) {
-            return false;
-        }
-        if self
-            .authorization_captured
-            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
         {
-            return false;
+            // Hold status while installing the interaction so finish() cannot
+            // transition the flow and clear it between the terminal check and
+            // this write.
+            let status = self
+                .status
+                .lock()
+                .expect("protocol auth status lock poisoned");
+            if status.state.is_finished() {
+                return false;
+            }
+            if self
+                .authorization_captured
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                return false;
+            }
+            *self
+                .interaction
+                .lock()
+                .expect("protocol auth interaction lock poisoned") =
+                Some(ProtocolAuthInteraction {
+                    request,
+                    relaying: false,
+                });
         }
-        if self.finished.load(Ordering::Acquire) {
-            return false;
-        }
-        *self
-            .interaction
-            .lock()
-            .expect("protocol auth interaction lock poisoned") = Some(ProtocolAuthInteraction {
-            request,
-            relaying: false,
-        });
         self.note_waiting(true);
         true
     }
@@ -579,7 +584,6 @@ impl ProtocolAuthFlows {
             client: tokio::sync::Mutex::new(None),
             interaction: StdMutex::new(None),
             authorization_captured: AtomicBool::new(false),
-            finished: AtomicBool::new(false),
         });
         self.flows
             .lock()
@@ -814,6 +818,40 @@ mod tests {
         flow.finish(ProtocolFlowState::Succeeded, None);
         assert!(flow.interaction().is_none());
         assert!(!flow.set_authorization_request(parse_authorization_url(AUTH_URL).unwrap()));
+        flows.shutdown_all();
+    }
+
+    #[test]
+    fn authorization_capture_racing_finish_cannot_restore_interaction() {
+        let flows = ProtocolAuthFlows::new();
+        for _ in 0..1024 {
+            let flow = flows.create("demo", "oauth").unwrap();
+            let start = Arc::new(std::sync::Barrier::new(3));
+            std::thread::scope(|scope| {
+                let finish_flow = Arc::clone(&flow);
+                let finish_start = Arc::clone(&start);
+                scope.spawn(move || {
+                    finish_start.wait();
+                    finish_flow.finish(ProtocolFlowState::Cancelled, Some("race test".to_owned()));
+                });
+
+                let capture_flow = Arc::clone(&flow);
+                let capture_start = Arc::clone(&start);
+                scope.spawn(move || {
+                    capture_start.wait();
+                    let _ = capture_flow
+                        .set_authorization_request(parse_authorization_url(AUTH_URL).unwrap());
+                });
+
+                start.wait();
+            });
+
+            assert!(flow.state().is_finished());
+            assert!(
+                flow.interaction().is_none(),
+                "terminal flow retained an authorization interaction"
+            );
+        }
         flows.shutdown_all();
     }
 

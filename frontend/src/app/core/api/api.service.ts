@@ -439,6 +439,21 @@ export class ApiService {
     );
   }
 
+  fetchProtocolAuthInteraction(
+    flowId: string,
+  ): Promise<import('./types').ProtocolAuthInteraction | null> {
+    return this.request<import('./types').ProtocolAuthInteraction | null>(
+      `/api/protocol-auth/${encodeURIComponent(flowId)}/interaction`,
+    );
+  }
+
+  async relayProtocolAuthCallback(flowId: string, callbackUrl: string): Promise<void> {
+    await this.request(
+      `/api/protocol-auth/${encodeURIComponent(flowId)}/interaction/callback`,
+      { method: 'POST', body: { callback_url: callbackUrl } },
+    );
+  }
+
   /** The opaque flow id is the only value the browser sends to open the PTY. */
   agentAuthSocketUrl(flowId: string): string {
     const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';

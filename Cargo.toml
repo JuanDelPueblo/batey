@@ -61,6 +61,7 @@ reqwest = { version = "0.12", default-features = false, features = [
     "http2",
     "charset",
 ] }
+url = "2.5"
 
 # Registry archive integrity and extraction. The registry format allows
 # `.zip`, `.tar.gz`, `.tgz`, `.tar.bz2`, `.tbz2`, and raw binaries.

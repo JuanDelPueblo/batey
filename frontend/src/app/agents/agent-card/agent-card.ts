@@ -1,4 +1,4 @@
-import { Component, computed, input, output } from '@angular/core';
+import { Component, computed, input, output, signal } from '@angular/core';
 import { MatButtonModule } from '@angular/material/button';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
@@ -12,6 +12,7 @@ import type {
   ObservedAuthState,
   ProtocolAuthElicitation,
   ProtocolAuthFlow,
+  ProtocolAuthInteraction,
 } from '../../core/api/types';
 
 @Component({
@@ -32,6 +33,7 @@ export class AgentCardComponent {
   readonly authError = input<string | null>(null);
   readonly protocolFlow = input<ProtocolAuthFlow | null>(null);
   readonly protocolElicitations = input<ProtocolAuthElicitation[]>([]);
+  readonly protocolInteraction = input<ProtocolAuthInteraction | null>(null);
   readonly protocolLoading = input(false);
   readonly terminalFlow = input<AgentAuthFlow | null>(null);
 
@@ -42,6 +44,7 @@ export class AgentCardComponent {
   readonly cancelProtocol = output<void>();
   readonly dismissProtocol = output<void>();
   readonly respondElicitation = output<{ id: string; action: string }>();
+  readonly relayCallback = output<string>();
   readonly resumeTerminal = output<string>();
   readonly cancelTerminal = output<void>();
   readonly edit = output<void>();
@@ -50,6 +53,7 @@ export class AgentCardComponent {
   readonly uninstall = output<void>();
   readonly environment = output<void>();
   readonly retryAuth = output<void>();
+  readonly callbackDraft = signal('');
 
   readonly mutability = computed<AgentMutability>(() => {
     const agent = this.agent();
@@ -110,6 +114,11 @@ export class AgentCardComponent {
     } catch {
       return '';
     }
+  }
+
+  submitCallback(): void {
+    const callback = this.callbackDraft().trim();
+    if (callback) this.relayCallback.emit(callback);
   }
 
   sourceLabel(source: string): string {

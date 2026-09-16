@@ -7,7 +7,7 @@
 use super::{HubService, ServiceError, ServiceResult};
 use crate::auth::{
     AgentAuthError, AgentAuthRefreshView, AgentAuthView, ProtocolAuthFlowView,
-    ProtocolElicitationView, TerminalAuthFlow, TerminalAuthFlowView,
+    ProtocolAuthInteractionView, ProtocolElicitationView, TerminalAuthFlow, TerminalAuthFlowView,
 };
 use std::sync::Arc;
 
@@ -99,6 +99,24 @@ impl HubService {
         flow_id: &str,
     ) -> ServiceResult<Vec<ProtocolElicitationView>> {
         Ok(self.agent_auth.protocol_elicitations(flow_id).await?)
+    }
+
+    pub fn protocol_auth_interaction(
+        &self,
+        flow_id: &str,
+    ) -> ServiceResult<Option<ProtocolAuthInteractionView>> {
+        Ok(self.agent_auth.protocol_interaction(flow_id)?)
+    }
+
+    pub async fn relay_protocol_auth_callback(
+        &self,
+        flow_id: &str,
+        callback_url: &str,
+    ) -> ServiceResult<()> {
+        Ok(self
+            .agent_auth
+            .relay_protocol_callback(flow_id, callback_url)
+            .await?)
     }
 
     pub async fn respond_protocol_auth_elicitation(

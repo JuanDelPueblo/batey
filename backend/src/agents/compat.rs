@@ -32,13 +32,22 @@ pub const ANTIGRAVITY_REGISTRY_ID: &str = "antigravity-acp";
 /// Official Registry id for OpenCode (binary install reference).
 pub const OPENCODE_REGISTRY_ID: &str = "opencode";
 
-/// Headless warning shown alongside Antigravity authentication methods.
-///
-/// Scoped to the method, not the whole agent, so API-key auth through
-/// `GEMINI_API_KEY` still reads as usable. No fixed port is named because
-/// upstream chooses the localhost callback port dynamically. Batey does not
-/// implement Google OAuth.
-pub const ANTIGRAVITY_AUTH_WARNING: &str = "Upstream Antigravity sign-in may need a browser or a localhost callback that ACP does not expose in a fully remote-friendly way. API-key auth still works when GEMINI_API_KEY is set for this agent. One-time interactive workaround: run the login inside this same persistent Batey environment, use the upstream remote/SSH-friendly flow when the tool offers one, forward or publish the localhost callback port shown by the tool to the machine running the browser, and keep /data persistent so the credentials survive container recreation.";
+/// Compatibility activated for a protocol auth flow. The plumbing is generic;
+/// this module is the only place that decides which Registry id opts in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProtocolAuthCompatibility {
+    pub intercept_browser: bool,
+    pub capture_auth_stderr_url: bool,
+}
+
+/// Returns the compatibility path for one official Registry id. A catalog
+/// alias, display name, or custom agent never matches this function.
+pub fn protocol_auth_compatibility(registry_id: Option<&str>) -> Option<ProtocolAuthCompatibility> {
+    (registry_id == Some(ANTIGRAVITY_REGISTRY_ID)).then_some(ProtocolAuthCompatibility {
+        intercept_browser: true,
+        capture_auth_stderr_url: true,
+    })
+}
 
 /// Headless environment defaults for one Registry id and process scope.
 ///
@@ -67,22 +76,6 @@ pub fn auth_env_defaults(
         _ => {}
     }
     out
-}
-
-/// Scoped compatibility warning for one advertised method.
-///
-/// Returns `Some` only for the relevant method(s) of a known agent. The
-/// caller stores it on the method view so the UI shows it next to that
-/// method rather than marking the whole agent broken.
-pub fn method_warning(
-    registry_id: Option<&str>,
-    _method_id: &str,
-    _method_type: &str,
-) -> Option<String> {
-    match registry_id {
-        Some(id) if id == ANTIGRAVITY_REGISTRY_ID => Some(ANTIGRAVITY_AUTH_WARNING.to_string()),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -118,19 +111,22 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_warns_per_method() {
-        let warning = method_warning(Some(ANTIGRAVITY_REGISTRY_ID), "any", "agent").unwrap();
-        assert!(warning.contains("localhost"));
-        assert!(warning.contains("GEMINI_API_KEY"));
-        // No fixed callback port is named, because upstream chooses it.
-        assert!(!warning.contains("8080"));
-        assert!(warning.contains("port shown by the tool"));
+    fn antigravity_protocol_compatibility_is_registry_scoped() {
+        assert_eq!(
+            protocol_auth_compatibility(Some(ANTIGRAVITY_REGISTRY_ID)),
+            Some(ProtocolAuthCompatibility {
+                intercept_browser: true,
+                capture_auth_stderr_url: true,
+            })
+        );
+        assert!(protocol_auth_compatibility(Some("Antigravity")).is_none());
+        assert!(protocol_auth_compatibility(None).is_none());
     }
 
     #[test]
-    fn other_agents_have_no_warning() {
-        assert!(method_warning(Some(CODEX_REGISTRY_ID), "m", "agent").is_none());
-        assert!(method_warning(Some(COPILOT_REGISTRY_ID), "m", "terminal").is_none());
-        assert!(method_warning(None, "m", "agent").is_none());
+    fn other_agents_have_no_protocol_compatibility() {
+        assert!(protocol_auth_compatibility(Some(CODEX_REGISTRY_ID)).is_none());
+        assert!(protocol_auth_compatibility(Some(COPILOT_REGISTRY_ID)).is_none());
+        assert!(protocol_auth_compatibility(None).is_none());
     }
 }

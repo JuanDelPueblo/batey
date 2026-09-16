@@ -152,8 +152,6 @@ export interface AgentAuthMethod {
   type: string;
   description?: string | null;
   supported: boolean;
-  /** Scoped headless compatibility warning for this method, when provided. */
-  warning?: string | null;
 }
 
 export type ObservedAuthState = 'unknown' | 'authentication_required' | 'authenticated';
@@ -247,6 +245,13 @@ export interface ProtocolAuthElicitation {
   url?: string | null;
   elicitation_id?: string | null;
   tool_call_id?: string | null;
+}
+
+/** Ephemeral browser interaction for one live protocol auth flow. */
+export interface ProtocolAuthInteraction {
+  type: 'browser';
+  url: string;
+  manual_callback: boolean;
 }
 
 export interface AgentAuthFlow {

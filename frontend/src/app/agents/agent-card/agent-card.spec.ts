@@ -250,7 +250,7 @@ describe('AgentCardComponent', () => {
     expect(text).toContain('Sign in');
   });
 
-  it('shows a scoped method warning without marking the whole agent broken', () => {
+  it('does not render the removed compatibility warning field', () => {
     render(summary('builtin'), {
       agent_id: 'x',
       logout_supported: false,
@@ -264,12 +264,11 @@ describe('AgentCardComponent', () => {
           name: 'Interactive sign-in',
           type: 'agent',
           supported: true,
-          warning: 'May need a localhost callback. API-key auth still works.',
         },
       ],
     });
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('May need a localhost callback');
+    expect(text).not.toContain('compatibility warning');
     expect(text).toContain('Interactive sign-in');
   });
 

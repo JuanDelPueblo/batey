@@ -34,6 +34,7 @@ export class AppStateService {
   readonly authErrors = this.agentStore.authErrors;
   readonly protocolFlowsByAgent = this.agentStore.protocolFlowsByAgent;
   readonly protocolElicitationsByFlow = this.agentStore.protocolElicitationsByFlow;
+  readonly protocolInteractionsByFlow = this.agentStore.protocolInteractionsByFlow;
   readonly protocolLoading = this.agentStore.protocolLoading;
   readonly terminalFlowsByAgent = this.agentStore.terminalFlowsByAgent;
   readonly loadingProjects = this.projectStore.loading;
@@ -121,6 +122,7 @@ export class AppStateService {
   setProtocolFlowFromActive(id: string, active: import('../core/api/types').ActiveAuthFlow) { return this.agentStore.setProtocolFlowFromActive(id, active); }
   refreshProtocolAgentAuth(agentId: string, flowId: string) { return this.agentStore.refreshProtocolFlow(agentId, flowId); }
   cancelProtocolAgentAuth(agentId: string, flowId: string) { return this.agentStore.cancelProtocolAuth(agentId, flowId); }
+  relayProtocolAuthCallback(flowId: string, callbackUrl: string) { return this.agentStore.relayProtocolCallback(flowId, callbackUrl); }
   clearProtocolAgentAuth(agentId: string) { return this.agentStore.clearProtocolFlow(agentId); }
   respondProtocolElicitation(flowId: string, id: string, action: string, content?: unknown) { return this.agentStore.respondProtocolElicitation(flowId, id, action, content); }
   clearAuthRequired(chatId: string): void { this.chatStore.clearAuthRequired(chatId); }

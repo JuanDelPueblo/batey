@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{ChildStderr, ChildStdin, ChildStdout};
+use tokio::sync::mpsc::UnboundedSender;
 
 #[cfg(not(windows))]
 use process_wrap::tokio::{KillOnDrop, ProcessGroup, TokioCommandWrap};
@@ -122,16 +123,20 @@ impl AcpProcess {
 /// What one ACP process may write to the server log through stderr.
 ///
 /// Ordinary chat agents use `Log`, because their diagnostics help an
-/// operator. Authentication processes use `Discard`: their stderr frequently
-/// carries device codes, URLs, tokens, or other credentials, and that
-/// material must never reach the log. `Discard` keeps draining the pipe, so
-/// the child never blocks on a full stderr buffer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// operator. Authentication processes use `Discard` by default: their stderr
+/// frequently carries device codes, URLs, tokens, or other credentials, and
+/// that material must never reach the log. The compatibility capture mode is
+/// an exception only for its narrowly recognized URL candidate; `Discard`
+/// keeps draining the pipe, so the child never blocks on a full stderr buffer.
+#[derive(Debug, Clone)]
 pub enum StderrPolicy {
     /// Log every non-empty stderr line at warning level.
     Log,
     /// Drain stderr but never log a line from it.
     Discard,
+    /// Drain stderr and forward only a narrowly recognized HTTPS OAuth URL
+    /// candidate. All other stderr remains discard-only.
+    CaptureAuthUrl(UnboundedSender<String>),
 }
 
 /// How many of the most recent stderr lines `StderrTail` keeps, and how much
@@ -145,8 +150,8 @@ const STDERR_TAIL_MAX_LINE_CHARS: usize = 200;
 /// It exists so a connection that closes before ACP initialization completes
 /// (for example, a native module failing to load its shared libraries) can
 /// report *why* instead of a bare "connection closed". It is never populated
-/// for `StderrPolicy::Discard` processes (authentication), so no
-/// credential-bearing stderr is retained here, matching the same rule
+/// for authentication processes, which use `Discard` or `CaptureAuthUrl`, so
+/// no credential-bearing stderr is retained here, matching the same rule
 /// `drain_stderr` already applies to the log itself.
 #[derive(Clone, Default)]
 pub struct StderrTail(std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>);
@@ -201,6 +206,11 @@ pub async fn drain_stderr(
                     }
                     // The line may be a credential. Drop it entirely.
                     StderrPolicy::Discard => {}
+                    StderrPolicy::CaptureAuthUrl(ref sender) => {
+                        if let Some(url) = auth_url_candidate(trimmed) {
+                            let _ = sender.send(url);
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -209,6 +219,37 @@ pub async fn drain_stderr(
             }
         }
     }
+}
+
+/// Finds only a URL-shaped token that advertises both OAuth parameters used by
+/// the compatibility flow. This deliberately does not retain generic URLs,
+/// tokens, device codes, stack traces, or arbitrary stderr text.
+fn auth_url_candidate(line: &str) -> Option<String> {
+    for token in line.split_whitespace() {
+        let candidate = token.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\'' | '`' | '(' | ')' | '[' | ']' | '<' | '>' | ','
+            )
+        });
+        if !candidate.starts_with("https://") {
+            continue;
+        }
+        let parsed = match url::Url::parse(candidate) {
+            Ok(url) => url,
+            Err(_) => continue,
+        };
+        let mut has_redirect = false;
+        let mut has_state = false;
+        for (name, _) in parsed.query_pairs() {
+            has_redirect |= name == "redirect_uri";
+            has_state |= name == "state";
+        }
+        if has_redirect && has_state {
+            return Some(candidate.to_owned());
+        }
+    }
+    None
 }
 
 #[cfg(all(test, unix))]
@@ -283,6 +324,27 @@ mod stderr_policy_tests {
             !logged.contains(SECRET),
             "discarded stderr reached the log: {logged}"
         );
+    }
+
+    #[test]
+    fn auth_stderr_capture_accepts_only_oauth_url_candidates() {
+        let valid = "https://accounts.example.test/authorize?redirect_uri=http%3A%2F%2F127.0.0.1%3A43123%2Fcallback&state=opaque";
+        assert_eq!(
+            auth_url_candidate(&format!("opening {valid}")),
+            Some(valid.into())
+        );
+        for line in [
+            "device code: ABCD-EFGH",
+            "https://accounts.example.test/help",
+            "panic: bearer-token-secret",
+            "not-a-url https://accounts.example.test/authorize?state=opaque",
+        ] {
+            assert_eq!(
+                auth_url_candidate(line),
+                None,
+                "captured unrelated stderr: {line}"
+            );
+        }
     }
 
     /// Ordinary chat-agent stderr keeps reaching the log, so the discard

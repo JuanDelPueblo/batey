@@ -691,11 +691,10 @@ describe('fake backend seed history', () => {
     assert.equal(serialized.includes('ABCD-1234'), false);
   });
 
-  it('scopes the antigravity headless warning to its own method', () => {
+  it('does not expose the removed antigravity warning', () => {
     const state = new FakeState();
     const anti = state.agentAuth('antigravity');
-    assert.ok(anti.methods[0].warning.includes('localhost'));
-    assert.ok(anti.methods[0].warning.includes('GEMINI_API_KEY'));
+    assert.equal(anti.methods[0].warning, undefined);
     const codex = state.agentAuth('codex');
     assert.ok(codex.methods.every((method) => method.warning === undefined));
   });

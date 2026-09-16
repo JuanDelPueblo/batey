@@ -129,6 +129,26 @@
               </div>
             }
           }
+          @if (protocolInteraction(); as interaction) {
+            <div class="browser-interaction" role="group" aria-label="Browser sign-in">
+              <p class="auth-hint">Complete sign-in in your browser. If it ends at an unreachable localhost callback, paste the final address here.</p>
+              <p><a [href]="interaction.url" target="_blank" rel="noopener noreferrer">Open sign-in page</a></p>
+              <label class="callback-label">
+                Final callback address
+                <input
+                  type="url"
+                  autocomplete="off"
+                  spellcheck="false"
+                  placeholder="http://localhost:…"
+                  [value]="callbackDraft()"
+                  (input)="callbackDraft.set($any($event.target).value)"
+                />
+              </label>
+              <button mat-flat-button type="button" (click)="submitCallback()" [disabled]="!callbackDraft().trim()">
+                Send callback
+              </button>
+            </div>
+          }
           @if (protocolElicitations().length > 0) {
             <div class="elicitations" role="group" aria-label="Sign-in action required">
               @for (elicitation of protocolElicitations(); track elicitation.id) {
@@ -181,7 +201,6 @@
                   <span class="method-type">{{ typeLabel }}</span>
                 }
                 @if (method.description) { <span class="method-description">{{ method.description }}</span> }
-                @if (method.warning) { <span class="method-warning" role="note">{{ method.warning }}</span> }
               </div>
               <div class="method-action">
                 @if (!method.supported) {

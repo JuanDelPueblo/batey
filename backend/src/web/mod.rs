@@ -256,6 +256,14 @@ pub fn router(state: AppState) -> Router {
             get(agent_auth::protocol_auth_elicitations),
         )
         .route(
+            "/api/protocol-auth/:flow_id/interaction",
+            get(agent_auth::protocol_auth_interaction),
+        )
+        .route(
+            "/api/protocol-auth/:flow_id/interaction/callback",
+            post(agent_auth::relay_protocol_auth_callback),
+        )
+        .route(
             "/api/protocol-auth/:flow_id/elicitations/:eid/respond",
             post(agent_auth::respond_protocol_auth_elicitation),
         )

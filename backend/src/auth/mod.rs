@@ -25,8 +25,10 @@ pub use flow::{
     MAX_SCROLLBACK_BYTES,
 };
 pub use protocol::{
-    ProtocolAuthFlow, ProtocolAuthFlowView, ProtocolAuthFlows, ProtocolFlowState,
-    MAX_ACTIVE_PROTOCOL_FLOWS, MAX_ACTIVE_PROTOCOL_FLOWS_PER_AGENT, MAX_PROTOCOL_FLOW_LIFETIME,
+    parse_authorization_url, AuthUrlError, AuthorizationRequest, ProtocolAuthFlow,
+    ProtocolAuthFlowView, ProtocolAuthFlows, ProtocolAuthInteractionView, ProtocolFlowState,
+    MAX_ACTIVE_PROTOCOL_FLOWS, MAX_ACTIVE_PROTOCOL_FLOWS_PER_AGENT, MAX_AUTH_URL_BYTES,
+    MAX_PROTOCOL_FLOW_LIFETIME,
 };
 pub use pty::{PtyCommand, PtyWindow, TERMINAL_AUTH_SUPPORTED};
 pub use service::{

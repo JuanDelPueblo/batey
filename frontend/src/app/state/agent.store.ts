@@ -12,6 +12,7 @@ import type {
   InstallRegistryAgentInput,
   ProtocolAuthElicitation,
   ProtocolAuthFlow,
+  ProtocolAuthInteraction,
   RegistryCatalog,
   RemoveOutcome,
   UpdateOutcome,
@@ -50,6 +51,7 @@ export class AgentStore {
   readonly authErrors = signal<ErrorMap>({});
   readonly protocolFlowsByAgent = signal<Record<string, ProtocolAuthFlow>>({});
   readonly protocolElicitationsByFlow = signal<Record<string, ProtocolAuthElicitation[]>>({});
+  readonly protocolInteractionsByFlow = signal<Record<string, ProtocolAuthInteraction | null>>({});
   readonly protocolLoading = signal<ReadonlySet<string>>(new Set());
   readonly terminalFlowsByAgent = signal<Record<string, AgentAuthFlow>>({});
 
@@ -298,11 +300,15 @@ export class AgentStore {
     const flow = await this.api.fetchProtocolAuthFlow(flowId);
     this.protocolFlowsByAgent.update((current) => ({ ...current, [agentId]: flow }));
     try {
-      const elicitations = await this.api.fetchProtocolAuthElicitations(flowId);
+      const [elicitations, interaction] = await Promise.all([
+        this.api.fetchProtocolAuthElicitations(flowId),
+        this.api.fetchProtocolAuthInteraction(flowId),
+      ]);
       this.protocolElicitationsByFlow.update((current) => ({
         ...current,
         [flowId]: elicitations ?? [],
       }));
+      this.protocolInteractionsByFlow.update((current) => ({ ...current, [flowId]: interaction }));
     } catch {
       // A missing elicitation list never hides the flow state.
     }
@@ -315,6 +321,7 @@ export class AgentStore {
   async cancelProtocolAuth(agentId: string, flowId: string): Promise<ProtocolAuthFlow> {
     const flow = await this.api.cancelProtocolAuthFlow(flowId);
     this.protocolFlowsByAgent.update((current) => ({ ...current, [agentId]: flow }));
+    this.protocolInteractionsByFlow.update((current) => ({ ...current, [flowId]: null }));
     return flow;
   }
 
@@ -325,6 +332,21 @@ export class AgentStore {
       delete next[agentId];
       return next;
     });
+  }
+
+  protocolInteractionFor(flowId: string): ProtocolAuthInteraction | null {
+    return this.protocolInteractionsByFlow()[flowId] ?? null;
+  }
+
+  async relayProtocolCallback(flowId: string, callbackUrl: string): Promise<void> {
+    await this.api.relayProtocolAuthCallback(flowId, callbackUrl);
+    await this.refreshProtocolFlowForId(flowId);
+  }
+
+  private async refreshProtocolFlowForId(flowId: string): Promise<void> {
+    const flow = Object.values(this.protocolFlowsByAgent()).find((candidate) => candidate.flow_id === flowId);
+    if (!flow) return;
+    await this.refreshProtocolFlow(flow.agent_id, flowId);
   }
 
   /** Seeds a recovered protocol flow from the safe active-flow discovery. */

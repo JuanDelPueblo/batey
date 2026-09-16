@@ -43,7 +43,9 @@
 .method-name { font: var(--mat-sys-title-small); }
 .method-type, .method-description, .auth-hint { color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-body-small); }
 .method-type { font: var(--mat-sys-label-small); }
-.method-warning { margin-top: 4px; color: var(--mat-sys-tertiary); font: var(--mat-sys-label-small); }
+.browser-interaction { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--mat-sys-outline-variant); border-radius: 12px; }
+.callback-label { display: grid; gap: 4px; font: var(--mat-sys-label-medium); }
+.callback-label input { min-height: 40px; padding: 0 10px; color: var(--mat-sys-on-surface); background: var(--mat-sys-surface); border: 1px solid var(--mat-sys-outline); border-radius: 4px; font: var(--mat-sys-body-medium); }
 .elicitation { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--mat-sys-corner-medium); background: var(--mat-sys-surface-container-high); }
 .elicitation-message, .url-line, .url-warning { margin: 0; font: var(--mat-sys-body-small); overflow-wrap: anywhere; }
 .url-warning { color: var(--mat-sys-tertiary); }

@@ -135,7 +135,6 @@ export const AUTH_METHODS = {
         type: 'agent',
         description: 'Complete the interactive step, or set GEMINI_API_KEY for API-key auth.',
         supported: true,
-        warning: 'Upstream Antigravity sign-in may need a browser or a localhost callback that ACP does not expose in a fully remote-friendly way. API-key auth still works when GEMINI_API_KEY is set for this agent. One-time interactive workaround: run the login inside this same persistent Batey environment, use the upstream remote/SSH-friendly flow when the tool offers one, forward or publish the localhost callback port shown by the tool to the machine running the browser, and keep /data persistent so the credentials survive container recreation.',
       },
     ],
   },

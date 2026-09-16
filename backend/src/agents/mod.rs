@@ -15,7 +15,7 @@ mod manager;
 pub mod registry;
 
 pub use compat::{
-    auth_env_defaults, method_warning, AuthEnvScope, ANTIGRAVITY_AUTH_WARNING,
+    auth_env_defaults, protocol_auth_compatibility, AuthEnvScope, ProtocolAuthCompatibility,
     ANTIGRAVITY_REGISTRY_ID, CODEX_REGISTRY_ID, COPILOT_REGISTRY_ID, OPENCODE_REGISTRY_ID,
 };
 

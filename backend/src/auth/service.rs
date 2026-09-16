@@ -17,7 +17,8 @@ use super::flow::{
     SuccessHook, TerminalAuthFlow, TerminalAuthFlowView, TerminalAuthFlows, TerminalFlowState,
 };
 use super::protocol::{
-    ProtocolAuthFlow, ProtocolAuthFlowView, ProtocolAuthFlows, ProtocolFlowState,
+    parse_authorization_url, ProtocolAuthFlow, ProtocolAuthFlowView, ProtocolAuthFlows,
+    ProtocolAuthInteractionView, ProtocolFlowState,
 };
 use super::pty::{PtyCommand, TERMINAL_AUTH_SUPPORTED};
 use crate::acp::auth::{
@@ -34,6 +35,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
+use tokio::io::AsyncReadExt;
+use tokio::net::TcpListener;
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
 /// How long one probe may take, including process start and `initialize`.
 const PROBE_TIMEOUT: Duration = Duration::from_secs(90);
@@ -51,6 +55,60 @@ const AUTH_CACHE_STALE_AFTER_HOURS: i64 = 24;
 /// states what Batey observed and why the method may need a browser or an
 /// interactive environment that the agent did not expose through ACP.
 pub const PROTOCOL_TIMEOUT_REASON: &str = "The agent did not complete authentication before the timeout. This method may require a browser or interactive environment that the agent did not expose through ACP.";
+/// Safe failure text for a compatibility URL that could not be validated.
+const INVALID_AUTH_URL_REASON: &str =
+    "The agent provided an authentication URL that Batey could not validate.";
+const AUTH_BROWSER_ADDR_ENV: &str = "BATEY_AUTH_BROWSER_CAPTURE_ADDR";
+const AUTH_BROWSER_TOKEN_ENV: &str = "BATEY_AUTH_BROWSER_CAPTURE_TOKEN";
+
+struct BrowserCapture {
+    addr: std::net::SocketAddr,
+    token: String,
+    task: tokio::task::JoinHandle<()>,
+}
+
+async fn start_browser_capture(sender: UnboundedSender<String>) -> Option<BrowserCapture> {
+    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+        .await
+        .ok()?;
+    let addr = listener.local_addr().ok()?;
+    let token = uuid::Uuid::new_v4().simple().to_string();
+    let expected_token = token.clone();
+    let task = tokio::spawn(async move {
+        let Ok((stream, _)) = listener.accept().await else {
+            return;
+        };
+        let mut bytes = Vec::new();
+        let limit = (crate::auth::MAX_AUTH_URL_BYTES + 256) as u64;
+        if stream.take(limit).read_to_end(&mut bytes).await.is_err()
+            || bytes.len() > crate::auth::MAX_AUTH_URL_BYTES + 256
+        {
+            return;
+        }
+        let Ok(message) = String::from_utf8(bytes) else {
+            return;
+        };
+        let mut lines = message.splitn(2, '\n');
+        if lines.next() != Some(expected_token.as_str()) {
+            return;
+        }
+        if let Some(url) = lines.next().map(str::trim).filter(|url| !url.is_empty()) {
+            let _ = sender.send(url.to_owned());
+        }
+    });
+    Some(BrowserCapture { addr, token, task })
+}
+
+async fn next_capture(rx: &mut UnboundedReceiver<String>, enabled: bool) -> Option<String> {
+    if !enabled {
+        std::future::pending().await
+    } else {
+        match rx.recv().await {
+            Some(value) => Some(value),
+            None => std::future::pending().await,
+        }
+    }
+}
 
 /// A failure of an authentication operation, in transport-neutral terms.
 #[derive(Debug)]
@@ -105,10 +163,6 @@ pub struct AuthMethodView {
     pub method_type: String,
     /// Whether this build can run the method.
     pub supported: bool,
-    /// Scoped headless compatibility warning for this method, when the
-    /// dedicated compatibility layer provides one. Never agent-wide.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub warning: Option<String>,
 }
 
 /// Safe backend representation of one active unfinished auth flow.
@@ -212,7 +266,6 @@ impl AgentAuthView {
         entry: Option<&AuthCacheEntry>,
         just_probed_discovery: bool,
         just_probed_observed: bool,
-        registry_id: Option<&str>,
         active_flow: Option<ActiveAuthFlowView>,
     ) -> Self {
         let data = entry.map(|entry| &entry.data);
@@ -229,11 +282,6 @@ impl AgentAuthView {
                             description: method.description.clone(),
                             method_type: method.method_type.clone(),
                             supported: method.supported,
-                            warning: crate::agents::method_warning(
-                                registry_id,
-                                &method.id,
-                                &method.method_type,
-                            ),
                         })
                         .collect()
                 })
@@ -417,14 +465,12 @@ impl AgentAuthService {
             )));
         }
         let entry = self.cache_entry(agent_id);
-        let registry_id = self.registry_id_for(agent_id);
         let active_flow = self.active_flow_for(agent_id);
         Ok(AgentAuthView::build(
             agent_id,
             entry.as_ref(),
             false,
             false,
-            registry_id.as_deref(),
             active_flow,
         ))
     }
@@ -486,17 +532,9 @@ impl AgentAuthService {
             Err(message) => (false, Some(message)),
         };
 
-        let registry_id = self.registry_id_for(agent_id);
         let active_flow = self.active_flow_for(agent_id);
         let entry = self.cache_entry(agent_id);
-        let auth = AgentAuthView::build(
-            agent_id,
-            entry.as_ref(),
-            just_probed,
-            false,
-            registry_id.as_deref(),
-            active_flow,
-        );
+        let auth = AgentAuthView::build(agent_id, entry.as_ref(), just_probed, false, active_flow);
         Ok(AgentAuthRefreshView {
             auth,
             refresh_error,
@@ -901,6 +939,62 @@ impl AgentAuthService {
             .collect())
     }
 
+    /// Returns the private browser interaction for a live flow. This is not
+    /// part of the ordinary auth or flow view and is available only through
+    /// the authenticated, flow-scoped endpoint.
+    pub fn protocol_interaction(
+        &self,
+        flow_id: &str,
+    ) -> AuthResult<Option<ProtocolAuthInteractionView>> {
+        Ok(self.protocol_flow(flow_id)?.interaction())
+    }
+
+    /// Relays a browser's final loopback callback to the already validated
+    /// endpoint captured by this flow. The submitted URL is never logged,
+    /// persisted, or included in an error.
+    pub async fn relay_protocol_callback(
+        &self,
+        flow_id: &str,
+        callback_url: &str,
+    ) -> AuthResult<()> {
+        let flow = self.protocol_flow(flow_id)?;
+        let target = flow
+            .begin_callback(callback_url)
+            .map_err(|error| AgentAuthError::Invalid(error.to_string()))?;
+        let client = match reqwest::Client::builder()
+            // The destination was derived from the captured loopback request;
+            // never let environment proxy settings turn this into a remote
+            // request or an SSRF primitive.
+            .no_proxy()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(15))
+            .build()
+        {
+            Ok(client) => client,
+            Err(_) => {
+                flow.finish_callback(false);
+                return Err(AgentAuthError::Unavailable(
+                    "Batey could not prepare the authentication callback relay".into(),
+                ));
+            }
+        };
+        let result = client.get(target).send().await;
+        match result {
+            Ok(response) if response.status().is_success() => {
+                // Dropping the response without reading its body is
+                // intentional: callback pages can contain secrets.
+                flow.finish_callback(true);
+                Ok(())
+            }
+            Ok(_) | Err(_) => {
+                flow.finish_callback(false);
+                Err(AgentAuthError::Unavailable(
+                    "The authentication callback could not be relayed to the agent".into(),
+                ))
+            }
+        }
+    }
+
     pub async fn respond_protocol_elicitation(
         &self,
         flow_id: &str,
@@ -934,8 +1028,30 @@ impl AgentAuthService {
             let agent_id = flow.agent_id.clone();
             let method_id = flow.method_id.clone();
             let deadline = tokio::time::Instant::now() + service.protocol_flows.max_lifetime();
+            let compatibility = crate::agents::protocol_auth_compatibility(
+                service.registry_id_for(&agent_id).as_deref(),
+            );
+            // Keep even standard elicitation URLs in a flow-lifetime log;
+            // never retain them in the service-wide probe ring.
+            let flow_events = Arc::new(EventLog::new(PROBE_EVENT_CAPACITY));
+            let (capture_tx, mut capture_rx) = mpsc::unbounded_channel();
+            let browser_capture = if compatibility.is_some_and(|c| c.intercept_browser) {
+                start_browser_capture(capture_tx.clone()).await
+            } else {
+                None
+            };
             // Connect first; a connect failure ends the flow as failed.
-            let client = match service.connect_for_protocol(&agent_id, &flow.id).await {
+            let client = match service
+                .connect_for_protocol(
+                    &agent_id,
+                    &flow.id,
+                    compatibility.is_some_and(|c| c.capture_auth_stderr_url),
+                    capture_tx.clone(),
+                    browser_capture.as_ref(),
+                    flow_events,
+                )
+                .await
+            {
                 Ok(client) => {
                     let client = Arc::new(client);
                     flow.set_client(client.clone()).await;
@@ -943,6 +1059,9 @@ impl AgentAuthService {
                 }
                 Err(error) => {
                     flow.finish(ProtocolFlowState::Failed, Some(error.to_string()));
+                    if let Some(capture) = browser_capture.as_ref() {
+                        capture.task.abort();
+                    }
                     return;
                 }
             };
@@ -960,6 +1079,9 @@ impl AgentAuthService {
                                 service.note_authenticated(&agent_id);
                                 flow.finish(ProtocolFlowState::Succeeded, None);
                                 client.shutdown().await;
+                                if let Some(capture) = browser_capture.as_ref() {
+                                    capture.task.abort();
+                                }
                                 // Refresh stopped sessions and probe fresh
                                 // state, like a terminal success does.
                                 if let Err(error) = service.refresh_after_change(&agent_id, true).await {
@@ -970,15 +1092,20 @@ impl AgentAuthService {
                                     );
                                 }
                             }
-                            Err(error) => {
+                            Err(_error) => {
                                 // A cancel that raced success never overwrites:
                                 // `finish` keeps the first outcome.
                                 if flow.state().is_finished() {
                                     client.shutdown().await;
                                 } else {
-                                    let message = error.to_string();
-                                    flow.finish(ProtocolFlowState::Failed, Some(message));
+                                    flow.finish(
+                                        ProtocolFlowState::Failed,
+                                        Some("The agent rejected authentication.".into()),
+                                    );
                                     client.shutdown().await;
+                                }
+                                if let Some(capture) = browser_capture.as_ref() {
+                                    capture.task.abort();
                                 }
                             }
                         }
@@ -991,10 +1118,16 @@ impl AgentAuthService {
                         );
                         client.callback_handler().cancel_pending_elicitations().await;
                         client.shutdown().await;
+                        if let Some(capture) = browser_capture.as_ref() {
+                            capture.task.abort();
+                        }
                         return;
                     }
                     _ = tokio::time::sleep(poll) => {
                         if flow.state().is_finished() {
+                            if let Some(capture) = browser_capture.as_ref() {
+                                capture.task.abort();
+                            }
                             return;
                         }
                         // Surface request-scoped elicitations as an explicit
@@ -1011,6 +1144,24 @@ impl AgentAuthService {
                             flow.note_waiting(true);
                         }
                     }
+                    captured = next_capture(&mut capture_rx, compatibility.is_some()) => {
+                        let Some(captured) = captured else { continue; };
+                        match parse_authorization_url(&captured) {
+                            Ok(request) => flow.set_authorization_request(request),
+                            Err(_) => {
+                                flow.finish(
+                                    ProtocolFlowState::Failed,
+                                    Some(INVALID_AUTH_URL_REASON.into()),
+                                );
+                                client.callback_handler().cancel_pending_elicitations().await;
+                                client.shutdown().await;
+                                if let Some(capture) = browser_capture.as_ref() {
+                                    capture.task.abort();
+                                }
+                                return;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -1018,10 +1169,27 @@ impl AgentAuthService {
 
     /// Starts one agent process for a protocol flow, with a flow-scoped
     /// session id so its elicitations never mix with chat elicitations.
-    async fn connect_for_protocol(&self, agent_id: &str, flow_id: &str) -> AuthResult<AcpClient> {
+    async fn connect_for_protocol(
+        &self,
+        agent_id: &str,
+        flow_id: &str,
+        capture_stderr_url: bool,
+        capture_tx: UnboundedSender<String>,
+        browser_capture: Option<&BrowserCapture>,
+        event_log: Arc<EventLog>,
+    ) -> AuthResult<AcpClient> {
         let runtime = self.runtime(agent_id)?;
         let cwd = self.work_dir()?;
-        let env = self.agent_env(&runtime, crate::agents::AuthEnvScope::Auth);
+        let mut env = self.agent_env(&runtime, crate::agents::AuthEnvScope::Auth);
+        if let Some(capture) = browser_capture {
+            if !self.agent_env_overrides(agent_id).contains_key("BROWSER") {
+                if let Ok(executable) = std::env::current_exe() {
+                    env.insert("BROWSER".into(), executable.to_string_lossy().into_owned());
+                    env.insert(AUTH_BROWSER_ADDR_ENV.into(), capture.addr.to_string());
+                    env.insert(AUTH_BROWSER_TOKEN_ENV.into(), capture.token.clone());
+                }
+            }
+        }
         let client = tokio::time::timeout(
             PROBE_TIMEOUT,
             AcpClient::spawn(
@@ -1031,11 +1199,15 @@ impl AgentAuthService {
                 &cwd,
                 format!("protocol-auth:{flow_id}"),
                 agent_id.to_owned(),
-                self.events.clone(),
+                event_log,
                 None,
                 self.tasks.clone(),
                 vec![cwd.clone()],
-                StderrPolicy::Discard,
+                if capture_stderr_url {
+                    StderrPolicy::CaptureAuthUrl(capture_tx)
+                } else {
+                    StderrPolicy::Discard
+                },
             ),
         )
         .await
@@ -1090,7 +1262,6 @@ impl AgentAuthService {
             .invalidate_stopped_sessions_for_agent(agent_id)
             .await;
         let outcome = self.probe(agent_id).await?;
-        let registry_id = self.registry_id_for(agent_id);
         let active_flow = self.active_flow_for(agent_id);
         let entry = self.cache_entry(agent_id);
         Ok(AgentAuthView::build(
@@ -1098,7 +1269,6 @@ impl AgentAuthService {
             entry.as_ref(),
             outcome.committed,
             just_observed,
-            registry_id.as_deref(),
             active_flow,
         ))
     }

@@ -10,6 +10,33 @@ use batey::{
 use clap::Parser;
 use std::{path::PathBuf, sync::Arc};
 
+/// The auth flow temporarily points `BROWSER` at this executable. Browser
+/// launchers append the URL as an argument; this tiny process forwards it to
+/// the flow's loopback listener and exits without opening a browser itself.
+/// It is inert unless both private capture environment variables are present.
+fn run_browser_capture_helper() -> bool {
+    let Ok(address) = std::env::var("BATEY_AUTH_BROWSER_CAPTURE_ADDR") else {
+        return false;
+    };
+    let Ok(token) = std::env::var("BATEY_AUTH_BROWSER_CAPTURE_TOKEN") else {
+        return false;
+    };
+    let Some(url) = std::env::args().skip(1).last() else {
+        return true;
+    };
+    let Ok(address) = address.parse() else {
+        return true;
+    };
+    let Ok(mut stream) =
+        std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_secs(2))
+    else {
+        return true;
+    };
+    use std::io::Write;
+    let _ = write!(stream, "{token}\n{url}");
+    true
+}
+
 #[derive(Parser)]
 #[command(about = "Persistent single-owner ACP project/chat supervisor", version)]
 struct Args {
@@ -65,6 +92,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if run_browser_capture_helper() {
+        return Ok(());
+    }
     let args = Args::parse();
     // Take secrets out of the process environment before anything else runs,
     // so no inherited workspace environment and no spawned child can observe

@@ -10,6 +10,7 @@ import type {
   AgentSummary,
   ProtocolAuthElicitation,
   ProtocolAuthFlow,
+  ProtocolAuthInteraction,
 } from '../../core/api/types';
 import { AgentCardComponent } from '../../agents/agent-card/agent-card';
 import { AuthTerminalDialogComponent } from '../../agents/auth-terminal-dialog/auth-terminal-dialog';
@@ -94,6 +95,10 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     return this.state.protocolElicitationsByFlow()[flowId] ?? [];
   }
 
+  protocolInteractionFor(flowId: string): ProtocolAuthInteraction | null {
+    return this.state.protocolInteractionsByFlow()[flowId] ?? null;
+  }
+
   protocolLoadingFor(id: string): boolean {
     return this.state.protocolLoading().has(id);
   }
@@ -150,6 +155,17 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
       await this.state.refreshProtocolAgentAuth(agent.id, flow.flow_id).catch(() => undefined);
     } catch (error: unknown) {
       this.actionError.set(this.message(error, 'Failed to answer the authentication step'));
+    }
+  }
+
+  async relayProtocolCallback(agent: AgentSummary, callbackUrl: string): Promise<void> {
+    const flow = this.protocolFlowFor(agent.id);
+    if (!flow) return;
+    try {
+      await this.state.relayProtocolAuthCallback(flow.flow_id, callbackUrl);
+      this.notice.set('The sign-in callback was sent to the agent.');
+    } catch (error: unknown) {
+      this.actionError.set(this.message(error, 'The sign-in callback could not be relayed'));
     }
   }
 

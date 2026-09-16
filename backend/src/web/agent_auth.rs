@@ -168,6 +168,30 @@ pub async fn protocol_auth_elicitations(
     Ok(Json(hub(&s)?.protocol_auth_elicitations(&flow_id).await?))
 }
 
+pub async fn protocol_auth_interaction(
+    State(s): State<AppState>,
+    Path(flow_id): Path<String>,
+) -> Result<Json<Option<crate::auth::ProtocolAuthInteractionView>>> {
+    Ok(Json(hub(&s)?.protocol_auth_interaction(&flow_id)?))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolCallbackInput {
+    pub callback_url: String,
+}
+
+pub async fn relay_protocol_auth_callback(
+    State(s): State<AppState>,
+    Path(flow_id): Path<String>,
+    Json(input): Json<ProtocolCallbackInput>,
+) -> Result<Json<serde_json::Value>> {
+    hub(&s)?
+        .relay_protocol_auth_callback(&flow_id, &input.callback_url)
+        .await?;
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolElicitationInput {

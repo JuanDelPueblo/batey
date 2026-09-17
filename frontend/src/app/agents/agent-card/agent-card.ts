@@ -92,6 +92,10 @@ export class AgentCardComponent {
    * list, so this is judged on its own timestamp. Authenticated-but-stale
    * is never shown as timeless truth. */
   readonly isStale = computed(() => this.auth()?.observed_freshness === 'stale');
+  readonly isDiscoveryStale = computed(() => this.auth()?.freshness === 'stale');
+  readonly refreshTooltip = computed(() =>
+    this.isStale() || this.isDiscoveryStale() ? 'This may be out of date. Check again.' : 'Check again',
+  );
   readonly canManageEnv = computed(() => {
     const mutability = this.mutability();
     return mutability === 'editable' || mutability === 'registry_managed';

@@ -43,8 +43,11 @@
 .method-name { font: var(--mat-sys-title-small); }
 .method-type, .method-description, .auth-hint { color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-body-small); }
 .method-type { font: var(--mat-sys-label-small); }
-.browser-interaction { display: grid; gap: 8px; margin: 12px 0; padding: 12px; border: 1px solid var(--mat-sys-outline-variant); border-radius: 12px; }
-.callback-label { display: grid; gap: 4px; font: var(--mat-sys-label-medium); }
+.browser-interaction { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; padding: 12px; border: 1px solid var(--mat-sys-outline-variant); border-radius: var(--mat-sys-corner-medium); background: var(--mat-sys-surface-container-high); }
+.browser-primary-action { display: flex; align-items: center; }
+.callback-fallback { display: flex; flex-direction: column; gap: 8px; padding-top: 8px; border-top: 1px solid var(--mat-sys-outline-variant); }
+.callback-row { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.callback-label { display: flex; flex-direction: column; flex: 1 1 200px; gap: 4px; font: var(--mat-sys-label-medium); }
 .callback-label input { min-height: 40px; padding: 0 10px; color: var(--mat-sys-on-surface); background: var(--mat-sys-surface); border: 1px solid var(--mat-sys-outline); border-radius: 4px; font: var(--mat-sys-body-medium); }
 .elicitation { display: flex; flex-direction: column; gap: 8px; padding: 12px; border-radius: var(--mat-sys-corner-medium); background: var(--mat-sys-surface-container-high); }
 .elicitation-message, .url-line, .url-warning { margin: 0; font: var(--mat-sys-body-small); overflow-wrap: anywhere; }
@@ -61,4 +64,7 @@
   .method-action { justify-content: flex-start; }
   .method-action button { flex: 1 1 auto; }
   .elicitation-actions > button { flex: 1 1 auto; }
+  .browser-primary-action a { width: 100%; justify-content: center; }
+  .callback-row { flex-direction: column; align-items: stretch; }
+  .callback-row button { width: 100%; }
 }

@@ -795,4 +795,80 @@ describe('fake backend seed history', () => {
     assert.throws(() => state.startTerminalFlow('codex', 'openai-oauth'), /not a terminal method/);
     assert.throws(() => state.startTerminalFlow('codex', 'missing'), /Unknown authentication method/);
   });
+
+  it("T142: runs an async protocol flow with browser interaction and callback relay", () => {
+    const state = new FakeState();
+    const flow = state.startProtocolFlow("claude", "claude-oauth");
+    assert.equal(flow.state, "waiting_for_user");
+
+    const interaction = state.protocolAuthInteraction(flow.flow_id);
+    assert.ok(interaction);
+    assert.equal(interaction.type, "browser");
+    assert.equal(interaction.manual_callback, true);
+    assert.match(interaction.url, /^https:\/\/accounts\.anthropic\.com/);
+
+    // Relaying callback completes the flow and clears interaction
+    state.relayProtocolAuthCallback(flow.flow_id, "http://localhost:43123/callback?code=fake-code");
+    assert.equal(state.protocolFlowView(flow.flow_id).state, "succeeded");
+    assert.equal(state.protocolAuthInteraction(flow.flow_id), null);
+    assert.equal(state.agentAuth("claude").observed_state, "authenticated");
+  });
+
+  it("T142: handles refresh failure while preserving cached discovery methods", () => {
+    const state = new FakeState();
+    state.markAuthChecked("legacy-file");
+    state.failRefreshAgents.add("legacy-file");
+
+    const cachedBefore = state.agentAuth("legacy-file");
+    assert.equal(cachedBefore.freshness, "cached");
+    assert.equal(cachedBefore.methods.length, 1);
+    assert.equal(cachedBefore.methods[0].id, "file-token");
+
+    const refreshResult = state.refreshAgentAuth("legacy-file");
+    assert.equal(refreshResult.freshness, "stale");
+    assert.equal(refreshResult.refresh_error, "Agent 'legacy-file' did not start in time");
+    // Cached methods remain intact
+    assert.equal(refreshResult.methods.length, 1);
+    assert.equal(refreshResult.methods[0].id, "file-token");
+
+    // Reading plain cache afterwards retains the methods and stale marker
+    const cachedAfter = state.agentAuth("legacy-file");
+    assert.equal(cachedAfter.freshness, "stale");
+    assert.equal(cachedAfter.methods.length, 1);
+  });
+
+  it("T142: seedAuthScenarios demonstrates unknown, cached, stale, refresh-failed, and active scenarios", () => {
+    const state = new FakeState();
+    state.seedAuthScenarios();
+
+    // 1. Cached & authenticated
+    const claude = state.agentAuth("claude");
+    assert.equal(claude.freshness, "cached");
+    assert.equal(claude.observed_state, "authenticated");
+    assert.equal(claude.observed_freshness, "cached");
+
+    // 2. Cached & authentication required
+    const codex = state.agentAuth("codex");
+    assert.equal(codex.freshness, "cached");
+    assert.equal(codex.observed_state, "authentication_required");
+    assert.equal(codex.observed_freshness, "cached");
+
+    // 3. Stale previous state
+    const opencode = state.agentAuth("opencode");
+    assert.equal(opencode.freshness, "stale");
+    assert.equal(opencode.observed_state, "authentication_required");
+    assert.equal(opencode.observed_freshness, "stale");
+
+    // 4. Refresh failure with preserved cache
+    const legacy = state.refreshAgentAuth("legacy-file");
+    assert.equal(legacy.freshness, "stale");
+    assert.ok(legacy.refresh_error);
+    assert.equal(legacy.methods.length, 1);
+
+    // 5. Unknown / never-checked
+    const acp = state.agentAuth("example-acp");
+    assert.equal(acp.freshness, "unknown");
+    assert.equal(acp.checked_at, null);
+  });
 });
+

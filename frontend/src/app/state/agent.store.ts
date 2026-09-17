@@ -184,7 +184,6 @@ export class AgentStore {
 
   /** A plain cache-only read. Never starts an agent process. */
   async loadAuth(id: string): Promise<AgentAuthState> {
-    this.setLoading(id, true);
     try {
       const state = await this.api.fetchAgentAuth(id);
       this.authByAgent.update((current) => ({ ...current, [id]: state }));
@@ -193,8 +192,6 @@ export class AgentStore {
     } catch (error) {
       this.setAuthError(id, this.message(error, 'Failed to load authentication state'));
       throw error;
-    } finally {
-      this.setLoading(id, false);
     }
   }
 

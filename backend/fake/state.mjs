@@ -120,6 +120,12 @@ export const AUTH_METHODS = {
       { id: 'device-code', name: 'Legacy device flow', type: 'device_code', description: null, supported: false },
     ],
   },
+  'legacy-file': {
+    logout_supported: false,
+    methods: [
+      { id: 'file-token', name: 'File Token', type: 'agent', description: 'Token loaded from file configuration.', supported: true },
+    ],
+  },
   'example-acp': {
     logout_supported: false,
     methods: [
@@ -319,9 +325,12 @@ export class FakeState {
     this.authCheckedAt = new Map();
     this.authStale = new Set();
     this.authObservedCheckedAt = new Map();
+    this.authObservedStale = new Set();
+    this.failRefreshAgents = new Set();
     this.flows = new Map();
     this.protocolFlows = new Map();
     this.protocolElicitations = new Map();
+    this.protocolInteractions = new Map();
     // Editable Batey-managed definitions, including their launch environment.
     this.customDetails = new Map();
     // Private per-agent environment overrides: agent id -> Map(name -> value).
@@ -865,8 +874,16 @@ export class FakeState {
   setObservedAuth(id, state) {
     if (!this.observedByAgent) this.observedByAgent = new Map();
     if (!this.authObservedCheckedAt) this.authObservedCheckedAt = new Map();
+    if (!this.authObservedStale) this.authObservedStale = new Set();
     this.observedByAgent.set(id, state);
     this.authObservedCheckedAt.set(id, new Date().toISOString());
+    this.authObservedStale.delete(id);
+  }
+
+  markObservedAuthStale(id) {
+    if (this.authObservedCheckedAt?.has(id)) {
+      this.authObservedStale.add(id);
+    }
   }
 
   /** Marks the discovered methods/logout capability as freshly confirmed
@@ -906,11 +923,14 @@ export class FakeState {
           ? 'stale'
           : 'cached';
     const observedCheckedAt = this.authObservedCheckedAt?.get(id) ?? null;
+    const observedStale = this.authObservedStale?.has(id);
     const observedFreshness = !observedCheckedAt
       ? 'unknown'
       : justProbedObserved
         ? 'fresh'
-        : 'cached';
+        : observedStale
+          ? 'stale'
+          : 'cached';
     return {
       agent_id: id,
       methods: config.methods.map((method) => ({ ...method })),
@@ -930,6 +950,14 @@ export class FakeState {
    * records observed evidence: a bare `initialize` is not a sign-in. */
   refreshAgentAuth(id) {
     if (!this.agent(id)) throw Object.assign(new Error('Agent not found'), { status: 404 });
+    if (this.failRefreshAgents?.has(id)) {
+      this.markAuthStale(id);
+      const auth = this.agentAuth(id);
+      return {
+        ...auth,
+        refresh_error: `Agent '${id}' did not start in time`,
+      };
+    }
     this.markAuthChecked(id);
     return this.agentAuth(id, { justProbedDiscovery: true });
   }
@@ -1137,9 +1165,15 @@ export class FakeState {
       completed_at: null,
     };
     this.protocolFlows.set(flow.flow_id, flow);
-    // Request-scoped elicitations, never durable chat events. Codex uses a
-    // URL device-code step; Antigravity uses an interactive form step.
-    if (id === 'codex' && methodId === 'openai-oauth') {
+    // Browser-based OAuth flow with interactive page and optional callback.
+    if (id === 'claude' || methodId === 'claude-oauth') {
+      this.protocolInteractions.set(flow.flow_id, {
+        type: 'browser',
+        url: 'https://accounts.anthropic.com/oauth/authorize?client_id=fake-claude&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A43123%2Fcallback',
+        manual_callback: true,
+      });
+      flow.state = 'waiting_for_user';
+    } else if (id === 'codex' && methodId === 'openai-oauth') {
       this.protocolElicitations.set(flow.flow_id, [
         {
           id: `${flow.flow_id}:device`,
@@ -1176,6 +1210,23 @@ export class FakeState {
     return { ...flow };
   }
 
+  protocolAuthInteraction(flowId) {
+    const flow = this.protocolFlows.get(flowId);
+    if (!flow) throw Object.assign(new Error('Protocol flow not found'), { status: 404 });
+    return this.protocolInteractions.get(flowId) ?? null;
+  }
+
+  relayProtocolAuthCallback(flowId, callbackUrl) {
+    const flow = this.protocolFlows.get(flowId);
+    if (!flow) throw Object.assign(new Error('Protocol flow not found'), { status: 404 });
+    if (!callbackUrl) throw Object.assign(new Error('Missing callback_url'), { status: 400 });
+    this.protocolInteractions.delete(flowId);
+    flow.state = 'succeeded';
+    flow.completed_at = new Date().toISOString();
+    this.setObservedAuth(flow.agent_id, 'authenticated');
+    return flow;
+  }
+
   protocolFlowView(flowId) {
     const flow = this.protocolFlows.get(flowId);
     if (!flow) return null;
@@ -1190,6 +1241,7 @@ export class FakeState {
       flow.reason = 'Cancelled by the client';
       flow.completed_at = new Date().toISOString();
       this.protocolElicitations.delete(flowId);
+      this.protocolInteractions.delete(flowId);
     }
     return { ...flow };
   }
@@ -1236,6 +1288,28 @@ export class FakeState {
   // ------------------------------------------------------------------ seed
 
   /** Seeds the editable definition and the representative auth states. */
+  seedAuthScenarios() {
+    // 1. Cached & authenticated: claude
+    this.markAuthChecked('claude');
+    this.setObservedAuth('claude', 'authenticated');
+
+    // 2. Cached & authentication required: codex
+    this.markAuthChecked('codex');
+    this.setObservedAuth('codex', 'authentication_required');
+
+    // 3. Stale previous state: opencode
+    this.markAuthChecked('opencode');
+    this.setObservedAuth('opencode', 'authentication_required');
+    this.markObservedAuthStale('opencode');
+    this.markAuthStale('opencode');
+
+    // 4. Refresh failure with preserved cache: legacy-file
+    this.markAuthChecked('legacy-file');
+    this.failRefreshAgents.add('legacy-file');
+
+    // 5. Unknown (never checked): example-acp, nix-agent, my-custom (untouched)
+  }
+
   seedAgents() {
     const custom = {
       id: 'my-custom',

@@ -17,6 +17,7 @@ import { answerElicitation, answerPermission, cancel, isRunning, listPendingElic
 
 const options = parseArgs(process.argv.slice(2));
 const state = new FakeState();
+state.seedAuthScenarios();
 for (const [chatId, seed] of state.seededTurns) {
   const chat = state.chats.get(chatId);
   if (chat) seedActiveTurn(state, chat, seed);
@@ -94,6 +95,8 @@ const routes = [
   ['POST', /^\/api\/protocol-auth\/([^/]+)\/cancel$/, cancelProtocolAuthFlow],
   ['GET', /^\/api\/protocol-auth\/([^/]+)\/elicitations$/, listProtocolElicitations],
   ['POST', /^\/api\/protocol-auth\/([^/]+)\/elicitations\/([^/]+)\/respond$/, respondProtocolElicitation],
+  ['GET', /^\/api\/protocol-auth\/([^/]+)\/interaction$/, getProtocolAuthInteraction],
+  ['POST', /^\/api\/protocol-auth\/([^/]+)\/interaction\/callback$/, relayProtocolAuthCallback],
   ['GET', /^\/api\/agents\/([^/]+)$/, getAgentDetail],
   ['PATCH', /^\/api\/agents\/([^/]+)$/, editAgent],
   ['DELETE', /^\/api\/agents\/([^/]+)$/, removeAgent],
@@ -422,6 +425,16 @@ function respondProtocolElicitation({ params, body }) {
     throw httpError(400, 'Elicitation action must be accept, decline, or cancel');
   }
   state.respondProtocolElicitation(params[0], params[1], action, body.content ?? null);
+  return json({ success: true });
+}
+
+function getProtocolAuthInteraction({ params }) {
+  return json(state.protocolAuthInteraction(params[0]));
+}
+
+function relayProtocolAuthCallback({ params, body }) {
+  const input = parseJson(body);
+  state.relayProtocolAuthCallback(params[0], input.callback_url);
   return json({ success: true });
 }
 

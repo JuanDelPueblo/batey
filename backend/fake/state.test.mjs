@@ -1049,3 +1049,105 @@ describe('fake backend seed history', () => {
     assert.equal(acp.checked_at, null);
   });
 });
+
+describe('fake backend workspace sync', () => {
+  function gitProject(state, name, overrides = {}) {
+    return state.createProject(name, `/tmp/${name}`, {
+      is_git: true,
+      current_branch: 'main',
+      head_sha: '1'.repeat(40),
+      dirty: false,
+      branches: [{ name: 'main', sha: '1'.repeat(40), current: true }],
+      ...overrides,
+    });
+  }
+
+  it('T151: fast-forwards a clean behind checkout, then reports up to date on the next call', () => {
+    const state = new FakeState();
+    const project = gitProject(state, 'behind');
+
+    const first = state.syncWorkspace(project.id);
+    assert.equal(first.updated, true);
+    assert.equal(first.branch, 'main');
+    assert.notEqual(first.head_sha, '1'.repeat(40));
+    const options = state.workspaceOptions(project.id);
+    assert.equal(options.head_sha, first.head_sha);
+    assert.equal(options.branches.find((branch) => branch.name === 'main').sha, first.head_sha);
+
+    const second = state.syncWorkspace(project.id);
+    assert.equal(second.updated, false);
+    assert.equal(second.head_sha, first.head_sha);
+  });
+
+  it('T151: reports already up to date without changing state', () => {
+    const state = new FakeState();
+    const project = gitProject(state, 'current');
+    state.setSyncScenario(project, 'up_to_date');
+
+    const result = state.syncWorkspace(project.id);
+    assert.equal(result.updated, false);
+    assert.equal(result.head_sha, '1'.repeat(40));
+  });
+
+  it('T151: refuses a dirty checkout without touching it', () => {
+    const state = new FakeState();
+    const project = gitProject(state, 'dirty', { dirty: true });
+
+    assert.throws(() => state.syncWorkspace(project.id), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /uncommitted changes/);
+      return true;
+    });
+    assert.equal(state.workspaceOptions(project.id).head_sha, '1'.repeat(40));
+  });
+
+  it('T151: refuses diverged local and remote histories', () => {
+    const state = new FakeState();
+    const project = gitProject(state, 'diverged');
+    state.setSyncScenario(project, 'diverged');
+
+    assert.throws(() => state.syncWorkspace(project.id), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /diverged/);
+      return true;
+    });
+  });
+
+  it('T151: refuses when no upstream is configured', () => {
+    const state = new FakeState();
+    const project = gitProject(state, 'no-upstream');
+    state.setSyncScenario(project, 'no_upstream');
+
+    assert.throws(() => state.syncWorkspace(project.id), (error) => {
+      assert.equal(error.status, 409);
+      assert.match(error.message, /no upstream configured/);
+      return true;
+    });
+  });
+
+  it('T151: reports a fetch failure', () => {
+    const state = new FakeState();
+    const project = gitProject(state, 'unreachable');
+    state.setSyncScenario(project, 'fetch_failure');
+
+    assert.throws(() => state.syncWorkspace(project.id), (error) => {
+      assert.equal(error.status, 400);
+      assert.match(error.message, /^Fetch failed:/);
+      return true;
+    });
+  });
+
+  it('T151: rejects a non-Git project and an unknown project', () => {
+    const state = new FakeState();
+    const plain = state.createProject('plain', '/tmp/plain');
+
+    assert.throws(() => state.syncWorkspace(plain.id), (error) => {
+      assert.equal(error.status, 400);
+      return true;
+    });
+    assert.throws(() => state.syncWorkspace('missing-project'), (error) => {
+      assert.equal(error.status, 404);
+      return true;
+    });
+  });
+});

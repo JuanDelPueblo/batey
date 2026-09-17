@@ -348,6 +348,13 @@ export interface WorkspaceOptions {
   branches: WorkspaceBranch[];
 }
 
+export interface WorkspaceSyncResult {
+  branch: string;
+  remote: string;
+  updated: boolean;
+  head_sha: string;
+}
+
 export interface ChatWorkspaceSelection {
   mode: WorkspaceMode;
   branch: string;

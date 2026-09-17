@@ -4,4 +4,7 @@ mat-form-field { width: 100%; }
 .notice, .error-box { padding: 10px 12px; border-radius: var(--mat-sys-corner-medium); font: var(--mat-sys-body-small); }
 .notice { margin: 0; background: var(--mat-sys-surface-container); color: var(--mat-sys-on-surface-variant); }
 .error-box { background: var(--mat-sys-error-container); color: var(--mat-sys-on-error-container); }
+.sync-row { display: flex; align-items: center; gap: 12px; margin-top: -4px; }
+.sync-row button mat-icon { margin-right: 4px; }
+.sync-status { font: var(--mat-sys-body-small); color: var(--mat-sys-on-surface-variant); }
 @media (max-width: 599px) { mat-dialog-content { min-width: 0; } }

@@ -1,7 +1,7 @@
 use super::AppState;
 use crate::service::{
     ChatEdit, ChatView, HubService, ServiceError, WorkspaceOptions, WorkspaceSelection,
-    DEFAULT_HISTORY_PAGE_SIZE, MAX_HISTORY_PAGE_SIZE,
+    WorkspaceSyncResult, DEFAULT_HISTORY_PAGE_SIZE, MAX_HISTORY_PAGE_SIZE,
 };
 use axum::{
     extract::{Path, Query, State},
@@ -296,6 +296,13 @@ pub async fn workspace_options(
     Path(id): Path<String>,
 ) -> Result<Json<WorkspaceOptions>> {
     Ok(Json(hub(&s)?.workspace_options(&id).await?))
+}
+
+pub async fn sync_workspace(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<WorkspaceSyncResult>> {
+    Ok(Json(hub(&s)?.sync_workspace(&id).await?))
 }
 
 #[derive(Deserialize)]

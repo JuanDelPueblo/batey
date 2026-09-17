@@ -117,6 +117,10 @@ pub fn router(state: AppState) -> Router {
             get(hub::workspace_options),
         )
         .route(
+            "/api/projects/:id/workspace-sync",
+            post(hub::sync_workspace),
+        )
+        .route(
             "/api/projects/:id/chats",
             get(hub::chats).post(hub::create_chat),
         )

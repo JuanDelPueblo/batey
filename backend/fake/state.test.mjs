@@ -468,6 +468,77 @@ describe('fake backend seed history', () => {
     assert.equal(state.agent(installed.id), undefined);
   });
 
+  it('T145: tracks determinate and indeterminate agent operations with stage transitions', () => {
+    const state = new FakeState();
+
+    // 1. Determinate install
+    const determinateOp = state.startInstall({ registry_id: 'native-agent' });
+    assert.equal(determinateOp.kind, 'install');
+    assert.equal(determinateOp.state, 'running');
+    assert.equal(determinateOp.stage, 'resolving');
+    assert.equal(determinateOp.downloaded_bytes, 0);
+    assert.ok(determinateOp.total_bytes > 0);
+
+    // Conflict if starting another operation for same agent
+    assert.throws(
+      () => state.startInstall({ registry_id: 'native-agent' }),
+      (err) => err.status === 409
+    );
+
+    // Stage progression
+    const opRecord = state.agentOperations.get(determinateOp.id);
+    opRecord.stage = 'downloading';
+    opRecord.downloaded_bytes = 6_000_000;
+    assert.equal(state.getAgentOperation(determinateOp.id).stage, 'downloading');
+    assert.equal(state.getAgentOperation(determinateOp.id).downloaded_bytes, 6_000_000);
+
+    opRecord.stage = 'verifying';
+    opRecord.stage = 'extracting';
+    opRecord.stage = 'finalizing';
+    opRecord._completeAction();
+
+    const finishedDeterminate = state.getAgentOperation(determinateOp.id);
+    assert.equal(finishedDeterminate.state, 'succeeded');
+    assert.equal(finishedDeterminate.stage, 'completed');
+    assert.ok(state.agent('native-agent'));
+
+    // 2. Indeterminate install (total_bytes is null)
+    const indetOp = state.startInstall({ registry_id: 'native-agent', agent_id: 'native-2', indeterminate: true });
+    assert.equal(indetOp.total_bytes, null);
+    assert.equal(indetOp.state, 'running');
+
+    // 3. Update operation
+    const updateOp = state.startUpdate('example-acp');
+    assert.equal(updateOp.kind, 'update');
+    assert.equal(updateOp.state, 'running');
+    assert.equal(updateOp.stage, 'resolving');
+
+    // 4. Two independent operations can run concurrently for different agents
+    assert.equal(state.listAgentOperations().filter(op => op.state === 'running').length, 2);
+
+    // Complete updateOp
+    const updateRecord = state.agentOperations.get(updateOp.id);
+    updateRecord._completeAction();
+    assert.equal(state.getAgentOperation(updateOp.id).state, 'succeeded');
+    assert.equal(state.agent('example-acp').display.version, '1.2.0');
+
+    // 5. Failure operation preserves previous install
+    const failOp = state.startInstall(
+      { registry_id: 'native-agent', agent_id: 'failed-install', simulate_failure: 'Checksum mismatch' }
+    );
+    const failRecord = state.agentOperations.get(failOp.id);
+    failRecord._completeAction();
+    const failedOpView = state.getAgentOperation(failOp.id);
+    assert.equal(failedOpView.state, 'failed');
+    assert.equal(failedOpView.stage, 'failed');
+    assert.equal(failedOpView.error, 'Checksum mismatch');
+    assert.equal(state.agent('failed-install'), undefined);
+
+    // Cleanup installed agents for other tests
+    state.removeAgent('native-agent');
+    // native-2 never completed
+  });
+
   it('exposes authenticated custom detail and edits a Batey-managed agent', () => {
     const state = new FakeState();
     const detail = state.agentDetail('my-custom');

@@ -76,6 +76,8 @@ const routes = [
   ['POST', /^\/api\/agents\/registry\/refresh$/, refreshRegistry],
   ['POST', /^\/api\/agents\/registry\/install$/, installRegistryAgent],
   ['POST', /^\/api\/agents\/([^/]+)\/update$/, updateRegistryAgent],
+  ['GET', /^\/api\/agent-operations$/, listAgentOperations],
+  ['GET', /^\/api\/agent-operations\/([^/]+)$/, getAgentOperation],
   // T111 authentication routes. The dedicated agent-auth surface is separate
   // from the per-agent routes, and the flow id stays opaque to the browser.
   // Protocol flows carry request-scoped elicitations, never durable chat events.
@@ -373,9 +375,17 @@ function registryAgents({ url }) {
 
 function refreshRegistry() { return json(state.registryView('', true)); }
 
-function installRegistryAgent({ body }) { return json(state.installRegistryAgent(body)); }
+function installRegistryAgent({ body }) { return json(state.startInstall(body, { autoAdvance: true })); }
 
-function updateRegistryAgent({ params }) { return json(state.updateRegistryAgent(params[0])); }
+function updateRegistryAgent({ params }) { return json(state.startUpdate(params[0], { autoAdvance: true })); }
+
+function listAgentOperations() { return json(state.listAgentOperations()); }
+
+function getAgentOperation({ params }) {
+  const op = state.getAgentOperation(params[0]);
+  if (!op) return json({ message: `Operation '${params[0]}' not found` }, 404);
+  return json(op);
+}
 
 // ------------------------------------------------------- authentication
 

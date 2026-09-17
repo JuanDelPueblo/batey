@@ -10,6 +10,7 @@
 use super::custom::{CustomAgentInput, ValidationIssue, ValidationReport};
 use super::definition::{AgentDisplay, AgentSource, AgentSummary, DEFAULT_IDLE_TIMEOUT_SECS};
 use super::installed::{InstalledAgent, RegistrySnapshot, RuntimeProbe};
+use super::operations::{AgentOperationStage, AgentOperations, InstallProgressTracker};
 use super::registry::{
     install, manifest::RegistryRejection, DistributionKind, PlatformTarget, RegistryAgent,
     RegistryClient,
@@ -222,6 +223,7 @@ pub struct AgentManager {
     probe: Arc<dyn RuntimeProbe>,
     /// One catalog mutation at a time, so two installs cannot race on an id.
     mutation_lock: tokio::sync::Mutex<()>,
+    operations: Arc<AgentOperations>,
 }
 
 impl std::fmt::Debug for AgentManager {
@@ -248,6 +250,7 @@ impl AgentManager {
             install_root,
             probe,
             mutation_lock: tokio::sync::Mutex::new(()),
+            operations: Arc::new(AgentOperations::new()),
         })
     }
 
@@ -261,6 +264,43 @@ impl AgentManager {
 
     pub fn install_root(&self) -> &std::path::Path {
         &self.install_root
+    }
+
+    pub fn operations(&self) -> &Arc<AgentOperations> {
+        &self.operations
+    }
+
+    pub fn validate_install(&self, request: &InstallRequest) -> AgentResult<String> {
+        let registry_id = request.registry_id.trim().to_string();
+        if registry_id.is_empty() {
+            return Err(AgentError::Invalid(
+                "An install needs a registry id.".into(),
+            ));
+        }
+        let agent_id = request
+            .agent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&registry_id)
+            .to_string();
+        validate_catalog_id(&agent_id)?;
+        self.ensure_id_is_free(&agent_id)?;
+        Ok(agent_id)
+    }
+
+    pub fn validate_update(&self, id: &str) -> AgentResult<String> {
+        let record = self.require_record(id)?;
+        if record.source != AgentSource::Registry {
+            return Err(AgentError::Conflict(format!(
+                "Agent '{id}' comes from the {} source, so it has no registry update.",
+                record.source
+            )));
+        }
+        let snapshot = record.registry.ok_or_else(|| {
+            AgentError::Conflict(format!("Agent '{id}' has no registry snapshot to compare."))
+        })?;
+        Ok(snapshot.registry_id)
     }
 
     // ----------------------------------------------------------- startup
@@ -433,6 +473,15 @@ impl AgentManager {
 
     /// Installs one registry agent under a Batey catalog id.
     pub async fn install(&self, request: InstallRequest) -> AgentResult<AgentSummary> {
+        self.install_with_tracker(request, None).await
+    }
+
+    /// Installs one registry agent with progress tracking.
+    pub async fn install_with_tracker(
+        &self,
+        request: InstallRequest,
+        tracker: Option<Arc<dyn InstallProgressTracker>>,
+    ) -> AgentResult<AgentSummary> {
         let _guard = self.mutation_lock.lock().await;
         let registry_id = request.registry_id.trim().to_string();
         if registry_id.is_empty() {
@@ -450,18 +499,27 @@ impl AgentManager {
         validate_catalog_id(&agent_id)?;
         self.ensure_id_is_free(&agent_id)?;
 
+        if let Some(ref t) = tracker {
+            t.on_stage(AgentOperationStage::Resolving);
+        }
+
         let agent = self.resolve_registry_agent(&registry_id).await?;
         let plan = install::select(&agent, request.distribution, PlatformTarget::host())
             .map_err(|error| AgentError::Invalid(error.to_string()))?;
-        let prepared = install::prepare(
+        let prepared = install::prepare_with_progress(
             &agent,
             plan,
             &*self.registry.http(),
             &self.install_root,
             &agent_id,
+            tracker.clone(),
         )
         .await
         .map_err(|error| AgentError::Invalid(error.to_string()))?;
+
+        if let Some(ref t) = tracker {
+            t.on_stage(AgentOperationStage::Finalizing);
+        }
 
         let mut record = InstalledAgent::new(
             agent_id.clone(),
@@ -511,6 +569,15 @@ impl AgentManager {
     /// newer version. The catalog entry changes only after the replacement is
     /// on disk, so a failed update leaves the working install in place.
     pub async fn update(&self, id: &str) -> AgentResult<UpdateOutcome> {
+        self.update_with_tracker(id, None).await
+    }
+
+    /// Compares and updates with progress tracking.
+    pub async fn update_with_tracker(
+        &self,
+        id: &str,
+        tracker: Option<Arc<dyn InstallProgressTracker>>,
+    ) -> AgentResult<UpdateOutcome> {
         let _guard = self.mutation_lock.lock().await;
         let record = self.require_record(id)?;
         if record.source != AgentSource::Registry {
@@ -522,6 +589,10 @@ impl AgentManager {
         let snapshot = record.registry.clone().ok_or_else(|| {
             AgentError::Conflict(format!("Agent '{id}' has no registry snapshot to compare."))
         })?;
+
+        if let Some(ref t) = tracker {
+            t.on_stage(AgentOperationStage::Resolving);
+        }
 
         // An update is the one operation that should see the newest registry.
         let (cached, error) = self.registry.refresh_or_cached().await;
@@ -559,15 +630,20 @@ impl AgentManager {
         let plan = install::select(&agent, preferred, PlatformTarget::host())
             .or_else(|_| install::select(&agent, None, PlatformTarget::host()))
             .map_err(|error| AgentError::Invalid(error.to_string()))?;
-        let prepared = install::prepare(
+        let prepared = install::prepare_with_progress(
             &agent,
             plan,
             &*self.registry.http(),
             &self.install_root,
             &record.id,
+            tracker.clone(),
         )
         .await
         .map_err(|error| AgentError::Invalid(error.to_string()))?;
+
+        if let Some(ref t) = tracker {
+            t.on_stage(AgentOperationStage::Finalizing);
+        }
 
         let previous_install_dir = snapshot.install_dir.clone();
         let mut updated = record.clone();
@@ -886,7 +962,8 @@ mod tests {
     use super::super::registry::client::testing::FixtureFetch;
     use super::super::registry::RegistryClient;
     use super::super::{
-        AgentAvailability, AgentCatalog, AgentDefinition, HostRuntimeProbe, InstalledDistribution,
+        AgentAvailability, AgentCatalog, AgentDefinition, AgentOperationKind, AgentOperationState,
+        HostRuntimeProbe, InstalledDistribution,
     };
     use super::*;
     use std::io::Write;
@@ -1457,6 +1534,69 @@ mod tests {
         assert_eq!(outcome.from_version, "1.0.0");
         assert_eq!(outcome.to_version, "1.0.0");
         assert!(outcome.previous_install_dir.is_none());
+    }
+
+    #[tokio::test]
+    async fn install_and_update_with_progress_tracker() {
+        let harness = harness();
+        let tracker = harness
+            .manager
+            .operations()
+            .register(
+                "example-acp".into(),
+                "example-acp".into(),
+                AgentOperationKind::Install,
+            )
+            .unwrap();
+
+        assert_eq!(tracker.view().stage, AgentOperationStage::Resolving);
+        assert_eq!(tracker.view().state, AgentOperationState::Running);
+
+        let summary = harness
+            .manager
+            .install_with_tracker(
+                InstallRequest {
+                    registry_id: "example-acp".into(),
+                    ..InstallRequest::default()
+                },
+                Some(tracker.clone()),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(summary.id, "example-acp");
+        assert_eq!(tracker.view().stage, AgentOperationStage::Finalizing);
+        tracker.succeed(None);
+        assert_eq!(tracker.view().state, AgentOperationState::Succeeded);
+        assert_eq!(tracker.view().stage, AgentOperationStage::Completed);
+
+        let archive = tar_gz("example", b"v2");
+        let digest = super::super::registry::sha256_hex(&archive);
+        harness
+            .http
+            .set(REGISTRY_URL, document("2.0.0", Some(&digest)));
+        harness.http.set(ARCHIVE_URL, archive);
+
+        let update_tracker = harness
+            .manager
+            .operations()
+            .register(
+                "example-acp".into(),
+                "example-acp".into(),
+                AgentOperationKind::Update,
+            )
+            .unwrap();
+
+        let outcome = harness
+            .manager
+            .update_with_tracker("example-acp", Some(update_tracker.clone()))
+            .await
+            .unwrap();
+        assert!(outcome.updated);
+        assert_eq!(update_tracker.view().stage, AgentOperationStage::Finalizing);
+        update_tracker.succeed(Some(outcome.to_version));
+        assert_eq!(update_tracker.view().state, AgentOperationState::Succeeded);
+        assert_eq!(update_tracker.view().stage, AgentOperationStage::Completed);
     }
 
     #[tokio::test]

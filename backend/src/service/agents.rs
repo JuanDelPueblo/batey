@@ -4,11 +4,12 @@
 //! only the Hub knows: whether a live session is using an agent. A destructive
 //! operation therefore never reaches a running chat.
 use super::{HubService, ServiceError, ServiceResult};
+use crate::agents::operations::{AgentOperationKind, AgentOperationView};
 use crate::agents::{
     AgentEnvEdit, AgentEnvPresence, AgentError, AgentManagementDetail, AgentSummary,
-    CustomAgentInput, InstallRequest, RegistryCatalogView, RemoveOutcome, UpdateOutcome,
-    ValidationReport,
+    CustomAgentInput, InstallRequest, RegistryCatalogView, RemoveOutcome, ValidationReport,
 };
+use std::sync::Arc;
 
 impl From<AgentError> for ServiceError {
     fn from(error: AgentError) -> Self {
@@ -47,44 +48,103 @@ impl HubService {
     }
 
     pub async fn install_registry_agent(
-        &self,
+        self: &Arc<Self>,
         request: InstallRequest,
-    ) -> ServiceResult<AgentSummary> {
-        let summary = self.agent_manager.install(request).await?;
-        // A reinstall over a previously known id may change initialization
-        // or authentication methods. A brand-new id has no cache yet, so
-        // this is a no-op for it.
-        self.agent_auth.invalidate_agent(&summary.id);
-        self.notify_metadata_changed();
-        Ok(summary)
+    ) -> ServiceResult<AgentOperationView> {
+        let agent_id = self.agent_manager.validate_install(&request)?;
+        let tracker = self
+            .agent_manager
+            .operations()
+            .register(
+                agent_id.clone(),
+                request.registry_id.clone(),
+                AgentOperationKind::Install,
+            )
+            .map_err(ServiceError::Conflict)?;
+
+        let initial_view = tracker.view();
+        let hub = self.clone();
+        tokio::spawn(async move {
+            match hub
+                .agent_manager
+                .install_with_tracker(request, Some(tracker.clone()))
+                .await
+            {
+                Ok(summary) => {
+                    hub.agent_auth.invalidate_agent(&summary.id);
+                    hub.notify_metadata_changed();
+                    tracker.succeed(None);
+                }
+                Err(error) => {
+                    tracker.fail(error.to_string());
+                }
+            }
+        });
+
+        Ok(initial_view)
     }
 
     /// Updates one registry-installed agent.
     ///
     /// The previous version's files stay on disk while a session is live, so
     /// a running process never loses the binary it started from.
-    pub async fn update_registry_agent(&self, id: &str) -> ServiceResult<UpdateOutcome> {
-        let outcome = self.agent_manager.update(id).await?;
-        if outcome.updated {
-            if self.agent_has_live_session(id).await {
-                tracing::info!(
-                    agent = id,
-                    "Keeping the previous install; a live session is still using it"
-                );
-            } else {
-                self.agent_manager
-                    .remove_install_files(outcome.previous_install_dir.as_deref());
+    pub async fn update_registry_agent(
+        self: &Arc<Self>,
+        id: &str,
+    ) -> ServiceResult<AgentOperationView> {
+        let registry_id = self.agent_manager.validate_update(id)?;
+        let tracker = self
+            .agent_manager
+            .operations()
+            .register(id.to_string(), registry_id, AgentOperationKind::Update)
+            .map_err(ServiceError::Conflict)?;
+
+        let initial_view = tracker.view();
+        let hub = self.clone();
+        let agent_id = id.to_string();
+        tokio::spawn(async move {
+            match hub
+                .agent_manager
+                .update_with_tracker(&agent_id, Some(tracker.clone()))
+                .await
+            {
+                Ok(outcome) => {
+                    if outcome.updated {
+                        if hub.agent_has_live_session(&agent_id).await {
+                            tracing::info!(
+                                agent = %agent_id,
+                                "Keeping the previous install; a live session is still using it"
+                            );
+                        } else {
+                            hub.agent_manager
+                                .remove_install_files(outcome.previous_install_dir.as_deref());
+                        }
+                        // A new version may change initialization or authentication
+                        // methods, so the cached discovery data can no longer be
+                        // trusted as current.
+                        hub.agent_auth.invalidate_agent(&agent_id);
+                        hub.sessions
+                            .invalidate_stopped_sessions_for_agent(&agent_id)
+                            .await;
+                        hub.notify_metadata_changed();
+                    }
+                    tracker.succeed(Some(outcome.to_version));
+                }
+                Err(error) => {
+                    tracker.fail(error.to_string());
+                }
             }
-            // A new version may change initialization or authentication
-            // methods, so the cached discovery data can no longer be
-            // trusted as current.
-            self.agent_auth.invalidate_agent(id);
-            self.sessions
-                .invalidate_stopped_sessions_for_agent(id)
-                .await;
-            self.notify_metadata_changed();
-        }
-        Ok(outcome)
+        });
+
+        Ok(initial_view)
+    }
+
+    pub fn get_agent_operation(&self, id: &str) -> Option<AgentOperationView> {
+        self.agent_manager.operations().get(id)
+    }
+
+    pub fn list_agent_operations(&self) -> Vec<AgentOperationView> {
+        self.agent_manager.operations().list()
     }
 
     /// Removes one installed agent.

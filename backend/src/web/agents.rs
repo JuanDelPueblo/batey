@@ -6,9 +6,11 @@
 use super::hub::{hub, Result};
 use super::AppState;
 use crate::agents::{
-    AgentEnvEdit, AgentEnvPresence, AgentManagementDetail, AgentSummary, CustomAgentInput,
-    InstallRequest, RegistryCatalogView, RemoveOutcome, UpdateOutcome, ValidationReport,
+    operations::AgentOperationView, AgentEnvEdit, AgentEnvPresence, AgentManagementDetail,
+    AgentSummary, CustomAgentInput, InstallRequest, RegistryCatalogView, RemoveOutcome,
+    ValidationReport,
 };
+use crate::service::ServiceError;
 use axum::{
     extract::{Path, Query, State},
     Json,
@@ -43,15 +45,31 @@ pub async fn refresh_registry(State(s): State<AppState>) -> Result<Json<Registry
 pub async fn install_registry_agent(
     State(s): State<AppState>,
     Json(request): Json<InstallRequest>,
-) -> Result<Json<AgentSummary>> {
-    Ok(Json(hub(&s)?.install_registry_agent(request).await?))
+) -> Result<Json<AgentOperationView>> {
+    let hub = hub(&s)?.clone();
+    Ok(Json(hub.install_registry_agent(request).await?))
 }
 
 pub async fn update_agent(
     State(s): State<AppState>,
     Path(id): Path<String>,
-) -> Result<Json<UpdateOutcome>> {
-    Ok(Json(hub(&s)?.update_registry_agent(&id).await?))
+) -> Result<Json<AgentOperationView>> {
+    let hub = hub(&s)?.clone();
+    Ok(Json(hub.update_registry_agent(&id).await?))
+}
+
+pub async fn agent_operation(
+    State(s): State<AppState>,
+    Path(operation_id): Path<String>,
+) -> Result<Json<AgentOperationView>> {
+    match hub(&s)?.get_agent_operation(&operation_id) {
+        Some(op) => Ok(Json(op)),
+        None => Err(ServiceError::NotFound(format!("Operation '{operation_id}' not found")).into()),
+    }
+}
+
+pub async fn agent_operations(State(s): State<AppState>) -> Result<Json<Vec<AgentOperationView>>> {
+    Ok(Json(hub(&s)?.list_agent_operations()))
 }
 
 pub async fn agent_detail(

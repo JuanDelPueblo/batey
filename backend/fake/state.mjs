@@ -302,6 +302,7 @@ export class FakeState {
     // are not part of any HTTP response; they keep seeded open turns alive
     // after their durable event history has been written.
     this.seededTurns = new Map();
+    this.agentOperations = new Map();
 
     this.events = [];
     this.nextSeq = 1;
@@ -816,6 +817,231 @@ export class FakeState {
       rejected: [],
       agents: this.registryFetched ? agents : [],
     };
+  }
+
+  startInstall(body, options = {}) {
+    this._pruneAgentOperations();
+    const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === body.registry_id);
+    if (!entry) throw Object.assign(new Error("Registry agent not found"), { status: 404 });
+    if (entry.unsupported_reason) {
+      throw Object.assign(new Error(entry.unsupported_reason), { status: 422 });
+    }
+    const id = (body.agent_id ?? "").trim() || entry.id;
+    if (this.agent(id)) throw Object.assign(new Error("An agent already uses that id"), { status: 409 });
+
+    for (const op of this.agentOperations.values()) {
+      if (op.agent_id === id && op.state === "running") {
+        throw Object.assign(new Error(`An operation is already in progress for agent '${id}'`), { status: 409 });
+      }
+    }
+
+    const opId = "op-" + randomUUID();
+    const isBinary = entry.selected_distribution === "binary";
+    const isIndeterminate = Boolean(body.indeterminate || options.indeterminate);
+    const totalBytes = isBinary ? (isIndeterminate ? null : 12_582_912) : null;
+
+    const op = {
+      id: opId,
+      agent_id: id,
+      registry_id: entry.id,
+      kind: "install",
+      state: "running",
+      stage: "resolving",
+      downloaded_bytes: 0,
+      total_bytes: totalBytes,
+      error: null,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      to_version: entry.version,
+    };
+    this.agentOperations.set(opId, op);
+
+    const completeAction = () => {
+      if (body.simulate_failure || options.simulate_failure) {
+        op.state = "failed";
+        op.stage = "failed";
+        op.error = typeof (body.simulate_failure || options.simulate_failure) === "string"
+          ? (body.simulate_failure || options.simulate_failure)
+          : "Download integrity verification failed";
+        op.completed_at = new Date().toISOString();
+        return;
+      }
+      const agent = {
+        id,
+        display_name: body.display_name?.trim() || entry.name,
+        source: "registry",
+        registry_id: entry.id,
+        availability: "available",
+        usage_provider: body.usage_provider ?? null,
+        metadata: body.metadata ?? null,
+        mutability: "registry_managed",
+        display: { description: entry.description, version: entry.version },
+      };
+      AGENTS.push(agent);
+      op.state = "succeeded";
+      op.stage = "completed";
+      op.completed_at = new Date().toISOString();
+      this.metadataChanged();
+    };
+
+    if (options.autoAdvance) {
+      this._scheduleOperationProgression(op, completeAction, {
+        isBinary,
+        isIndeterminate,
+        totalBytes,
+        simulateFailure: body.simulate_failure || options.simulate_failure,
+      });
+    } else {
+      op._completeAction = completeAction;
+    }
+
+    return { ...op };
+  }
+
+  startUpdate(id, options = {}) {
+    this._pruneAgentOperations();
+    const agent = this.agent(id);
+    if (!agent) throw Object.assign(new Error("Agent not found"), { status: 404 });
+    if (agent.source !== "registry") throw Object.assign(new Error("Only registry agents can update"), { status: 409 });
+    const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === agent.registry_id);
+    if (!entry) throw Object.assign(new Error("The registry entry is gone"), { status: 404 });
+
+    for (const op of this.agentOperations.values()) {
+      if (op.agent_id === id && op.state === "running") {
+        throw Object.assign(new Error(`An operation is already in progress for agent '${id}'`), { status: 409 });
+      }
+    }
+
+    const opId = "op-" + randomUUID();
+    const isBinary = entry.selected_distribution === "binary";
+    const isIndeterminate = Boolean(options.indeterminate);
+    const totalBytes = isBinary ? (isIndeterminate ? null : 15_728_640) : null;
+
+    const op = {
+      id: opId,
+      agent_id: id,
+      registry_id: entry.id,
+      kind: "update",
+      state: "running",
+      stage: "resolving",
+      downloaded_bytes: 0,
+      total_bytes: totalBytes,
+      error: null,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+      to_version: entry.version,
+    };
+    this.agentOperations.set(opId, op);
+
+    const completeAction = () => {
+      if (options.simulate_failure) {
+        op.state = "failed";
+        op.stage = "failed";
+        op.error = typeof options.simulate_failure === "string"
+          ? options.simulate_failure
+          : "Package update failed";
+        op.completed_at = new Date().toISOString();
+        return;
+      }
+      const from = agent.display?.version ?? "0.0.0";
+      if (from !== entry.version) {
+        agent.display = { ...agent.display, version: entry.version };
+        this.markAuthStale(id);
+        this.metadataChanged();
+      }
+      op.state = "succeeded";
+      op.stage = "completed";
+      op.completed_at = new Date().toISOString();
+    };
+
+    if (options.autoAdvance) {
+      this._scheduleOperationProgression(op, completeAction, {
+        isBinary,
+        isIndeterminate,
+        totalBytes,
+        simulateFailure: options.simulate_failure,
+      });
+    } else {
+      op._completeAction = completeAction;
+    }
+
+    return { ...op };
+  }
+
+  getAgentOperation(id) {
+    this._pruneAgentOperations();
+    const op = this.agentOperations.get(id);
+    if (!op) return null;
+    const { _completeAction, ...view } = op;
+    return view;
+  }
+
+  listAgentOperations() {
+    this._pruneAgentOperations();
+    return Array.from(this.agentOperations.values()).map(({ _completeAction, ...view }) => view);
+  }
+
+  _pruneAgentOperations() {
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const [id, op] of this.agentOperations.entries()) {
+      if (op.completed_at && new Date(op.completed_at).getTime() < cutoff) {
+        this.agentOperations.delete(id);
+      }
+    }
+    const terminal = Array.from(this.agentOperations.entries()).filter(([_, op]) => op.completed_at);
+    if (terminal.length > 50) {
+      terminal.sort((a, b) => new Date(a[1].completed_at).getTime() - new Date(b[1].completed_at).getTime());
+      for (let i = 0; i < terminal.length - 50; i++) {
+        this.agentOperations.delete(terminal[i][0]);
+      }
+    }
+  }
+
+  _scheduleOperationProgression(op, completeAction, { isBinary, isIndeterminate, totalBytes, simulateFailure }) {
+    const delay = 150;
+    setTimeout(() => {
+      if (op.state !== "running") return;
+      if (isBinary) {
+        op.stage = "downloading";
+        op.downloaded_bytes = isIndeterminate ? 1_048_576 : Math.floor(totalBytes / 2);
+      } else {
+        op.stage = "preparing";
+      }
+      setTimeout(() => {
+        if (op.state !== "running") return;
+        if (isBinary) {
+          op.downloaded_bytes = isIndeterminate ? 4_194_304 : totalBytes;
+          setTimeout(() => {
+            if (op.state !== "running") return;
+            op.stage = "verifying";
+            setTimeout(() => {
+              if (op.state !== "running") return;
+              if (simulateFailure) {
+                completeAction();
+                return;
+              }
+              op.stage = "extracting";
+              setTimeout(() => {
+                if (op.state !== "running") return;
+                op.stage = "finalizing";
+                setTimeout(() => {
+                  completeAction();
+                }, delay);
+              }, delay);
+            }, delay);
+          }, delay);
+        } else {
+          if (simulateFailure) {
+            completeAction();
+            return;
+          }
+          op.stage = "finalizing";
+          setTimeout(() => {
+            completeAction();
+          }, delay);
+        }
+      }, delay);
+    }, delay);
   }
 
   installRegistryAgent(body) {

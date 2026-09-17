@@ -81,7 +81,7 @@ function makeState() {
     createCustomAgent: vi.fn(async () => custom),
     editCustomAgent: vi.fn(async () => custom),
     removeAgent: vi.fn(async (id: string) => ({ id, deleted: true, retained_chats: 0 })),
-    updateAgent: vi.fn(async () => ({ updated: true, from_version: '1.0.0', to_version: '2.0.0', agent: registry })),
+    updateAgent: vi.fn(async () => ({ id: 'op-update', to_version: '2.0.0', state: 'succeeded' } as any)),
   };
 }
 

@@ -7,6 +7,7 @@ import type {
   AgentEnvEdit,
   AgentEnvPresence,
   AgentManagementDetail,
+  AgentOperation,
   AgentSummary,
   CustomAgentInput,
   InstallRegistryAgentInput,
@@ -54,6 +55,7 @@ export class AgentStore {
   readonly protocolInteractionsByFlow = signal<Record<string, ProtocolAuthInteraction | null>>({});
   readonly protocolLoading = signal<ReadonlySet<string>>(new Set());
   readonly terminalFlowsByAgent = signal<Record<string, AgentAuthFlow>>({});
+  readonly operationsByAgent = signal<Record<string, AgentOperation>>({});
 
   readonly available = computed(() =>
     this.installed().filter((agent) => agent.availability === 'available'),
@@ -87,18 +89,84 @@ export class AgentStore {
     await this.loadRegistry(true);
   }
 
-  async installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentSummary> {
-    const installed = await this.api.installRegistryAgent(input);
-    await this.loadInstalled();
-    await this.loadRegistry(true);
-    return installed;
+  operationForAgent(key: string): AgentOperation | null {
+    return this.operationsByAgent()[key] ?? null;
   }
 
-  async updateAgent(id: string): Promise<UpdateOutcome> {
-    const outcome = await this.api.updateRegistryAgent(id);
-    await this.loadInstalled();
-    await this.loadRegistry();
-    return outcome;
+  isAgentBusy(key: string): boolean {
+    const op = this.operationForAgent(key);
+    return op !== null && op.state === "running";
+  }
+
+  recordOperation(op: AgentOperation): void {
+    this.operationsByAgent.update((current) => {
+      const next = { ...current };
+      if (op.id) next[op.id] = op;
+      if (op.agent_id) next[op.agent_id] = op;
+      if (op.registry_id) next[op.registry_id] = op;
+      return next;
+    });
+  }
+
+  clearOperation(op: AgentOperation): void {
+    this.operationsByAgent.update((current) => {
+      const next = { ...current };
+      if (op.id) delete next[op.id];
+      if (op.agent_id) delete next[op.agent_id];
+      if (op.registry_id) delete next[op.registry_id];
+      return next;
+    });
+  }
+
+  async waitForOperation(id: string): Promise<AgentOperation> {
+    const pollInterval = 100;
+    while (true) {
+      const op = await this.api.getAgentOperation(id);
+      this.recordOperation(op);
+      if (op.state === "succeeded") {
+        await this.loadInstalled();
+        await this.loadRegistry(true);
+        this.clearOperation(op);
+        return op;
+      }
+      if (op.state === "failed") {
+        this.clearOperation(op);
+        throw new Error(op.error || "Agent operation failed");
+      }
+      await new Promise((resolve) => setTimeout(resolve, pollInterval));
+    }
+  }
+
+  async installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentOperation> {
+    const op = await this.api.installRegistryAgent(input);
+    this.recordOperation(op);
+    if (op.state === "succeeded") {
+      await this.loadInstalled();
+      await this.loadRegistry(true);
+      this.clearOperation(op);
+      return op;
+    }
+    if (op.state === "failed") {
+      this.clearOperation(op);
+      throw new Error(op.error || "Agent install failed");
+    }
+    return this.waitForOperation(op.id);
+  }
+
+  async updateAgent(id: string): Promise<AgentOperation> {
+    const op = await this.api.updateRegistryAgent(id);
+    this.recordOperation(op);
+    if (op.state === "succeeded") {
+      await this.loadInstalled();
+      await this.loadRegistry(true);
+      this.clearOperation(op);
+      return op;
+    }
+    if (op.state === "failed") {
+      this.clearOperation(op);
+      throw new Error(op.error || "Agent update failed");
+    }
+    return this.waitForOperation(op.id);
   }
 
   async removeAgent(id: string): Promise<RemoveOutcome> {

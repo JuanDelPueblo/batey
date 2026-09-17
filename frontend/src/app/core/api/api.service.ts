@@ -5,6 +5,7 @@ import type {
   AgentAuthFlow,
   AgentAuthState,
   AgentManagementDetail,
+  AgentOperation,
   AgentSummary,
   Chat,
   CloneProjectInput,
@@ -318,17 +319,25 @@ export class ApiService {
     return this.request<RegistryCatalog>('/api/agents/registry/refresh', { method: 'POST' });
   }
 
-  installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentSummary> {
-    return this.request<AgentSummary>('/api/agents/registry/install', {
+  installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentOperation> {
+    return this.request<AgentOperation>('/api/agents/registry/install', {
       method: 'POST',
       body: input,
     });
   }
 
-  updateRegistryAgent(id: string): Promise<UpdateOutcome> {
-    return this.request<UpdateOutcome>(`/api/agents/${encodeURIComponent(id)}/update`, {
+  updateRegistryAgent(id: string): Promise<AgentOperation> {
+    return this.request<AgentOperation>(`/api/agents/${encodeURIComponent(id)}/update`, {
       method: 'POST',
     });
+  }
+
+  getAgentOperation(id: string): Promise<AgentOperation> {
+    return this.request<AgentOperation>(`/api/agent-operations/${encodeURIComponent(id)}`);
+  }
+
+  listAgentOperations(): Promise<AgentOperation[]> {
+    return this.request<AgentOperation[]>('/api/agent-operations');
   }
 
   async removeAgent(id: string): Promise<RemoveOutcome> {

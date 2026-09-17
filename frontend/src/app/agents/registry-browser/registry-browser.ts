@@ -8,7 +8,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import type { DistributionKind, RegistryEntry } from '../../core/api/types';
+import type { AgentOperation, DistributionKind, RegistryEntry } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
 import { ConfirmDialogComponent } from '../confirm-dialog/confirm-dialog';
 
@@ -32,8 +32,14 @@ export class RegistryBrowserComponent {
   private readonly dialog = inject(MatDialog);
 
   readonly query = signal('');
-  readonly busy = signal<string | null>(null);
-  readonly actionError = signal('');
+  readonly uninstalling = signal<string | null>(null);
+  readonly entryErrors = signal<Record<string, string>>({});
+  readonly _actionError = signal('');
+  readonly actionError = computed(() => this._actionError() || Object.values(this.entryErrors())[0] || '');
+  readonly busy = computed(() => {
+    const active = Object.keys(this.state.operationsByAgent());
+    return active[0] ?? this.uninstalling();
+  });
   readonly notice = signal('');
   readonly distributionByEntry = signal<Record<string, DistributionKind>>({});
 
@@ -49,7 +55,8 @@ export class RegistryBrowserComponent {
   });
 
   async refresh(): Promise<void> {
-    this.actionError.set('');
+    this._actionError.set('');
+    this.entryErrors.set({});
     await this.state.refreshRegistry();
   }
 
@@ -61,11 +68,87 @@ export class RegistryBrowserComponent {
     this.distributionByEntry.update((current) => ({ ...current, [entry.id]: distribution }));
   }
 
+  operationFor(entry: RegistryEntry): AgentOperation | null {
+    const id = entry.installed_as ?? entry.id;
+    return this.state.operationForAgent(id) ?? this.state.operationForAgent(entry.id) ?? null;
+  }
+
+  isEntryBusy(entry: RegistryEntry): boolean {
+    const op = this.operationFor(entry);
+    return (op !== null && op.state === 'running') || this.uninstalling() === entry.id;
+  }
+
+  errorFor(entry: RegistryEntry): string | null {
+    return this.entryErrors()[entry.id] ?? null;
+  }
+
+  clearEntryError(entry: RegistryEntry): void {
+    this._actionError.set('');
+    this.entryErrors.update((current) => {
+      if (!(entry.id in current)) return current;
+      const next = { ...current };
+      delete next[entry.id];
+      return next;
+    });
+  }
+
+  setEntryError(entry: RegistryEntry, message: string): void {
+    this._actionError.set(message);
+    this.entryErrors.update((current) => ({ ...current, [entry.id]: message }));
+  }
+
+  formatBytes(bytes: number): string {
+    if (bytes < 1024) return `${bytes} B`;
+    const kb = bytes / 1024;
+    if (kb < 1024) return `${kb.toFixed(1)} KB`;
+    const mb = kb / 1024;
+    return `${mb.toFixed(1)} MB`;
+  }
+
+  stageLabel(op: AgentOperation): string {
+    switch (op.stage) {
+      case 'queued':
+      case 'resolving':
+        return 'Resolving...';
+      case 'downloading': {
+        if (op.total_bytes && op.total_bytes > 0) {
+          return `Downloading... (${this.formatBytes(op.downloaded_bytes)} / ${this.formatBytes(op.total_bytes)})`;
+        }
+        if (op.downloaded_bytes > 0) {
+          return `Downloading... (${this.formatBytes(op.downloaded_bytes)})`;
+        }
+        return 'Downloading...';
+      }
+      case 'verifying':
+        return 'Verifying checksum...';
+      case 'extracting':
+        return 'Extracting archive...';
+      case 'preparing':
+        return 'Preparing package...';
+      case 'finalizing':
+        return 'Finalizing...';
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      default:
+        return 'Working...';
+    }
+  }
+
+  isDeterminate(op: AgentOperation): boolean {
+    return op.stage === 'downloading' && op.total_bytes !== null && op.total_bytes > 0;
+  }
+
+  downloadPercent(op: AgentOperation): number {
+    if (!op.total_bytes || op.total_bytes <= 0) return 0;
+    return Math.min(100, Math.round((op.downloaded_bytes / op.total_bytes) * 100));
+  }
+
   async install(entry: RegistryEntry): Promise<void> {
     const distribution = this.distributionFor(entry);
     if (!distribution) return;
-    this.busy.set(entry.id);
-    this.actionError.set('');
+    this.clearEntryError(entry);
     this.notice.set('');
     try {
       await this.state.installRegistryAgent({
@@ -75,28 +158,23 @@ export class RegistryBrowserComponent {
       });
       this.notice.set(`Installed ${entry.name}.`);
     } catch (error: unknown) {
-      this.actionError.set(this.message(error, `Failed to install ${entry.name}`));
-    } finally {
-      this.busy.set(null);
+      this.setEntryError(entry, this.message(error, `Failed to install ${entry.name}`));
     }
   }
 
   async update(entry: RegistryEntry): Promise<void> {
     const id = entry.installed_as ?? entry.id;
-    this.busy.set(entry.id);
-    this.actionError.set('');
+    this.clearEntryError(entry);
     this.notice.set('');
     try {
       const outcome = await this.state.updateAgent(id);
       this.notice.set(
-        outcome.updated
+        outcome?.to_version
           ? `Updated ${entry.name} to v${outcome.to_version}.`
           : `${entry.name} is already at the newest version.`,
       );
     } catch (error: unknown) {
-      this.actionError.set(this.message(error, `Failed to update ${entry.name}`));
-    } finally {
-      this.busy.set(null);
+      this.setEntryError(entry, this.message(error, `Failed to update ${entry.name}`));
     }
   }
 
@@ -108,16 +186,16 @@ export class RegistryBrowserComponent {
       'Uninstall',
     );
     if (!confirmed) return;
-    this.busy.set(entry.id);
-    this.actionError.set('');
+    this.uninstalling.set(entry.id);
+    this.clearEntryError(entry);
     this.notice.set('');
     try {
       await this.state.removeAgent(id);
       this.notice.set(`Uninstalled ${entry.name}.`);
     } catch (error: unknown) {
-      this.actionError.set(this.message(error, `Failed to uninstall ${entry.name}`));
+      this.setEntryError(entry, this.message(error, `Failed to uninstall ${entry.name}`));
     } finally {
-      this.busy.set(null);
+      this.uninstalling.set(null);
     }
   }
 

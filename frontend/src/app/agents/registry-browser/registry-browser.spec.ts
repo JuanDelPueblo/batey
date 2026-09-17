@@ -3,7 +3,7 @@ import { signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RegistryCatalog } from '../../core/api/types';
+import type { AgentOperation, RegistryCatalog } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
 import { RegistryBrowserComponent } from './registry-browser';
 
@@ -53,6 +53,9 @@ describe('RegistryBrowserComponent', () => {
     registry: ReturnType<typeof signal<RegistryCatalog | null>>;
     registryLoading: ReturnType<typeof signal<boolean>>;
     registryError: ReturnType<typeof signal<string | null>>;
+    operationsByAgent: ReturnType<typeof signal<Record<string, AgentOperation>>>;
+    operationForAgent: ReturnType<typeof vi.fn>;
+    isAgentBusy: ReturnType<typeof vi.fn>;
     loadRegistry: ReturnType<typeof vi.fn>;
     refreshRegistry: ReturnType<typeof vi.fn>;
     installRegistryAgent: ReturnType<typeof vi.fn>;
@@ -61,14 +64,46 @@ describe('RegistryBrowserComponent', () => {
   };
 
   beforeEach(async () => {
+    const opsSignal = signal<Record<string, AgentOperation>>({});
     state = {
       registry: signal<RegistryCatalog | null>(catalog),
       registryLoading: signal(false),
       registryError: signal<string | null>(null),
+      operationsByAgent: opsSignal,
+      operationForAgent: vi.fn((key: string) => opsSignal()[key] ?? null),
+      isAgentBusy: vi.fn((key: string) => {
+        const op = opsSignal()[key];
+        return op !== undefined && op.state === 'running';
+      }),
       loadRegistry: vi.fn(async () => undefined),
       refreshRegistry: vi.fn(async () => undefined),
-      installRegistryAgent: vi.fn(async () => ({ id: 'native-agent' })),
-      updateAgent: vi.fn(async () => ({ updated: true, from_version: '1.0.0', to_version: '1.2.0', agent: { id: 'example-acp' } })),
+      installRegistryAgent: vi.fn(async () => ({
+        id: 'op-1',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        kind: 'install',
+        state: 'succeeded',
+        stage: 'completed',
+        downloaded_bytes: 100,
+        total_bytes: 100,
+        error: null,
+        started_at: '',
+        completed_at: '',
+      } as AgentOperation)),
+      updateAgent: vi.fn(async () => ({
+        id: 'op-2',
+        agent_id: 'example-acp',
+        registry_id: 'example-acp',
+        kind: 'update',
+        state: 'succeeded',
+        stage: 'completed',
+        downloaded_bytes: 100,
+        total_bytes: 100,
+        error: null,
+        started_at: '',
+        completed_at: '',
+        to_version: '1.2.0',
+      } as AgentOperation)),
       removeAgent: vi.fn(async () => ({ id: 'example-acp', deleted: true, retained_chats: 0 })),
     };
 
@@ -170,7 +205,20 @@ describe('RegistryBrowserComponent', () => {
     await fixture.componentInstance.update(catalog.agents[0]);
     expect(state.updateAgent).toHaveBeenCalledWith('example-acp');
 
-    state.updateAgent.mockResolvedValueOnce({ updated: false, from_version: '1.2.0', to_version: '1.2.0', agent: { id: 'example-acp' } });
+    state.updateAgent.mockResolvedValueOnce({
+      id: 'op-2',
+      agent_id: 'example-acp',
+      registry_id: 'example-acp',
+      kind: 'update',
+      state: 'succeeded',
+      stage: 'completed',
+      downloaded_bytes: 100,
+      total_bytes: 100,
+      error: null,
+      started_at: '',
+      completed_at: '',
+      to_version: null,
+    } as AgentOperation);
     await fixture.componentInstance.update(catalog.agents[0]);
     expect(fixture.componentInstance.notice()).toContain('already at the newest version');
   });
@@ -184,6 +232,63 @@ describe('RegistryBrowserComponent', () => {
     state.installRegistryAgent.mockRejectedValueOnce(new Error('integrity check failed'));
     await fixture.componentInstance.install(catalog.agents[1]);
     expect(fixture.componentInstance.actionError()).toContain('integrity check failed');
+  });
+
+  it('displays determinate progress and disables buttons only for the active agent', () => {
+    state.operationsByAgent.set({
+      'native-agent': {
+        id: 'op-1',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        kind: 'install',
+        state: 'running',
+        stage: 'downloading',
+        downloaded_bytes: 5242880,
+        total_bytes: 10485760,
+        error: null,
+        started_at: '',
+        completed_at: null,
+      },
+    });
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Downloading... (5.0 MB / 10.0 MB)');
+    expect(text).toContain('50%');
+
+    // Native agent install button is disabled
+    const installBtn = (Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[])
+      .find((b) => b.textContent?.trim() === 'Install');
+    expect(installBtn?.disabled).toBe(true);
+
+    // Example ACP update button is NOT disabled
+    const updateBtn = (Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[])
+      .find((b) => b.textContent?.trim() === 'Update');
+    expect(updateBtn?.disabled).toBe(false);
+  });
+
+  it('displays indeterminate progress for extracting stage', () => {
+    state.operationsByAgent.set({
+      'native-agent': {
+        id: 'op-1',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        kind: 'install',
+        state: 'running',
+        stage: 'extracting',
+        downloaded_bytes: 0,
+        total_bytes: null,
+        error: null,
+        started_at: '',
+        completed_at: null,
+      },
+    });
+    fixture.detectChanges();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Extracting archive...');
+    const progressBar = fixture.nativeElement.querySelector('mat-progress-bar');
+    expect(progressBar?.getAttribute('mode')).toBe('indeterminate');
   });
 
   it('never offers an install control for an unsupported entry', () => {

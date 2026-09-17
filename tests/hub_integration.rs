@@ -202,6 +202,131 @@ async fn registry_api_fetches_on_first_browse_and_keeps_cache_on_refresh_failure
     sessions.shutdown_all().await;
 }
 
+#[tokio::test]
+async fn agent_operation_install_and_update_lifecycle() {
+    let tmp = tempfile::tempdir().unwrap();
+    let document = serde_json::to_vec(&json!({
+        "version": "1.0.0",
+        "agents": [{
+            "id": "fixture-acp",
+            "name": "Fixture ACP",
+            "version": "1.0.0",
+            "description": "Fixture agent",
+            "distribution": {"npx": {"package": "fixture-acp@1.0.0"}}
+        }]
+    }))
+    .unwrap();
+    let fixture = Arc::new(FixtureRegistry::new(document));
+    let (app, sessions, _, _) = managed_app_with_registry(tmp.path(), fixture.clone());
+
+    // 1. POST /api/agents/registry/install
+    let install_req = json!({
+        "registry_id": "fixture-acp",
+        "agent_id": "fixture-acp",
+    });
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/registry/install")
+                .header("host", "127.0.0.1:8765")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&install_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let op_view: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert_eq!(op_view["kind"], "install");
+    assert_eq!(op_view["agent_id"], "fixture-acp");
+    let op_id = op_view["id"].as_str().unwrap().to_string();
+
+    // 2. Second install while running returns 409 Conflict
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/registry/install")
+                .header("host", "127.0.0.1:8765")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&install_req).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 409);
+
+    // 3. GET /api/agent-operations/:op_id
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/api/agent-operations/{op_id}"))
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let queried: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert_eq!(queried["id"], op_id);
+
+    // 4. GET /api/agent-operations
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agent-operations")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let list: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert!(list
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == op_id));
+
+    // 5. Poll until completed
+    let mut completed = false;
+    for _ in 0..50 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/agent-operations/{op_id}"))
+                    .header("host", "127.0.0.1:8765")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let current: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
+                .unwrap();
+        if current["state"] == "succeeded" || current["state"] == "failed" {
+            completed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert!(completed);
+
+    sessions.shutdown_all().await;
+}
+
 fn manager(root: &std::path::Path, can_load: bool) -> Arc<SessionManager> {
     manager_with_mode(root, if can_load { "load" } else { "no-load" })
 }

@@ -192,6 +192,13 @@ function now() {
   return new Date().toISOString();
 }
 
+/** Same shape as `server.mjs`'s `httpError`: a status-carrying `Error`. */
+function stateError(status, message) {
+  const error = new Error(message);
+  error.status = status;
+  return error;
+}
+
 /** Config options in the shape the ACP agents advertise. */
 export function defaultConfigOptions(agent) {
   return [
@@ -290,6 +297,10 @@ export class FakeState {
     this.elicitationsByChat = new Map();
     this.remoteSessionsByChat = new Map();
     this.workspaceOptionsByProject = new Map();
+    // Project id -> the scenario `syncWorkspace` simulates for that project's
+    // next call: 'behind' (default; fast-forwards once, then reports
+    // up to date), 'up_to_date', 'diverged', 'no_upstream', or 'fetch_failure'.
+    this.syncScenarioByProject = new Map();
     // Live process state, which the real backend holds in the session manager.
     this.runtime = new Map();
     this.tasksByChat = new Map();
@@ -427,6 +438,48 @@ export class FakeState {
     const options = this.workspaceOptionsByProject.get(projectId);
     if (!options) return null;
     return { ...options, branches: options.branches.map((branch) => ({ ...branch })) };
+  }
+
+  setSyncScenario(project, scenario) {
+    this.syncScenarioByProject.set(project.id, scenario);
+  }
+
+  /** Mirrors `HubService::sync_workspace`: fetch, then fast-forward the
+   * checked-out branch only when that is safe. Scenario selection stands in
+   * for the real backend deciding this from actual Git state. */
+  syncWorkspace(projectId) {
+    if (!this.projects.has(projectId)) throw stateError(404, 'Project not found');
+    const options = this.workspaceOptionsByProject.get(projectId);
+    if (!options?.is_git) throw stateError(400, 'Project is not a Git repository');
+
+    const branch = options.current_branch;
+    if (options.dirty) {
+      throw stateError(409, 'Cannot update checkout with uncommitted changes');
+    }
+
+    const scenario = this.syncScenarioByProject.get(projectId) ?? 'behind';
+    if (scenario === 'no_upstream') {
+      throw stateError(409, `no upstream configured for ${branch}`);
+    }
+    if (scenario === 'fetch_failure') {
+      throw stateError(400, 'Fetch failed: could not resolve host example.invalid');
+    }
+    if (scenario === 'diverged') {
+      throw stateError(409, `local and remote histories for ${branch} have diverged`);
+    }
+    if (scenario === 'up_to_date') {
+      return { branch, remote: 'origin', updated: false, head_sha: options.head_sha };
+    }
+
+    // 'behind': simulate a fast-forward, then settle on up-to-date so a
+    // second call in the same running dev server reports no update needed.
+    const headSha = options.head_sha.startsWith('9') ? `8${options.head_sha.slice(1)}` : `9${options.head_sha.slice(1)}`;
+    options.head_sha = headSha;
+    const current = options.branches.find((candidate) => candidate.name === branch);
+    if (current) current.sha = headSha;
+    this.syncScenarioByProject.set(projectId, 'up_to_date');
+
+    return { branch, remote: 'origin', updated: true, head_sha: headSha };
   }
 
   projectView(project) {

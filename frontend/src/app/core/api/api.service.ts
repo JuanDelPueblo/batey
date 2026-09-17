@@ -20,6 +20,7 @@ import type {
   UpdateOutcome,
   ValidationReport,
   WorkspaceOptions,
+  WorkspaceSyncResult,
   ChatHistoryPage,
   TerminalTaskSummary,
   TerminalTaskDetails,
@@ -115,6 +116,12 @@ export class ApiService {
 
   fetchWorkspaceOptions(projectId: string): Promise<WorkspaceOptions> {
     return this.request<WorkspaceOptions>(`/api/projects/${encodeURIComponent(projectId)}/workspace-options`);
+  }
+
+  syncWorkspace(projectId: string): Promise<WorkspaceSyncResult> {
+    return this.request<WorkspaceSyncResult>(`/api/projects/${encodeURIComponent(projectId)}/workspace-sync`, {
+      method: 'POST',
+    });
   }
 
   createChat(projectId: string, agent: string, title?: string, workspace?: ChatWorkspaceSelection): Promise<Chat> {

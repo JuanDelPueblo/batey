@@ -44,6 +44,34 @@ fn git_repo(root: &Path) -> std::path::PathBuf {
     repo
 }
 
+/// A repo like `git_repo`, plus a bare remote it pushed `main` to, so
+/// `sync_workspace` has a real upstream to fetch and fast-forward from.
+fn git_repo_with_remote(root: &Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let repo = git_repo(root);
+    let remote = root.join("remote.git");
+    std::fs::create_dir_all(&remote).unwrap();
+    git(&remote, &["init", "--bare", "-b", "main"]);
+    git(
+        &repo,
+        &["remote", "add", "origin", remote.to_str().unwrap()],
+    );
+    git(&repo, &["push", "-u", "origin", "main"]);
+    (repo, remote)
+}
+
+/// Advances the bare `remote` by one commit through a second clone, so the
+/// change reaches the remote without ever touching `repo`.
+fn advance_remote(remote: &Path, file: &str, content: &str) {
+    let scratch = tempfile::tempdir().unwrap();
+    git(scratch.path(), &["clone", remote.to_str().unwrap(), "."]);
+    git(scratch.path(), &["config", "user.email", "t@t.t"]);
+    git(scratch.path(), &["config", "user.name", "t"]);
+    std::fs::write(scratch.path().join(file), content).unwrap();
+    git(scratch.path(), &["add", "."]);
+    git(scratch.path(), &["commit", "-m", "advance"]);
+    git(scratch.path(), &["push", "origin", "main"]);
+}
+
 fn git_repo_with_direnv_runtime_cache(root: &Path) -> std::path::PathBuf {
     let repo = git_repo(root);
     // This is the shape that nix-direnv produces for a flake profile. Keep
@@ -137,6 +165,137 @@ async fn workspace_options_enumerate_sorted_local_branches_and_non_git() {
     let plain_options = hub.workspace_options(&plain_project.id).await.unwrap();
     assert!(!plain_options.is_git);
     assert!(plain_options.branches.is_empty());
+}
+
+#[tokio::test]
+async fn sync_workspace_fast_forwards_a_clean_behind_checkout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, remote) = git_repo_with_remote(tmp.path());
+    advance_remote(&remote, "new.txt", "new");
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+
+    let result = hub.sync_workspace(&project.id).await.unwrap();
+
+    assert!(result.updated);
+    assert_eq!(result.branch, "main");
+    assert_ne!(result.head_sha, before);
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), result.head_sha);
+    assert!(repo.join("new.txt").exists());
+}
+
+#[tokio::test]
+async fn sync_workspace_reports_already_up_to_date() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, _remote) = git_repo_with_remote(tmp.path());
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+
+    let result = hub.sync_workspace(&project.id).await.unwrap();
+
+    assert!(!result.updated);
+    assert_eq!(result.head_sha, before);
+}
+
+#[tokio::test]
+async fn sync_workspace_refuses_a_dirty_checkout() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, remote) = git_repo_with_remote(tmp.path());
+    advance_remote(&remote, "new.txt", "new");
+    std::fs::write(repo.join("README.md"), "dirty\n").unwrap();
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+
+    let error = hub.sync_workspace(&project.id).await.unwrap_err();
+
+    assert!(matches!(error, ServiceError::Conflict(_)));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        "dirty\n"
+    );
+}
+
+#[tokio::test]
+async fn sync_workspace_refuses_diverged_history() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, remote) = git_repo_with_remote(tmp.path());
+    advance_remote(&remote, "remote-only.txt", "remote");
+    std::fs::write(repo.join("local-only.txt"), "local").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "diverge"]);
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let before = git(&repo, &["rev-parse", "HEAD"]);
+
+    let error = hub.sync_workspace(&project.id).await.unwrap_err();
+
+    assert!(matches!(error, ServiceError::Conflict(_)));
+    assert_eq!(git(&repo, &["rev-parse", "HEAD"]), before);
+}
+
+#[tokio::test]
+async fn sync_workspace_refuses_without_an_upstream() {
+    let tmp = tempfile::tempdir().unwrap();
+    let repo = git_repo(tmp.path());
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+
+    let error = hub.sync_workspace(&project.id).await.unwrap_err();
+
+    assert!(matches!(error, ServiceError::Conflict(_)));
+}
+
+#[tokio::test]
+async fn sync_workspace_reports_a_sanitized_fetch_failure() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, _remote) = git_repo_with_remote(tmp.path());
+    git(
+        &repo,
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://ghp_SECRET@example.invalid/does/not/exist.git",
+        ],
+    );
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+
+    let error = hub.sync_workspace(&project.id).await.unwrap_err();
+
+    assert!(matches!(error, ServiceError::Invalid(_)));
+    assert!(!error.to_string().contains("ghp_SECRET"));
+}
+
+#[tokio::test]
+async fn sync_workspace_rejects_a_non_git_project() {
+    let tmp = tempfile::tempdir().unwrap();
+    let plain = tmp.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    let (hub, _store) = hub(tmp.path());
+    let project = hub
+        .create_project("plain".into(), plain.display().to_string())
+        .unwrap();
+
+    let error = hub.sync_workspace(&project.id).await.unwrap_err();
+
+    assert!(matches!(error, ServiceError::Invalid(_)));
 }
 
 #[tokio::test]
@@ -432,6 +591,83 @@ async fn http_workspace_options_route_and_chat_workspace_payload_work() {
     assert_eq!(response.status(), axum::http::StatusCode::OK);
     assert_eq!(store.chats().unwrap().len(), 1);
     assert_eq!(store.list_workspaces().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn http_workspace_sync_route_updates_and_reports_dirty_refusal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (repo, remote) = git_repo_with_remote(tmp.path());
+    advance_remote(&remote, "new.txt", "new");
+    let store = Arc::new(Store::open(&tmp.path().join("hub.db")).unwrap());
+    let events = Arc::new(EventLog::persistent(store.clone()).unwrap());
+    let agents = Arc::new(AgentRegistry::new([AgentDefinition::codex_default()]));
+    let sessions = SessionManager::with_store(agents.clone(), events, Some(store.clone()));
+    let mut config = Config {
+        agents,
+        ..Default::default()
+    };
+    config.web.project_roots = vec![tmp.path().display().to_string()];
+    let project = store
+        .create_project("git".into(), repo.display().to_string())
+        .unwrap();
+    let app = router(AppState::new(sessions, Arc::new(config), 0));
+
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{}/workspace-sync", project.id))
+                .header("host", "127.0.0.1:0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(result["updated"], true);
+    assert_eq!(result["branch"], "main");
+    assert!(repo.join("new.txt").exists());
+
+    // A second sync with nothing new upstream is a no-op success.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{}/workspace-sync", project.id))
+                .header("host", "127.0.0.1:0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::OK);
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let result: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(result["updated"], false);
+
+    // A dirty checkout is refused, and reported as a client error.
+    advance_remote(&remote, "another.txt", "another");
+    std::fs::write(repo.join("README.md"), "dirty\n").unwrap();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/api/projects/{}/workspace-sync", project.id))
+                .header("host", "127.0.0.1:0")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), axum::http::StatusCode::CONFLICT);
+    assert_eq!(
+        std::fs::read_to_string(repo.join("README.md")).unwrap(),
+        "dirty\n"
+    );
 }
 
 #[tokio::test]

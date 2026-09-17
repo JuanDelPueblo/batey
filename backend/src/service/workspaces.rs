@@ -26,6 +26,16 @@ pub struct WorkspaceBranch {
     pub current: bool,
 }
 
+/// Result of fetching a project's Git remotes and fast-forwarding its
+/// checked-out branch when that was safe.
+#[derive(Debug, Clone, Serialize)]
+pub struct WorkspaceSyncResult {
+    pub branch: String,
+    pub remote: String,
+    pub updated: bool,
+    pub head_sha: String,
+}
+
 pub(crate) fn workspace_error(error: WorkspaceError) -> ServiceError {
     match error {
         WorkspaceError::Conflict(message) => ServiceError::Conflict(message),
@@ -72,6 +82,69 @@ impl HubService {
             head_sha: info.head_sha,
             dirty: info.dirty,
             branches,
+        })
+    }
+
+    /// Fetch the project's configured remotes and, when safe, fast-forward
+    /// the checked-out branch to its upstream.
+    ///
+    /// Scoped to the project checkout's current branch: it never touches a
+    /// Batey-managed worktree, and it refuses instead of stashing, merging,
+    /// rebasing, resetting, or switching branches. See
+    /// `workspace::fetch_and_fast_forward` for the exact refusal conditions.
+    pub async fn sync_workspace(&self, project_id: &str) -> ServiceResult<WorkspaceSyncResult> {
+        tracing::info!(project_id, "Starting Git workspace sync");
+        let result = self.sync_workspace_inner(project_id).await;
+        match &result {
+            Ok(outcome) => tracing::info!(
+                project_id,
+                branch = %outcome.branch,
+                updated = outcome.updated,
+                head_sha = %outcome.head_sha,
+                "Git workspace sync finished"
+            ),
+            Err(error) => tracing::warn!(project_id, %error, "Git workspace sync failed"),
+        }
+        result
+    }
+
+    async fn sync_workspace_inner(&self, project_id: &str) -> ServiceResult<WorkspaceSyncResult> {
+        let project = self.store.project(project_id)?;
+        let path = PathBuf::from(project.path);
+        let _workspace_guard = self.workspace_lock.lock().await;
+        let info = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || workspace::inspect(&path)
+        })
+        .await
+        .map_err(|error| ServiceError::Internal(anyhow::anyhow!(error)))?
+        .map_err(workspace_error)?;
+        if !info.is_git {
+            return Err(ServiceError::Invalid(
+                "Project is not a Git repository".into(),
+            ));
+        }
+        let root = info
+            .root
+            .ok_or_else(|| ServiceError::Internal(anyhow::anyhow!("Git root is unavailable")))?;
+
+        // The same reservation a project-checkout branch switch takes: a live
+        // process in a direct chat bound to this checkout must finish first.
+        self.ensure_primary_checkout_available(&root).await?;
+
+        let outcome = tokio::task::spawn_blocking({
+            let root = root.clone();
+            move || workspace::fetch_and_fast_forward(&root)
+        })
+        .await
+        .map_err(|error| ServiceError::Internal(anyhow::anyhow!(error)))?
+        .map_err(workspace_error)?;
+
+        Ok(WorkspaceSyncResult {
+            branch: outcome.branch,
+            remote: outcome.remote,
+            updated: outcome.updated,
+            head_sha: outcome.head_sha,
         })
     }
 }

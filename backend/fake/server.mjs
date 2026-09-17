@@ -35,6 +35,7 @@ const routes = [
   ['DELETE', /^\/api\/projects\/([^/]+)$/, deleteProject],
   ['GET', /^\/api\/projects\/([^/]+)\/chats$/, listChats],
   ['GET', /^\/api\/projects\/([^/]+)\/workspace-options$/, workspaceOptions],
+  ['POST', /^\/api\/projects\/([^/]+)\/workspace-sync$/, syncWorkspace],
   ['POST', /^\/api\/projects\/([^/]+)\/chats$/, createChat],
   ['DELETE', /^\/api\/projects\/([^/]+)\/envrc-grant$/, forgetProjectEnvrcGrant],
   ['GET', /^\/api\/chats\/([^/]+)$/, getChat],
@@ -320,6 +321,12 @@ function workspaceOptions({ params }) {
   const options = state.workspaceOptions(params[0]);
   if (!options) throw httpError(404, 'Project not found');
   return json(options);
+}
+
+async function syncWorkspace({ params }) {
+  // A real fetch takes time. The delay keeps the progress state visible.
+  await new Promise((resolve) => setTimeout(resolve, 600 * options.latency));
+  return json(state.syncWorkspace(params[0]));
 }
 
 function createChat({ params, body }) {

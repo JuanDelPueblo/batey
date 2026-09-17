@@ -44,16 +44,10 @@
       [disabled]="syncing() || creating()"
     >
       @if (syncing()) {
-      <ng-container>
-        <mat-spinner diameter="18" matButtonIcon />
-        Updating…
-      </ng-container>
+      <mat-spinner diameter="18" matButtonIcon />
       } @else {
-      <ng-container>
-        <mat-icon>sync</mat-icon>
-        Update from remote
-      </ng-container>
-      }
+      <mat-icon>sync</mat-icon>
+      } {{ syncing() ? 'Updating…' : 'Update from remote' }}
     </button>
     @if (syncMessage()) { <span class="sync-status" role="status">{{ syncMessage() }}</span> }
   </div>

@@ -9,6 +9,8 @@
   background: var(--mat-sys-surface-container-lowest);
   transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
   overflow: hidden;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 
 .tool-header {
@@ -262,7 +264,8 @@
   color: var(--mat-sys-on-surface-variant);
 }
 
-.tool-output {
+.tool-output,
+.terminal-output {
   max-height: 280px;
   overflow: auto;
   margin: 0;
@@ -273,10 +276,162 @@
   border: 1px solid var(--mat-sys-outline-variant);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  word-break: break-word;
+  max-width: 100%;
+  box-sizing: border-box;
   font: 0.8rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
 
   .status-failed & {
     border-color: var(--mat-sys-error);
+  }
+}
+
+/* Terminal Semantic Rendering */
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.terminal-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--mat-sys-surface-container-low);
+  border: 1px solid var(--mat-sys-outline-variant);
+  border-radius: var(--mat-sys-corner-small);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.terminal-command-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.terminal-prompt {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 700;
+  color: var(--mat-sys-primary);
+  user-select: none;
+  line-height: 1.4;
+}
+
+.terminal-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: 0.8rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--mat-sys-on-surface);
+}
+
+.terminal-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  font: var(--mat-sys-label-medium);
+}
+
+.terminal-cwd {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--mat-sys-on-surface-variant);
+
+  .meta-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+  }
+
+  .cwd-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.78rem;
+  }
+}
+
+.terminal-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 8px;
+  border-radius: var(--mat-sys-corner-full);
+  font: var(--mat-sys-label-small);
+  font-weight: 500;
+  letter-spacing: 0.25px;
+
+  .status-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+  }
+
+  &.status-running {
+    color: var(--hub-status-starting);
+    background: var(--mat-sys-surface-container-highest);
+
+    .status-icon {
+      animation: hub-spin 1.5s linear infinite;
+
+      @media (prefers-reduced-motion: reduce) {
+        animation: none;
+      }
+    }
+  }
+
+  &.status-success {
+    color: var(--hub-status-running);
+    background: var(--hub-status-running-container);
+  }
+
+  &.status-failed {
+    color: var(--hub-status-dead);
+    background: var(--hub-status-dead-container);
+  }
+}
+
+.terminal-extra-details {
+  font: var(--mat-sys-label-medium);
+  color: var(--mat-sys-on-surface-variant);
+
+  summary {
+    cursor: pointer;
+    user-select: none;
+    padding: 4px 0;
+  }
+
+  .terminal-extra-json {
+    margin: 6px 0 0;
+    padding: 8px 10px;
+    background: var(--mat-sys-surface-container-low);
+    border: 1px solid var(--mat-sys-outline-variant);
+    border-radius: var(--mat-sys-corner-small);
+    font: 0.76rem/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+    overflow: auto;
+    max-height: 200px;
+    max-width: 100%;
+    box-sizing: border-box;
   }
 }
 

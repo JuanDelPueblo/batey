@@ -2,6 +2,7 @@ import { Component, computed, input, signal } from '@angular/core';
 import { MatIconModule } from '@angular/material/icon';
 import type { RichContentBlock, TurnEntryTool } from '../../core/api/types';
 import { RichContentComponent } from '../rich-content/rich-content';
+import { parseTerminalPayload } from './terminal-payload';
 
 @Component({
   selector: 'hub-tool-call',
@@ -16,7 +17,19 @@ export class ToolCallComponent {
 
   readonly isSubagentChild = computed(() => !!this.tool().parentId);
 
+  readonly terminal = computed(() => {
+    return parseTerminalPayload(this.tool().output, {
+      toolStatus: this.tool().status,
+      toolTitle: this.tool().title,
+      toolKind: this.tool().kind,
+    });
+  });
+
   readonly normalizedStatus = computed<'running' | 'completed' | 'failed'>(() => {
+    const term = this.terminal();
+    if (term) {
+      return term.state;
+    }
     const raw = (this.tool().status || '').toLowerCase().trim();
     if (raw === 'in_progress' || raw === 'running' || raw === 'pending') {
       return 'running';
@@ -32,6 +45,10 @@ export class ToolCallComponent {
   readonly isCompleted = computed(() => this.normalizedStatus() === 'completed');
 
   readonly statusLabel = computed(() => {
+    const term = this.terminal();
+    if (term?.exitCode != null) {
+      return term.exitCode === 0 ? 'Completed (exit 0)' : `Failed (exit ${term.exitCode})`;
+    }
     switch (this.normalizedStatus()) {
       case 'running':
         return 'Running';
@@ -42,14 +59,28 @@ export class ToolCallComponent {
     }
   });
 
+  readonly panelDescription = computed(() => {
+    const term = this.terminal();
+    if (term) {
+      if (term.exitCode != null) {
+        return term.exitCode === 0 ? 'completed (exit 0)' : `failed (exit ${term.exitCode})`;
+      }
+      return term.state;
+    }
+    return this.tool().status;
+  });
+
   readonly semanticKind = computed<string>(() => {
+    if (this.terminal()) {
+      return 'execute';
+    }
     const explicit = (this.tool().kind || '').toLowerCase().trim();
     if (explicit) return explicit;
 
     const title = (this.tool().title || '').trim().toLowerCase();
     if (title.startsWith('read ') || title.startsWith('view ')) return 'read';
     if (title.startsWith('edit ') || title.startsWith('write ') || title.startsWith('patch ')) return 'edit';
-    if (title.startsWith('run ') || title.startsWith('execute ') || title.startsWith('bash ') || title.startsWith('sh ')) return 'execute';
+    if (title.startsWith('run ') || title.startsWith('execute ') || title.startsWith('bash ') || title.startsWith('sh ') || title.startsWith('terminal')) return 'execute';
     if (title.startsWith('search ') || title.startsWith('find ') || title.startsWith('grep ') || title.startsWith('rg ')) return 'search';
     if (title.startsWith('delete ') || title.startsWith('remove ') || title.startsWith('rm ')) return 'delete';
     if (title.startsWith('think ') || title.startsWith('thought')) return 'think';
@@ -61,6 +92,7 @@ export class ToolCallComponent {
       case 'read':
         return 'description';
       case 'execute':
+      case 'terminal':
         return 'terminal';
       case 'think':
         return 'psychology';
@@ -85,20 +117,29 @@ export class ToolCallComponent {
     const loc = this.firstLocation();
     const locSummary = loc ? loc.path + (loc.line != null ? `:${loc.line}` : '') : '';
     const kind = this.semanticKind();
+    const term = this.terminal();
 
     // 1. Check for common action prefixes
-    const verbMatch = rawTitle.match(/^(Read|View|Edit|Write|Patch|Delete|Remove|Run|Execute|Search(?:\s+for)?|Find|Grep)\s+(.+)$/i);
+    const verbMatch = rawTitle.match(/^(Read|View|Edit|Write|Patch|Delete|Remove|Run|Execute|Terminal|Search(?:\s+for)?|Find|Grep)\s+(.+)$/i);
     if (verbMatch) {
       const verb = verbMatch[1].toLowerCase().startsWith('search') ? 'Search' : verbMatch[1];
       const action = verb.charAt(0).toUpperCase() + verb.slice(1).toLowerCase();
       const target = verbMatch[2].trim();
       return {
-        title: action,
+        title: action === 'Terminal' ? 'Run' : action,
         summary: target || locSummary,
       };
     }
 
-    // 2. If kind is execute and rawTitle is a command
+    // 2. If terminal payload has a command
+    if (term?.command) {
+      return {
+        title: 'Run',
+        summary: term.command,
+      };
+    }
+
+    // 3. If kind is execute and rawTitle is a command
     if (kind === 'execute' && rawTitle) {
       return {
         title: 'Run',
@@ -106,7 +147,7 @@ export class ToolCallComponent {
       };
     }
 
-    // 3. If kind is read and rawTitle looks like a path
+    // 4. If kind is read and rawTitle looks like a path
     if (kind === 'read' && rawTitle && (rawTitle.includes('/') || rawTitle.includes('.'))) {
       return {
         title: 'Read',
@@ -114,7 +155,7 @@ export class ToolCallComponent {
       };
     }
 
-    // 4. If kind is edit and rawTitle looks like a path
+    // 5. If kind is edit and rawTitle looks like a path
     if (kind === 'edit' && rawTitle && (rawTitle.includes('/') || rawTitle.includes('.'))) {
       return {
         title: 'Edit',
@@ -122,7 +163,7 @@ export class ToolCallComponent {
       };
     }
 
-    // 5. If kind is delete and rawTitle looks like a path
+    // 6. If kind is delete and rawTitle looks like a path
     if (kind === 'delete' && rawTitle && (rawTitle.includes('/') || rawTitle.includes('.'))) {
       return {
         title: 'Delete',
@@ -130,7 +171,7 @@ export class ToolCallComponent {
       };
     }
 
-    // 6. If locations exist and rawTitle does not already include it
+    // 7. If locations exist and rawTitle does not already include it
     if (locSummary && rawTitle && !rawTitle.includes(locSummary)) {
       return {
         title: rawTitle,
@@ -161,6 +202,16 @@ export class ToolCallComponent {
     return raw;
   });
 
+  readonly hasUnrecognizedFields = computed(() => {
+    const fields = this.terminal()?.unrecognizedFields;
+    return !!fields && Object.keys(fields).length > 0;
+  });
+
+  readonly unrecognizedFieldsJson = computed(() => {
+    const fields = this.terminal()?.unrecognizedFields;
+    return fields ? JSON.stringify(fields, null, 2) : '';
+  });
+
   readonly richContent = computed(() => {
     const content = this.tool().content;
     if (!Array.isArray(content)) return [] as RichContentBlock[];
@@ -173,9 +224,21 @@ export class ToolCallComponent {
     });
   });
 
-  readonly hasDetails = computed(() =>
-    !!this.cleanOutput() || this.richContent().length > 0 || (this.tool().locations?.length ?? 0) > 0
-  );
+  readonly hasDetails = computed(() => {
+    if (this.terminal()) {
+      const term = this.terminal()!;
+      return (
+        !!term.output ||
+        !!term.command ||
+        !!term.workingDir ||
+        term.exitCode != null ||
+        this.hasUnrecognizedFields() ||
+        this.richContent().length > 0 ||
+        (this.tool().locations?.length ?? 0) > 0
+      );
+    }
+    return !!this.cleanOutput() || this.richContent().length > 0 || (this.tool().locations?.length ?? 0) > 0;
+  });
 
   readonly isExpanded = computed(() => {
     const manual = this.userExpanded();

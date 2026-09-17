@@ -73,7 +73,62 @@
         </div>
       }
 
-      @if (cleanOutput()) {
+      @if (terminal(); as term) {
+        <div class="terminal-view">
+          <div class="terminal-summary" role="region" aria-label="Terminal command summary">
+            @if (term.command) {
+              <div class="terminal-command-row">
+                <span class="terminal-prompt" aria-hidden="true">$</span>
+                <code class="terminal-command">{{ term.command }}</code>
+              </div>
+            }
+            <div class="terminal-meta-row">
+              @if (term.workingDir) {
+                <span class="terminal-cwd" title="Working directory">
+                  <mat-icon class="meta-icon" aria-hidden="true">folder_open</mat-icon>
+                  <span class="cwd-text">{{ term.workingDir }}</span>
+                </span>
+              }
+              <span
+                class="terminal-status-badge"
+                [class.status-running]="term.state === 'running'"
+                [class.status-success]="term.state === 'completed'"
+                [class.status-failed]="term.state === 'failed'"
+                [attr.aria-label]="term.stateLabel + (term.exitCode != null ? ', exit code ' + term.exitCode : '')"
+              >
+                @switch (term.state) {
+                  @case ('running') {
+                    <mat-icon class="status-icon" aria-hidden="true">sync</mat-icon>
+                  }
+                  @case ('completed') {
+                    <mat-icon class="status-icon" aria-hidden="true">check_circle</mat-icon>
+                  }
+                  @case ('failed') {
+                    <mat-icon class="status-icon" aria-hidden="true">error</mat-icon>
+                  }
+                }
+                <span class="status-label">{{ term.stateLabel }}</span>
+                @if (term.exitCode != null) {
+                  <span class="exit-status">exit {{ term.exitCode }}</span>
+                }
+              </span>
+            </div>
+          </div>
+
+          @if (term.output) {
+            <div class="tool-output-wrapper">
+              <pre class="terminal-output">{{ term.output }}</pre>
+            </div>
+          }
+
+          @if (hasUnrecognizedFields()) {
+            <details class="terminal-extra-details">
+              <summary>Additional details</summary>
+              <pre class="terminal-extra-json">{{ unrecognizedFieldsJson() }}</pre>
+            </details>
+          }
+        </div>
+      } @else if (cleanOutput()) {
         <div class="tool-output-wrapper">
           <pre class="tool-output">{{ cleanOutput() }}</pre>
         </div>

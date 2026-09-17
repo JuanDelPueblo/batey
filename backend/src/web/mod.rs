@@ -210,6 +210,11 @@ pub fn router(state: AppState) -> Router {
             "/api/agents/:id/environment",
             get(agents::agent_env).patch(agents::update_agent_env),
         )
+        .route("/api/agent-operations", get(agents::agent_operations))
+        .route(
+            "/api/agent-operations/:operation_id",
+            get(agents::agent_operation),
+        )
         // Agent-level authentication. The static `terminal` and `protocol`
         // segments come before the method id, so a flow start never matches
         // the legacy synchronous `authenticate` route.

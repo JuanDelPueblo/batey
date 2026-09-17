@@ -16,7 +16,8 @@ pub use client::{
     UnavailableFetch, DEFAULT_REGISTRY_URL,
 };
 pub use install::{
-    ensure_pinned, install_directory, prepare, select, split_package, InstallPlan, PreparedInstall,
+    ensure_pinned, install_directory, prepare, prepare_with_progress, select, split_package,
+    InstallPlan, PreparedInstall,
 };
 pub use manifest::{
     parse_catalog, BinaryTarget, DistributionKind, PackageDistribution, RegistryAgent,

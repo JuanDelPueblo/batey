@@ -81,7 +81,7 @@ function makeState() {
     createCustomAgent: vi.fn(async () => custom),
     editCustomAgent: vi.fn(async () => custom),
     removeAgent: vi.fn(async (id: string) => ({ id, deleted: true, retained_chats: 0 })),
-    updateAgent: vi.fn(async () => ({ updated: true, from_version: '1.0.0', to_version: '2.0.0', agent: registry })),
+    updateAgent: vi.fn(async () => ({ id: 'op-update', updated: true, to_version: '2.0.0', state: 'succeeded' } as any)),
   };
 }
 
@@ -220,6 +220,20 @@ describe('AgentsPageComponent', () => {
     state.updateAgent.mockRejectedValueOnce(new Error('registry unavailable'));
     await fixture.componentInstance.update(registry);
     expect(fixture.componentInstance.actionError()).toContain('registry unavailable');
+  });
+
+  it('reports whether an update actually changed the installed version', async () => {
+    await fixture.componentInstance.update(registry);
+    expect(fixture.componentInstance.notice()).toContain('Updated Example ACP to v2.0.0');
+
+    state.updateAgent.mockResolvedValueOnce({
+      id: 'op-current',
+      updated: false,
+      to_version: '2.0.0',
+      state: 'succeeded',
+    } as any);
+    await fixture.componentInstance.update(registry);
+    expect(fixture.componentInstance.notice()).toContain('already at the newest version');
   });
 
   it('rediscovers an active terminal flow after a simulated reload', async () => {

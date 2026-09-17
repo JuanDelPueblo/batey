@@ -6,12 +6,14 @@
 //! registry integrity metadata when the manifest supplies it, and extracts
 //! through the strict archive rules.
 use super::archive::{self, ArchiveKind};
-use super::client::{HttpFetch, MAX_DOWNLOAD_BYTES};
+use super::client::{HttpFetch, ProgressCallback, MAX_DOWNLOAD_BYTES};
 use super::manifest::{DistributionKind, RegistryAgent};
 use super::platform::PlatformTarget;
 use crate::agents::installed::InstalledDistribution;
+use crate::agents::operations::{AgentOperationStage, InstallProgressTracker};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Which distribution an install will use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +158,18 @@ pub async fn prepare(
     install_root: &Path,
     agent_id: &str,
 ) -> anyhow::Result<PreparedInstall> {
+    prepare_with_progress(agent, plan, http, install_root, agent_id, None).await
+}
+
+/// Downloads and installs the selected distribution while reporting progress.
+pub async fn prepare_with_progress(
+    agent: &RegistryAgent,
+    plan: InstallPlan,
+    http: &dyn HttpFetch,
+    install_root: &Path,
+    agent_id: &str,
+    progress: Option<Arc<dyn InstallProgressTracker>>,
+) -> anyhow::Result<PreparedInstall> {
     match plan.kind {
         DistributionKind::Binary => {
             let target = plan
@@ -167,7 +181,26 @@ pub async fn prepare(
                 .get(&target)
                 .ok_or_else(|| anyhow::anyhow!("{} publishes no binary for {target}", agent.id))?
                 .clone();
-            let body = http.fetch(spec.archive.clone(), MAX_DOWNLOAD_BYTES).await?;
+
+            if let Some(ref p) = progress {
+                p.on_stage(AgentOperationStage::Downloading);
+            }
+
+            let download_callback: Option<ProgressCallback> = progress.as_ref().map(|p| {
+                let tracker = p.clone();
+                Arc::new(move |downloaded, total| {
+                    tracker.on_download(downloaded, total);
+                }) as ProgressCallback
+            });
+
+            let body = http
+                .fetch_with_progress(spec.archive.clone(), MAX_DOWNLOAD_BYTES, download_callback)
+                .await?;
+
+            if let Some(ref p) = progress {
+                p.on_stage(AgentOperationStage::Verifying);
+            }
+
             let integrity_verified = match &spec.sha256 {
                 Some(expected) => {
                     archive::verify_sha256(&body, expected)?;
@@ -182,6 +215,11 @@ pub async fn prepare(
                     false
                 }
             };
+
+            if let Some(ref p) = progress {
+                p.on_stage(AgentOperationStage::Extracting);
+            }
+
             let kind = archive::detect(&spec.archive, &body)?;
             let raw_name = archive::file_name_from_url(&spec.archive);
             let install_dir = install_directory(install_root, agent_id, &agent.version)?;
@@ -208,6 +246,9 @@ pub async fn prepare(
                 .npx
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("{} publishes no npx distribution", agent.id))?;
+            if let Some(ref p) = progress {
+                p.on_stage(AgentOperationStage::Preparing);
+            }
             ensure_pinned(&spec.package, DistributionKind::Npx)?;
             let mut args = vec!["--yes".to_string(), spec.package.clone()];
             args.extend(spec.args.clone());
@@ -229,6 +270,9 @@ pub async fn prepare(
                 .uvx
                 .clone()
                 .ok_or_else(|| anyhow::anyhow!("{} publishes no uvx distribution", agent.id))?;
+            if let Some(ref p) = progress {
+                p.on_stage(AgentOperationStage::Preparing);
+            }
             ensure_pinned(&spec.package, DistributionKind::Uvx)?;
             let mut args = vec![spec.package.clone()];
             args.extend(spec.args.clone());

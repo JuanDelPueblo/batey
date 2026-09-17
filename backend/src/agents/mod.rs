@@ -12,6 +12,7 @@ mod definition;
 mod file;
 mod installed;
 mod manager;
+pub mod operations;
 pub mod registry;
 
 pub use compat::{
@@ -34,6 +35,10 @@ pub use manager::{
     AgentEnvEdit, AgentEnvPresence, AgentError, AgentManagementDetail, AgentManager, AgentResult,
     InstallRequest, RegistryCatalogView, RegistryEntryView, RegistryStatus, RemoveOutcome,
     UpdateOutcome,
+};
+pub use operations::{
+    AgentOperation, AgentOperationKind, AgentOperationStage, AgentOperationState,
+    AgentOperationView, AgentOperations, InstallProgressTracker, OperationProgressTracker,
 };
 pub use registry::{DistributionKind, PlatformTarget};
 
@@ -239,7 +244,7 @@ impl FromIterator<AgentDefinition> for AgentCatalog {
     }
 }
 
-/// Compatibility name for callers that construct the pre-catalog model.
+/// Compatibility name for callers that construct the pre-catalog model.\
 /// New code should use `AgentCatalog`.
 pub type AgentRegistry = AgentCatalog;
 

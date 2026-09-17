@@ -1,17 +1,25 @@
 import { Component, computed, input, signal } from '@angular/core';
 import { MatIconModule } from '@angular/material/icon';
 import type { RichContentBlock, TurnEntryTool } from '../../core/api/types';
+import { PlanViewComponent } from '../plan-view/plan-view';
 import { RichContentComponent } from '../rich-content/rich-content';
 import { parseTerminalPayload } from './terminal-payload';
 
 @Component({
   selector: 'hub-tool-call',
-  imports: [MatIconModule, RichContentComponent],
+  imports: [MatIconModule, PlanViewComponent, RichContentComponent],
   templateUrl: './tool-call.html',
   styleUrl: './tool-call.scss',
 })
 export class ToolCallComponent {
   readonly tool = input.required<TurnEntryTool>();
+
+  readonly taskList = computed(() => this.tool().taskList ?? null);
+
+  readonly taskListDetailsJson = computed(() => {
+    const details = this.taskList()?.details;
+    return details?.length ? JSON.stringify(details, null, 2) : '';
+  });
 
   private readonly userExpanded = signal<boolean | null>(null);
 

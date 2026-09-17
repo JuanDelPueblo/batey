@@ -11,7 +11,15 @@ import { AppStateService } from '../../state/app-state.service';
 
 @Component({
   selector: 'hub-permission-card',
-  imports: [NgTemplateOutlet, MatButtonModule, MatCardModule, MatExpansionModule, MatIconModule, MatProgressSpinnerModule, MarkdownComponent],
+  imports: [
+    NgTemplateOutlet,
+    MatButtonModule,
+    MatCardModule,
+    MatExpansionModule,
+    MatIconModule,
+    MatProgressSpinnerModule,
+    MarkdownComponent,
+  ],
   templateUrl: './permission-card.html',
   styleUrl: './permission-card.scss',
 })
@@ -30,7 +38,10 @@ export class PermissionCardComponent {
   );
 
   readonly displayTitle = computed(
-    () => this.permission().title || (this.isPlanApproval() ? 'Approve Plan' : 'Permission request'),
+    () =>
+      this.permission().title ||
+      this.review()?.title ||
+      (this.isPlanApproval() ? 'Approve Plan' : 'Permission request'),
   );
 
   readonly icon = computed(() => (this.isPlanApproval() ? 'assignment_turned_in' : 'shield_person'));
@@ -56,7 +67,9 @@ export class PermissionCardComponent {
       this.resolvedRequestId.set(this.permission().requestId);
       this.resolvedDecision.set(this.optionName(optionId));
     } catch (error) {
-      this.responseError.set(error instanceof Error ? error.message : 'Could not send the permission response. Try again.');
+      this.responseError.set(
+        error instanceof Error ? error.message : 'Could not send the permission response. Try again.',
+      );
     } finally {
       this.responding.set(false);
       this.selectedOptionId.set(null);
@@ -64,25 +77,96 @@ export class PermissionCardComponent {
   }
 }
 
-type ReviewField = 'status' | 'action' | 'risk' | 'authorization' | 'rationale';
-type StructuredReview = Record<ReviewField, string>;
+export type ReviewField = 'status' | 'action' | 'risk' | 'authorization' | 'rationale';
+
+export interface StructuredReview {
+  readonly title?: string;
+  readonly status: string;
+  readonly action: string;
+  readonly risk: string;
+  readonly authorization: string;
+  readonly rationale: string;
+  readonly unmatchedDetails?: string;
+}
 
 const reviewFields: readonly ReviewField[] = ['status', 'action', 'risk', 'authorization', 'rationale'];
-const reviewFieldPattern = /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?(Status|Action|Risk|Authorization|Rationale)(?:\*\*)?\s*:\s*(.*)$/i;
+const reviewFieldPattern =
+  /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?(Status|Action|Risk|Authorization|Rationale)(?:\*\*)?(?:\s*:\s*|:\s*\*\*\s*)(.*)$/i;
+const reviewHeaderPattern =
+  /^(?:#{1,6}\s+.*|(?:\*\*)?[A-Za-z0-9 _-]*(?:Review|Request)(?:\*\*)?:?)$/i;
 
 /** Recognize only the complete, label-based review format; all other ACP text stays raw. */
-function parseStructuredReview(description: string): StructuredReview | null {
+export function parseStructuredReview(description: string): StructuredReview | null {
   const values = new Map<ReviewField, string>();
+  const unmatchedLines: string[] = [];
+  let headerTitle: string | undefined;
   let current: ReviewField | null = null;
-  for (const line of description.replace(/\r\n?/g, '\n').split('\n')) {
-    const match = line.match(reviewFieldPattern);
+  let pendingBlankLines: string[] = [];
+
+  for (const rawLine of description.replace(/\r\n?/g, '\n').split('\n')) {
+    const line = rawLine.trimEnd();
+    const trimmed = line.trim();
+
+    const match = trimmed.match(reviewFieldPattern);
     if (match) {
+      pendingBlankLines = [];
       current = match[1].toLowerCase() as ReviewField;
       values.set(current, match[2].trim());
-    } else if (current) {
-      values.set(current, `${values.get(current) ?? ''}\n${line}`.trimEnd());
+      continue;
     }
+
+    if (current === null) {
+      if (!trimmed) continue;
+      if (!headerTitle && reviewHeaderPattern.test(trimmed)) {
+        headerTitle = trimmed
+          .replace(/^#{1,6}\s+/, '')
+          .replace(/^\*\*|\*\*$/g, '')
+          .replace(/:$/, '')
+          .trim();
+      } else {
+        unmatchedLines.push(line);
+      }
+      continue;
+    }
+
+    if (!trimmed) {
+      pendingBlankLines.push(line);
+      continue;
+    }
+
+    const hasAllFields = reviewFields.every((f) => values.has(f));
+    const isSectionLabel = /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?[A-Za-z0-9 _-]+(?:\*\*)?(?:\s*:\s*|:\s*\*\*\s*)/i.test(
+      trimmed,
+    );
+
+    if (hasAllFields && (pendingBlankLines.length > 0 || isSectionLabel)) {
+      current = null;
+      if (pendingBlankLines.length > 0 && unmatchedLines.length > 0) {
+        unmatchedLines.push(...pendingBlankLines);
+      }
+      pendingBlankLines = [];
+      unmatchedLines.push(line);
+      continue;
+    }
+
+    if (pendingBlankLines.length > 0) {
+      values.set(current, (values.get(current) ?? '') + '\n' + pendingBlankLines.join('\n'));
+      pendingBlankLines = [];
+    }
+    const existing = values.get(current) ?? '';
+    values.set(current, existing ? existing + '\n' + line : line);
   }
+
   if (!reviewFields.every((field) => values.has(field))) return null;
-  return Object.fromEntries(reviewFields.map((field) => [field, values.get(field) ?? ''])) as StructuredReview;
+
+  const unmatchedText = unmatchedLines.join('\n').trim();
+  return {
+    status: values.get('status') ?? '',
+    action: values.get('action') ?? '',
+    risk: values.get('risk') ?? '',
+    authorization: values.get('authorization') ?? '',
+    rationale: values.get('rationale') ?? '',
+    ...(headerTitle ? { title: headerTitle } : {}),
+    ...(unmatchedText ? { unmatchedDetails: unmatchedText } : {}),
+  };
 }

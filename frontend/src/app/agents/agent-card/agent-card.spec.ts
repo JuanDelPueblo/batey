@@ -250,7 +250,7 @@ describe('AgentCardComponent', () => {
     expect(text).toContain('Sign in');
   });
 
-  it('shows a scoped method warning without marking the whole agent broken', () => {
+  it('does not render the removed compatibility warning field', () => {
     render(summary('builtin'), {
       agent_id: 'x',
       logout_supported: false,
@@ -264,12 +264,11 @@ describe('AgentCardComponent', () => {
           name: 'Interactive sign-in',
           type: 'agent',
           supported: true,
-          warning: 'May need a localhost callback. API-key auth still works.',
         },
       ],
     });
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('May need a localhost callback');
+    expect(text).not.toContain('compatibility warning');
     expect(text).toContain('Interactive sign-in');
   });
 
@@ -531,5 +530,43 @@ describe('AgentCardComponent', () => {
     const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
     buttons.find((button) => button.textContent?.includes('Cancel'))?.click();
     expect(cancel).toHaveBeenCalled();
+  });
+
+  it('wipes callback drafts when the browser interaction or flow changes', async () => {
+    render(summary('builtin'));
+    fixture.componentRef.setInput('protocolFlow', {
+      flow_id: 'flow-one',
+      agent_id: 'builtin-agent',
+      method_id: 'oauth',
+      state: 'waiting_for_user',
+      reason: null,
+    });
+    fixture.componentRef.setInput('protocolInteraction', {
+      type: 'browser',
+      url: 'https://accounts.example.test/authorize?state=one',
+      manual_callback: true,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.componentInstance.callbackDraft.set('http://localhost:43123/callback?code=secret&state=one');
+
+    // A replacement flow must clear even when the provider reuses the same
+    // authorization URL, and removal must clear the draft too.
+    fixture.componentRef.setInput('protocolFlow', {
+      flow_id: 'flow-two',
+      agent_id: 'builtin-agent',
+      method_id: 'oauth',
+      state: 'waiting_for_user',
+      reason: null,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(fixture.componentInstance.callbackDraft()).toBe('');
+
+    fixture.componentInstance.callbackDraft.set('http://localhost:43123/callback?code=secret&state=one');
+    fixture.componentRef.setInput('protocolInteraction', null);
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(fixture.componentInstance.callbackDraft()).toBe('');
   });
 });

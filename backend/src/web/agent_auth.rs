@@ -18,6 +18,8 @@ use axum::{
         ws::{Message, WebSocket, WebSocketUpgrade},
         Path, State,
     },
+    http::{header, HeaderValue},
+    response::IntoResponse,
     Json,
 };
 use futures_util::{SinkExt, StreamExt};
@@ -166,6 +168,34 @@ pub async fn protocol_auth_elicitations(
     Path(flow_id): Path<String>,
 ) -> Result<Json<Vec<ProtocolElicitationView>>> {
     Ok(Json(hub(&s)?.protocol_auth_elicitations(&flow_id).await?))
+}
+
+pub async fn protocol_auth_interaction(
+    State(s): State<AppState>,
+    Path(flow_id): Path<String>,
+) -> Result<impl IntoResponse> {
+    let mut response = Json(hub(&s)?.protocol_auth_interaction(&flow_id)?).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    Ok(response)
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProtocolCallbackInput {
+    pub callback_url: String,
+}
+
+pub async fn relay_protocol_auth_callback(
+    State(s): State<AppState>,
+    Path(flow_id): Path<String>,
+    Json(input): Json<ProtocolCallbackInput>,
+) -> Result<Json<serde_json::Value>> {
+    hub(&s)?
+        .relay_protocol_auth_callback(&flow_id, &input.callback_url)
+        .await?;
+    Ok(Json(serde_json::json!({ "success": true })))
 }
 
 #[derive(Debug, Deserialize)]

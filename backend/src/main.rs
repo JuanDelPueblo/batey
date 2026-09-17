@@ -10,6 +10,74 @@ use batey::{
 use clap::Parser;
 use std::{path::PathBuf, sync::Arc};
 
+/// The auth flow temporarily points `BROWSER` at this executable. Browser
+/// launchers append the URL as an argument; this tiny process forwards it to
+/// the flow's loopback listener and opens it with the platform browser API.
+/// It is inert unless both private capture environment variables are present.
+fn run_browser_capture_helper() -> bool {
+    let Ok(address) = std::env::var("BATEY_AUTH_BROWSER_CAPTURE_ADDR") else {
+        return false;
+    };
+    let Ok(token) = std::env::var("BATEY_AUTH_BROWSER_CAPTURE_TOKEN") else {
+        return false;
+    };
+    let Some(url) = std::env::args().skip(1).last() else {
+        return true;
+    };
+    let Ok(address) = address.parse() else {
+        return true;
+    };
+    let Ok(mut stream) =
+        std::net::TcpStream::connect_timeout(&address, std::time::Duration::from_secs(2))
+    else {
+        return true;
+    };
+    use std::io::Write;
+    let _ = write!(stream, "{token}\n{url}");
+    // Preserve ordinary local authentication when a desktop opener exists.
+    // The capture is already delivered to Batey, and opener diagnostics are
+    // silenced so they cannot become authentication stderr.
+    #[cfg(target_os = "windows")]
+    open_url_with_windows(&url);
+    #[cfg(target_os = "macos")]
+    open_url_with_command("open", &url);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    open_url_with_command("xdg-open", &url);
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn open_url_with_windows(url: &str) {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let wide_url: Vec<u16> = std::ffi::OsStr::new(url)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // ShellExecuteW delegates directly to the user's registered browser and
+    // does not interpret the URL as command-line or shell syntax.
+    unsafe {
+        let _ = ShellExecuteW(
+            ptr::null_mut(),
+            ptr::null(),
+            wide_url.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+fn open_url_with_command(program: &str, url: &str) {
+    let _ = std::process::Command::new(program)
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
 #[derive(Parser)]
 #[command(about = "Persistent single-owner ACP project/chat supervisor", version)]
 struct Args {
@@ -65,6 +133,9 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    if run_browser_capture_helper() {
+        return Ok(());
+    }
     let args = Args::parse();
     // Take secrets out of the process environment before anything else runs,
     // so no inherited workspace environment and no spawned child can observe

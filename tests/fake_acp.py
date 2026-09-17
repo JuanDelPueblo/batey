@@ -5,6 +5,9 @@ import pathlib
 import sys
 import time
 import uuid
+import socket
+import urllib.parse
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 root = pathlib.Path(sys.argv[1])
 mode = sys.argv[2] if len(sys.argv) >= 3 else "load"
@@ -77,7 +80,8 @@ transient_config = mode == "transient-config"
 # bridge instead of a stable terminal type. `auth-codex-url` runs an
 # `agent` method that emits a URL elicitation while `authenticate` runs.
 # `auth-antigravity` runs an `agent` method that waits for an elicitation
-# answer, so a client without a cancellable flow would hang.
+# answer, so a client without a cancellable flow would hang. The browser
+# variants exercise the compatibility URL capture and loopback relay.
 auth_mode = mode.startswith("auth")
 supports_logout = mode in ("auth", "auth-required")
 requires_auth = mode == "auth-required"
@@ -148,6 +152,9 @@ def auth_methods():
             {"id": "antigravity-interactive", "name": "Interactive sign-in",
              "description": "Complete the interactive step"},
         ]
+    if mode in ("auth-antigravity-browser", "auth-antigravity-stderr", "auth-antigravity-deny", "auth-antigravity-malicious"):
+        return [{"id": "oauth-personal", "name": "Sign in with Google",
+                 "description": "Browser sign-in through the ACP agent"}]
     methods = [
         {"id": "api-key", "name": "API key", "description": "Paste an API key"},
         {"id": "api-key-broken", "name": "Broken API key", "type": "agent"},
@@ -170,6 +177,40 @@ def record(name, payload):
     seen = json.loads(path.read_text()) if path.exists() else []
     seen.append(payload)
     path.write_text(json.dumps(seen))
+
+
+def capture_browser_url(url):
+    """Emulate an upstream BROWSER launch without opening a real browser."""
+    address = os.environ.get("BATEY_AUTH_BROWSER_CAPTURE_ADDR")
+    token = os.environ.get("BATEY_AUTH_BROWSER_CAPTURE_TOKEN")
+    if not address or not token:
+        return False
+    host, port = address.rsplit(":", 1)
+    with socket.create_connection((host, int(port)), timeout=2) as stream:
+        stream.sendall((token + "\n" + url).encode())
+    return True
+
+
+def loopback_auth_url(error=False, host="127.0.0.1"):
+    state = "fake-oauth-state"
+    class CallbackHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.server.callback_path = self.path
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"callback received")
+        def log_message(self, *_args):
+            pass
+    server = HTTPServer((host, 0), CallbackHandler)
+    server.oauth_error = error
+    redirect = f"http://{host}:{server.server_port}/oauth/callback"
+    url = "https://accounts.example.test/o/oauth2/auth?" + urllib.parse.urlencode({
+        "client_id": "fake",
+        "redirect_uri": redirect,
+        "state": state,
+        "response_type": "code",
+    })
+    return server, url, state
 
 
 for line in sys.stdin:
@@ -284,6 +325,23 @@ for line in sys.stdin:
                 send({"id": id, "error": {"code": -32603, "message": "User declined"}})
             else:
                 send({"id": id, "error": {"code": -32800, "message": "Request cancelled"}})
+        elif mode in ("auth-antigravity-browser", "auth-antigravity-stderr", "auth-antigravity-deny") and p.get("methodId") == "oauth-personal":
+            server, auth_url, state = loopback_auth_url(error=mode == "auth-antigravity-deny")
+            if mode == "auth-antigravity-browser":
+                if not capture_browser_url(auth_url):
+                    print(auth_url, file=sys.stderr, flush=True)
+            else:
+                print("Open the following link to authenticate the ACP server: " + auth_url, file=sys.stderr, flush=True)
+            server.handle_request()
+            if server.oauth_error:
+                send({"id": id, "error": {"code": -32000, "message": "OAuth access denied"}})
+            else:
+                reply(id, {})
+            server.server_close()
+        elif mode == "auth-antigravity-malicious" and p.get("methodId") == "oauth-personal":
+            malicious = "https://accounts.example.test/o/oauth2/auth?redirect_uri=http%3A%2F%2Fevil.example.test%3A1%2Fadmin&state=fake-oauth-state"
+            print("Open the following link to authenticate the ACP server: " + malicious, file=sys.stderr, flush=True)
+            time.sleep(600)
         else:
             reply(id, {})
     elif method == "logout":

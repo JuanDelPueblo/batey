@@ -168,7 +168,8 @@ pub struct AcpClient {
     connected: Arc<AtomicBool>,
     /// A bounded, best-effort diagnostic for a process that dies before
     /// completing the ACP handshake. Empty (and never populated) for
-    /// authentication processes, which use `StderrPolicy::Discard`.
+    /// authentication processes, which use a discard-only policy (with a
+    /// narrowly scoped URL capture exception for compatible browser auth).
     stderr_tail: StderrTail,
 }
 

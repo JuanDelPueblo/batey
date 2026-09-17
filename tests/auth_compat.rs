@@ -18,6 +18,7 @@ use batey::{
     store::Store,
 };
 use std::sync::Arc;
+use url::Url;
 
 struct Harness {
     hub: Arc<HubService>,
@@ -134,6 +135,26 @@ impl Harness {
     }
 }
 
+async fn wait_for_interaction(
+    harness: &Harness,
+    flow_id: &str,
+) -> batey::auth::ProtocolAuthInteractionView {
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        loop {
+            let flow = harness.auth.protocol_flow(flow_id).unwrap();
+            if flow.state().is_finished() {
+                panic!("protocol flow became terminal before exposing its interaction");
+            }
+            if let Some(interaction) = harness.auth.protocol_interaction(flow_id).unwrap() {
+                return interaction;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("protocol auth interaction did not appear before the test deadline")
+}
+
 /// Codex's default Batey auth environment uses `NO_BROWSER=1` so upstream
 /// advertises headless-suitable methods.
 #[tokio::test]
@@ -247,33 +268,172 @@ async fn normal_chat_sessions_do_not_get_compat_env() {
     harness.sessions.shutdown_all().await;
 }
 
-/// The Antigravity headless warning is scoped to its methods and preserves
-/// API-key guidance; other agents get no warning.
+/// Antigravity compatibility is activated by the official Registry id, not by
+/// a catalog alias or display name.
 #[tokio::test]
-async fn antigravity_warning_is_scoped_to_its_methods() {
+async fn antigravity_compatibility_is_registry_scoped() {
     let harness = Harness::new();
     harness
         .install_registry_agent("anti", "antigravity-acp", "auth")
         .await;
-    let view = harness.hub.refresh_agent_auth("anti").await.unwrap().auth;
-    let warned: Vec<_> = view
-        .methods
-        .iter()
-        .filter_map(|method| method.warning.as_deref())
-        .collect();
-    assert!(!warned.is_empty(), "antigravity advertised no warning");
-    assert!(warned[0].contains("localhost"));
-    assert!(warned[0].contains("GEMINI_API_KEY"));
+    assert!(
+        batey::agents::protocol_auth_compatibility(Some("antigravity-acp"))
+            .unwrap()
+            .intercept_browser
+    );
 
-    // A non-antigravity agent exposes no warning on any method.
+    // A non-antigravity agent exposes no compatibility interaction.
     harness
         .install_registry_agent("codex", "codex-acp", "auth")
         .await;
-    let codex = harness.hub.refresh_agent_auth("codex").await.unwrap().auth;
-    assert!(codex.methods.iter().all(|method| method.warning.is_none()));
+    let _codex = harness.hub.refresh_agent_auth("codex").await.unwrap().auth;
+    assert!(batey::agents::protocol_auth_compatibility(Some("codex-acp")).is_none());
 
-    // A builtin/uninstalled agent with no Registry id gets no warning either.
+    // A custom agent with an Antigravity-looking catalog id gets no special
+    // behavior because it has no official Registry identity.
+    assert!(batey::agents::protocol_auth_compatibility(Some("Antigravity")).is_none());
     harness.sessions.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn antigravity_remote_browser_callback_is_relayed() {
+    let harness = Harness::new();
+    harness
+        .install_registry_agent("anti", "antigravity-acp", "auth-antigravity-browser")
+        .await;
+    let flow = harness
+        .hub
+        .start_protocol_auth("anti", "oauth-personal")
+        .await
+        .unwrap();
+
+    let interaction = wait_for_interaction(&harness, &flow.flow_id).await;
+    assert_eq!(interaction.kind, "browser");
+    let authorization = Url::parse(&interaction.url).unwrap();
+    let redirect = authorization
+        .query_pairs()
+        .find(|(key, _)| key == "redirect_uri")
+        .unwrap()
+        .1
+        .into_owned();
+    let state = authorization
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let mut callback = Url::parse(&redirect).unwrap();
+    callback
+        .query_pairs_mut()
+        .append_pair("code", "fake-code")
+        .append_pair("state", &state);
+    let mut wrong_port = callback.clone();
+    wrong_port.set_port(Some(1)).unwrap();
+    assert!(harness
+        .hub
+        .relay_protocol_auth_callback(&flow.flow_id, wrong_port.as_str())
+        .await
+        .is_err());
+    harness
+        .hub
+        .relay_protocol_auth_callback(&flow.flow_id, callback.as_str())
+        .await
+        .unwrap();
+
+    for _ in 0..100 {
+        if harness.auth.protocol_flow(&flow.flow_id).unwrap().state()
+            == batey::auth::ProtocolFlowState::Succeeded
+        {
+            harness.sessions.shutdown_all().await;
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the relayed callback did not complete authentication");
+}
+
+#[tokio::test]
+async fn antigravity_oauth_denial_is_relayed_without_exposing_callback() {
+    let harness = Harness::new();
+    harness
+        .install_registry_agent("anti", "antigravity-acp", "auth-antigravity-deny")
+        .await;
+    let flow = harness
+        .hub
+        .start_protocol_auth("anti", "oauth-personal")
+        .await
+        .unwrap();
+    let interaction = wait_for_interaction(&harness, &flow.flow_id).await;
+    let authorization = Url::parse(&interaction.url).unwrap();
+    let redirect = authorization
+        .query_pairs()
+        .find(|(key, _)| key == "redirect_uri")
+        .unwrap()
+        .1
+        .into_owned();
+    let state = authorization
+        .query_pairs()
+        .find(|(key, _)| key == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let mut callback = Url::parse(&redirect).unwrap();
+    callback
+        .query_pairs_mut()
+        .append_pair("error", "access_denied")
+        .append_pair("state", &state);
+    harness
+        .hub
+        .relay_protocol_auth_callback(&flow.flow_id, callback.as_str())
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        if harness.auth.protocol_flow(&flow.flow_id).unwrap().state()
+            == batey::auth::ProtocolFlowState::Failed
+        {
+            assert!(harness
+                .auth
+                .protocol_interaction(&flow.flow_id)
+                .unwrap()
+                .is_none());
+            harness.sessions.shutdown_all().await;
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("the denied callback did not complete authentication");
+}
+
+#[tokio::test]
+async fn malicious_antigravity_authorization_url_fails_closed() {
+    let harness = Harness::new();
+    harness
+        .install_registry_agent("anti", "antigravity-acp", "auth-antigravity-malicious")
+        .await;
+    let flow = harness
+        .hub
+        .start_protocol_auth("anti", "oauth-personal")
+        .await
+        .unwrap();
+    for _ in 0..100 {
+        let current = harness.auth.protocol_flow(&flow.flow_id).unwrap();
+        if current.state() == batey::auth::ProtocolFlowState::Failed {
+            let view = current.view();
+            assert_eq!(
+                view.reason.as_deref(),
+                Some("The agent provided an authentication URL that Batey could not validate.")
+            );
+            assert!(harness
+                .auth
+                .protocol_interaction(&flow.flow_id)
+                .unwrap()
+                .is_none());
+            harness.sessions.shutdown_all().await;
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    panic!("malicious authorization URL did not fail closed");
 }
 
 /// Active-flow discovery is safe: it exposes lifecycle only, never terminal

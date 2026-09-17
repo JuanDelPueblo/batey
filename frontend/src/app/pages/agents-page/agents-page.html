@@ -42,6 +42,9 @@
             [protocolElicitations]="
               protocolFlowFor(agent.id) ? protocolElicitationsFor(protocolFlowFor(agent.id)!.flow_id) : []
             "
+            [protocolInteraction]="
+              protocolFlowFor(agent.id) ? protocolInteractionFor(protocolFlowFor(agent.id)!.flow_id) : null
+            "
             [protocolLoading]="protocolLoadingFor(agent.id)"
             [terminalFlow]="terminalFlowFor(agent.id)"
             (authenticate)="authenticate(agent, $event)"
@@ -51,6 +54,7 @@
             (cancelProtocol)="cancelProtocol(agent)"
             (dismissProtocol)="dismissProtocol(agent)"
             (respondElicitation)="respondProtocolElicitation(agent, $event)"
+            (relayCallback)="relayProtocolCallback(agent, $event)"
             (resumeTerminal)="resumeTerminalAuth(agent, $event)"
             (cancelTerminal)="cancelTerminalAuth(agent)"
             (edit)="editCustom(agent)"

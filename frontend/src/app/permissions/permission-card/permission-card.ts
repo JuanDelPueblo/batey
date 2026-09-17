@@ -91,9 +91,9 @@ export interface StructuredReview {
 
 const reviewFields: readonly ReviewField[] = ['status', 'action', 'risk', 'authorization', 'rationale'];
 const reviewFieldPattern =
-  /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?(Status|Action|Risk|Authorization|Rationale)(?:\*\*)?(?:\s*:\s*|:\s*\*\*\s*)(.*)$/i;
+  /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?(Status|Action|Risk|Authorization|Rationale)(?:\s*\*\*\s*:|\s*:\s*\*\*|\s*\*\*|\s*:)\s*:*\s*(.*)$/i;
 const reviewHeaderPattern =
-  /^(?:#{1,6}\s+.*|(?:\*\*)?[A-Za-z0-9 _-]*(?:Review|Request)(?:\*\*)?:?)$/i;
+  /^(?:#{1,6}\s+.*|(?:\*\*)?[A-Za-z0-9 _-]*(?:Review|Request)(?:\s*:\s*\*\*|\s*\*\*\s*:?|\s*:)?)\s*$/i;
 
 /** Recognize only the complete, label-based review format; all other ACP text stays raw. */
 export function parseStructuredReview(description: string): StructuredReview | null {
@@ -111,7 +111,7 @@ export function parseStructuredReview(description: string): StructuredReview | n
     if (match) {
       pendingBlankLines = [];
       current = match[1].toLowerCase() as ReviewField;
-      values.set(current, match[2].trim());
+      values.set(current, match[2].replace(/^:+/, '').trim());
       continue;
     }
 
@@ -120,8 +120,7 @@ export function parseStructuredReview(description: string): StructuredReview | n
       if (!headerTitle && reviewHeaderPattern.test(trimmed)) {
         headerTitle = trimmed
           .replace(/^#{1,6}\s+/, '')
-          .replace(/^\*\*|\*\*$/g, '')
-          .replace(/:$/, '')
+          .replace(/^[*_:\s]+|[*_:\s]+$/g, '')
           .trim();
       } else {
         unmatchedLines.push(line);
@@ -135,7 +134,7 @@ export function parseStructuredReview(description: string): StructuredReview | n
     }
 
     const hasAllFields = reviewFields.every((f) => values.has(f));
-    const isSectionLabel = /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?[A-Za-z0-9 _-]+(?:\*\*)?(?:\s*:\s*|:\s*\*\*\s*)/i.test(
+    const isSectionLabel = /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?[A-Za-z0-9 _-]+(?:\s*\*\*\s*:|\s*:\s*\*\*|\s*\*\*|\s*:)\s*:?/i.test(
       trimmed,
     );
 

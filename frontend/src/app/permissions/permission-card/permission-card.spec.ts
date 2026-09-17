@@ -323,6 +323,43 @@ describe('parseStructuredReview', () => {
     expect(result?.unmatchedDetails).toBeUndefined();
   });
 
+  it('parses bold markdown forms with colons inside asterisks (**Status:**) and cleans headers with trailing colon', () => {
+    const raw = `**Guardian Review**:\n**Status:** Pending\n**Action:** cargo test\n**Risk:** Low\n**Authorization:** Allowed once\n**Rationale:** Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result).toEqual({
+      title: 'Guardian Review',
+      status: 'Pending',
+      action: 'cargo test',
+      risk: 'Low',
+      authorization: 'Allowed once',
+      rationale: 'Run focused tests.',
+    });
+    expect(result?.unmatchedDetails).toBeUndefined();
+  });
+
+  it('parses bold markdown forms with colons outside asterisks (**Status**:) and cleans headers with internal colon', () => {
+    const raw = `**Guardian Review:**\n**Status**: Pending\n**Action**: cargo test\n**Risk**: Low\n**Authorization**: Allowed once\n**Rationale**: Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result).toEqual({
+      title: 'Guardian Review',
+      status: 'Pending',
+      action: 'cargo test',
+      risk: 'Low',
+      authorization: 'Allowed once',
+      rationale: 'Run focused tests.',
+    });
+    expect(result?.unmatchedDetails).toBeUndefined();
+  });
+
+  it('cleans header titles with markdown headings and delimiters', () => {
+    const raw = `### **Guardian Review**:\nStatus: Pending\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result?.title).toBe('Guardian Review');
+  });
+
   it('parses 5 fields alone without header or unmatched details', () => {
     const raw = `Status: Pending\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.`;
     const result = parseStructuredReview(raw);

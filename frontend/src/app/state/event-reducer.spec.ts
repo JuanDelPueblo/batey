@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EventReducer } from './event-reducer';
-import type { SessionEvent } from '../core/api/types';
+import type { SessionEvent, TurnEntryTool } from '../core/api/types';
 
 const event = (seq: number, type: SessionEvent['payload']['type'], extra: Record<string, unknown> = {}): SessionEvent => ({
   seq, session_id: 'chat-1', agent: 'codex', timestamp: '2026-09-13T12:00:00Z', payload: { type, ...extra },
@@ -121,6 +121,29 @@ describe('EventReducer', () => {
       expect.objectContaining({ type: 'thought_chunk', text: 'Inspecting the repository' }),
       expect.objectContaining({ type: 'tool_call', toolCallId: 'tool-1', status: 'completed', output: 'README.md' }),
     ]);
+  });
+
+  it('replaces repeated structured terminal snapshots while retaining true output deltas', () => {
+    const reducer = new EventReducer();
+    const firstSnapshot = JSON.stringify({
+      commandLine: 'git status --short', workingDir: '/workspace', formatted_output: ' M README.md',
+    });
+    const finalSnapshot = JSON.stringify({
+      commandLine: 'git status --short', workingDir: '/workspace', exit_code: 0, formatted_output: ' M README.md\n?? note.txt',
+    });
+    reducer.ingest(event(1, 'tool_call', { id: 'git', title: 'Terminal: git status --short', kind: 'execute' }));
+    reducer.ingest(event(2, 'tool_call_update', { id: 'git', kind: 'execute', status: 'in_progress', output: firstSnapshot }));
+    reducer.ingest(event(3, 'tool_call_update', { id: 'git', kind: 'execute', status: 'completed', output: finalSnapshot }));
+    reducer.ingest(event(4, 'tool_call_update', { id: 'git', kind: 'execute', status: 'completed', output: finalSnapshot }));
+
+    const terminal = (reducer.items()[0] as { entries: TurnEntryTool[] }).entries[0];
+    expect(terminal.output).toBe(finalSnapshot);
+
+    const deltas = new EventReducer();
+    deltas.ingest(event(1, 'tool_call', { id: 'stream', title: 'Terminal', kind: 'execute' }));
+    deltas.ingest(event(2, 'tool_call_update', { id: 'stream', output: 'first\n' }));
+    deltas.ingest(event(3, 'tool_call_update', { id: 'stream', output: 'second\n' }));
+    expect((deltas.items()[0] as { entries: TurnEntryTool[] }).entries[0].output).toBe('first\nsecond\n');
   });
 
   it('replaces the active plan without adding transcript items for process state changes', () => {

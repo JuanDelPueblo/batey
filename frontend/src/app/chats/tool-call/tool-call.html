@@ -1,14 +1,14 @@
 @if (taskList(); as list) {
 <hub-plan-view [entries]="list.entries" heading="Task list" />
-@if (taskListDetailsJson() || cleanOutput() || richContent().length) {
+@if (taskListDetailsJson() || cleanOutput() || visibleRichContent().length) {
 <details class="task-list-details">
   <summary>Additional details</summary>
   @if (taskListDetailsJson()) {
   <pre class="tool-output">{{ taskListDetailsJson() }}</pre>
   } @if (cleanOutput()) {
   <pre class="tool-output">{{ cleanOutput() }}</pre>
-  } @if (richContent().length) {
-  <hub-rich-content [blocks]="richContent()" />
+  } @if (visibleRichContent().length) {
+  <hub-rich-content [blocks]="visibleRichContent()" />
   }
 </details>
 } } @else {
@@ -140,9 +140,9 @@
     <div class="tool-output-wrapper">
       <pre class="tool-output">{{ cleanOutput() }}</pre>
     </div>
-    } @if (richContent().length) {
+    } @if (visibleRichContent().length) {
     <div class="tool-rich-content">
-      <hub-rich-content [blocks]="richContent()" />
+      <hub-rich-content [blocks]="visibleRichContent()" />
     </div>
     }
   </div>

@@ -232,6 +232,24 @@ export class ToolCallComponent {
     });
   });
 
+  /**
+   * Agents can send terminal output both in the tool payload and as a rich
+   * text block. Keep rich content unless its complete text representation is
+   * equivalent to the terminal output; the terminal panel is then the one
+   * canonical presentation of that command result.
+   */
+  readonly visibleRichContent = computed(() => {
+    const content = this.richContent();
+    const output = this.terminal()?.output;
+    if (!output) return content;
+
+    const text = content.filter((block): block is Extract<RichContentBlock, { type: 'text' }> => block.type === 'text');
+    if (!text.length || !this.equivalentTerminalText(text.map((block) => block.text).join(''), output)) {
+      return content;
+    }
+    return content.filter((block) => block.type !== 'text');
+  });
+
   readonly hasDetails = computed(() => {
     if (this.terminal()) {
       const term = this.terminal()!;
@@ -241,11 +259,11 @@ export class ToolCallComponent {
         !!term.workingDir ||
         term.exitCode != null ||
         this.hasUnrecognizedFields() ||
-        this.richContent().length > 0 ||
+        this.visibleRichContent().length > 0 ||
         (this.tool().locations?.length ?? 0) > 0
       );
     }
-    return !!this.cleanOutput() || this.richContent().length > 0 || (this.tool().locations?.length ?? 0) > 0;
+    return !!this.cleanOutput() || this.visibleRichContent().length > 0 || (this.tool().locations?.length ?? 0) > 0;
   });
 
   readonly isExpanded = computed(() => {
@@ -271,6 +289,11 @@ export class ToolCallComponent {
     }
     return parts.join(', ');
   });
+
+  private equivalentTerminalText(content: string, output: string): boolean {
+    const normalize = (value: string) => value.replace(/\r\n/g, '\n').trimEnd();
+    return normalize(content) === normalize(output);
+  }
 
   toggleExpanded(): void {
     if (!this.hasDetails()) return;

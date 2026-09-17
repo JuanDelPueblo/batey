@@ -12,6 +12,7 @@ import type {
   TurnEntryTool,
   AgentPermissionOption,
 } from '../core/api/types';
+import { parseTerminalPayload } from '../chats/tool-call/terminal-payload';
 
 /**
  * Aggregates session events into the display list.
@@ -314,7 +315,11 @@ export class EventReducer {
           output: outputTaskList
             ? null
             : payload.output !== undefined && payload.output !== null
-              ? (tool.output || '') + String(payload.output)
+              ? this.mergeToolOutput(tool.output, String(payload.output), {
+                  toolKind: kind ?? tool.kind,
+                  toolTitle: title ?? tool.title,
+                  toolStatus: status ?? tool.status,
+                })
               : tool.output,
           ...(locations !== undefined ? { locations } : {}),
           ...(taskList ? { taskList } : {}),
@@ -586,6 +591,25 @@ export class EventReducer {
       if (entry.type === 'tool_call' && entry.toolCallId === id) return index;
     }
     return -1;
+  }
+
+  /**
+   * ACP tool updates may carry either a new output chunk or the current tool
+   * snapshot. Structured terminal payloads are snapshots: replacing them
+   * avoids joining two JSON documents and repeating their complete output.
+   * Plain output remains streaming data, except when an agent repeats or
+   * extends the current snapshot verbatim.
+   */
+  private mergeToolOutput(
+    current: string | null | undefined,
+    incoming: string,
+    options: { toolKind?: string; toolTitle?: string; toolStatus?: string },
+  ): string {
+    if (!current) return incoming;
+    if (parseTerminalPayload(incoming, options)) return incoming;
+    if (incoming === current || current.startsWith(incoming)) return current;
+    if (incoming.startsWith(current)) return incoming;
+    return current + incoming;
   }
 
   private contentBlocks(value: unknown): RichContentBlock[] | undefined {

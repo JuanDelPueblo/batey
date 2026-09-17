@@ -400,6 +400,49 @@ describe('ToolCallComponent', () => {
     expect(badgeEl.textContent).toContain('exit 0');
   });
 
+  it('renders terminal-equivalent rich text only through the terminal panel', () => {
+    const output = 'On branch master\nnothing to commit, working tree clean';
+    const tool: TurnEntryTool = {
+      id: 1010,
+      type: 'tool_call',
+      toolCallId: 'git-status',
+      title: 'Terminal: git status',
+      kind: 'execute',
+      status: 'completed',
+      output: JSON.stringify({ commandLine: 'git status', workingDir: '/workspace', exit_code: 0, formatted_output: output }),
+      content: [{ type: 'content', content: { type: 'text', text: output } }],
+    };
+    fixture.componentRef.setInput('tool', tool);
+    fixture.detectChanges();
+    component.toggleExpanded();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelectorAll('.terminal-command')).toHaveLength(1);
+    expect(fixture.nativeElement.querySelectorAll('.terminal-cwd')).toHaveLength(1);
+    expect(fixture.nativeElement.querySelectorAll('.terminal-output')).toHaveLength(1);
+    expect(fixture.nativeElement.querySelector('.tool-rich-content')).toBeNull();
+  });
+
+  it('keeps non-equivalent rich terminal content visible', () => {
+    const tool: TurnEntryTool = {
+      id: 1011,
+      type: 'tool_call',
+      toolCallId: 'git-status-extra',
+      title: 'Terminal: git status',
+      kind: 'execute',
+      status: 'completed',
+      output: JSON.stringify({ commandLine: 'git status', exit_code: 0, formatted_output: 'clean' }),
+      content: [{ type: 'content', content: { type: 'text', text: 'Agent note: repository was checked.' } }],
+    };
+    fixture.componentRef.setInput('tool', tool);
+    fixture.detectChanges();
+    component.toggleExpanded();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.terminal-output').textContent).toBe('clean');
+    expect(fixture.nativeElement.querySelector('.tool-rich-content').textContent).toContain('Agent note');
+  });
+
   it('distinguishes running, successful, and failed commands without relying on color alone', () => {
     // 1. Failed command
     const failedTool: TurnEntryTool = {

@@ -41,10 +41,12 @@
           @if (responding() && selectedOptionId() === option.optionId) {
             <mat-spinner diameter="18" />
           } @else {
-            <span>{{ option.name }}</span>
-            @if (optionScope(option)) {
-              <small class="option-scope">{{ optionScope(option) }}</small>
-            }
+            <span class="option-content">
+              <span>{{ option.name }}</span>
+              @if (optionScope(option)) {
+                <small class="option-scope">{{ optionScope(option) }}</small>
+              }
+            </span>
           }
         </button>
       }

@@ -100,6 +100,10 @@ describe('PermissionCardComponent', () => {
     expect(buttons[1].textContent).toContain('Allow');
     expect(buttons[0].querySelector('.option-scope')?.textContent).toBe('One time');
     expect(buttons[1].querySelector('.option-scope')?.textContent).toBe('Persistent');
+    expect(buttons[0].querySelector('.option-content')?.textContent.replace(/\s+/g, ' ').trim())
+      .toBe('Deny One time');
+    expect(buttons[1].querySelector('.option-content')?.textContent.replace(/\s+/g, ' ').trim())
+      .toBe('Allow Persistent');
 
     buttons[0].click();
     await fixture.whenStable();

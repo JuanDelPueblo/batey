@@ -1,82 +1,144 @@
-<mat-expansion-panel
-  class="tool"
+<div
+  class="tool-activity"
+  [class.status-running]="isRunning()"
+  [class.status-completed]="isCompleted()"
+  [class.status-failed]="isFailed()"
   [class.subagent-tool]="isSubagentChild()"
-  [disabled]="!terminal() && !cleanOutput() && !richContent().length"
->
-  <mat-expansion-panel-header>
-    <mat-panel-title>
-      <mat-icon>{{ icon() }}</mat-icon>
-      <span class="tool-title">{{ tool().title }}</span>
+  [class.expanded]="isExpanded()"
+  [class.has-details]="hasDetails()">
+
+  <button
+    type="button"
+    class="tool-header"
+    [disabled]="!hasDetails()"
+    [attr.aria-expanded]="hasDetails() ? isExpanded() : null"
+    [attr.aria-controls]="hasDetails() ? detailsId() : null"
+    [attr.aria-label]="accessibleHeaderLabel()"
+    (click)="toggleExpanded()">
+
+    <div class="tool-leading">
       @if (isSubagentChild()) {
-        <span class="subagent-badge">Subagent</span>
+        <span class="subagent-badge" title="Subagent activity">
+          <mat-icon class="subagent-icon" aria-hidden="true">account_tree</mat-icon>
+          <span class="subagent-text">Subagent</span>
+        </span>
       }
-    </mat-panel-title>
-    <mat-panel-description>{{ panelDescription() }}</mat-panel-description>
-  </mat-expansion-panel-header>
+      <mat-icon class="kind-icon" aria-hidden="true">{{ icon() }}</mat-icon>
+    </div>
 
-  @if (terminal(); as term) {
-    <div class="terminal-view">
-      <div class="terminal-summary" role="region" aria-label="Terminal command summary">
-        @if (term.command) {
-          <div class="terminal-command-row">
-            <span class="terminal-prompt" aria-hidden="true">$</span>
-            <code class="terminal-command">{{ term.command }}</code>
+    <div class="tool-body">
+      <span class="tool-title">{{ displayTitle() }}</span>
+      @if (displaySummary()) {
+        <span class="tool-summary" [title]="displaySummary()">{{ displaySummary() }}</span>
+      }
+    </div>
+
+    <div class="tool-status">
+      @if (isRunning()) {
+        <span class="status-indicator status-indicator-running">
+          <mat-icon class="status-icon spin-icon" aria-hidden="true">progress_activity</mat-icon>
+          <span class="status-text">Running</span>
+        </span>
+      } @else if (isFailed()) {
+        <span class="status-indicator status-indicator-failed">
+          <mat-icon class="status-icon" aria-hidden="true">error</mat-icon>
+          <span class="status-text">Failed</span>
+        </span>
+      } @else {
+        <span class="status-indicator status-indicator-completed">
+          <mat-icon class="status-icon" aria-hidden="true">check</mat-icon>
+          <span class="sr-only">Completed</span>
+        </span>
+      }
+
+      @if (hasDetails()) {
+        <mat-icon
+          class="expand-icon"
+          [class.expanded]="isExpanded()"
+          aria-hidden="true">expand_more</mat-icon>
+      }
+    </div>
+  </button>
+
+  @if (hasDetails() && isExpanded()) {
+    <div [id]="detailsId()" class="tool-details" role="region" [attr.aria-label]="displayTitle() + ' details'">
+      @if (tool().locations?.length) {
+        <div class="tool-locations" aria-label="Related files">
+          <mat-icon class="locations-icon" aria-hidden="true">link</mat-icon>
+          <div class="locations-list">
+            @for (loc of tool().locations!; track $index) {
+              <span class="location">{{ loc.path }}@if (loc.line != null) {:{{ loc.line }}}</span>
+            }
           </div>
-        }
-        <div class="terminal-meta-row">
-          @if (term.workingDir) {
-            <span class="terminal-cwd" title="Working directory">
-              <mat-icon class="meta-icon" aria-hidden="true">folder_open</mat-icon>
-              <span class="cwd-text">{{ term.workingDir }}</span>
-            </span>
-          }
-          <span
-            class="terminal-status-badge"
-            [class.status-running]="term.state === 'running'"
-            [class.status-success]="term.state === 'completed'"
-            [class.status-failed]="term.state === 'failed'"
-            [attr.aria-label]="term.stateLabel + (term.exitCode != null ? ', exit code ' + term.exitCode : '')"
-          >
-            @switch (term.state) {
-              @case ('running') {
-                <mat-icon class="status-icon" aria-hidden="true">sync</mat-icon>
-              }
-              @case ('completed') {
-                <mat-icon class="status-icon" aria-hidden="true">check_circle</mat-icon>
-              }
-              @case ('failed') {
-                <mat-icon class="status-icon" aria-hidden="true">error</mat-icon>
-              }
-            }
-            <span class="status-label">{{ term.stateLabel }}</span>
-            @if (term.exitCode != null) {
-              <span class="exit-status">exit {{ term.exitCode }}</span>
-            }
-          </span>
         </div>
-      </div>
-
-      @if (term.output) {
-        <pre class="terminal-output">{{ term.output }}</pre>
       }
 
-      @if (hasUnrecognizedFields()) {
-        <details class="terminal-extra-details">
-          <summary>Additional details</summary>
-          <pre class="terminal-extra-json">{{ unrecognizedFieldsJson() }}</pre>
-        </details>
+      @if (terminal(); as term) {
+        <div class="terminal-view">
+          <div class="terminal-summary" role="region" aria-label="Terminal command summary">
+            @if (term.command) {
+              <div class="terminal-command-row">
+                <span class="terminal-prompt" aria-hidden="true">$</span>
+                <code class="terminal-command">{{ term.command }}</code>
+              </div>
+            }
+            <div class="terminal-meta-row">
+              @if (term.workingDir) {
+                <span class="terminal-cwd" title="Working directory">
+                  <mat-icon class="meta-icon" aria-hidden="true">folder_open</mat-icon>
+                  <span class="cwd-text">{{ term.workingDir }}</span>
+                </span>
+              }
+              <span
+                class="terminal-status-badge"
+                [class.status-running]="term.state === 'running'"
+                [class.status-success]="term.state === 'completed'"
+                [class.status-failed]="term.state === 'failed'"
+                [attr.aria-label]="term.stateLabel + (term.exitCode != null ? ', exit code ' + term.exitCode : '')"
+              >
+                @switch (term.state) {
+                  @case ('running') {
+                    <mat-icon class="status-icon" aria-hidden="true">sync</mat-icon>
+                  }
+                  @case ('completed') {
+                    <mat-icon class="status-icon" aria-hidden="true">check_circle</mat-icon>
+                  }
+                  @case ('failed') {
+                    <mat-icon class="status-icon" aria-hidden="true">error</mat-icon>
+                  }
+                }
+                <span class="status-label">{{ term.stateLabel }}</span>
+                @if (term.exitCode != null) {
+                  <span class="exit-status">exit {{ term.exitCode }}</span>
+                }
+              </span>
+            </div>
+          </div>
+
+          @if (term.output) {
+            <div class="tool-output-wrapper">
+              <pre class="terminal-output">{{ term.output }}</pre>
+            </div>
+          }
+
+          @if (hasUnrecognizedFields()) {
+            <details class="terminal-extra-details">
+              <summary>Additional details</summary>
+              <pre class="terminal-extra-json">{{ unrecognizedFieldsJson() }}</pre>
+            </details>
+          }
+        </div>
+      } @else if (cleanOutput()) {
+        <div class="tool-output-wrapper">
+          <pre class="tool-output">{{ cleanOutput() }}</pre>
+        </div>
+      }
+
+      @if (richContent().length) {
+        <div class="tool-rich-content">
+          <hub-rich-content [blocks]="richContent()" />
+        </div>
       }
     </div>
-  } @else if (cleanOutput()) {
-    <pre class="tool-output">{{ cleanOutput() }}</pre>
   }
-
-  @if (richContent().length) { <hub-rich-content [blocks]="richContent()" /> }
-  @if (tool().locations?.length) {
-    <div class="tool-locations" aria-label="Related files">
-      @for (loc of tool().locations!; track loc.path) {
-        <span class="location">{{ loc.path }}@if (loc.line != null) { :{{ loc.line }} }</span>
-      }
-    </div>
-  }
-</mat-expansion-panel>
+</div>

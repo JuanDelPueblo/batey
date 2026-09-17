@@ -123,6 +123,35 @@ export interface InstallRegistryAgentInput {
   metadata?: unknown;
 }
 
+export type AgentOperationKind = "install" | "update";
+export type AgentOperationState = "running" | "succeeded" | "failed";
+export type AgentOperationStage =
+  | "queued"
+  | "resolving"
+  | "downloading"
+  | "verifying"
+  | "extracting"
+  | "preparing"
+  | "finalizing"
+  | "completed"
+  | "failed";
+
+export interface AgentOperation {
+  id: string;
+  agent_id: string;
+  registry_id: string;
+  kind: AgentOperationKind;
+  state: AgentOperationState;
+  stage: AgentOperationStage;
+  downloaded_bytes: number;
+  total_bytes: number | null;
+  error: string | null;
+  started_at: string;
+  completed_at: string | null;
+  updated?: boolean | null;
+  to_version?: string | null;
+}
+
 export interface UpdateOutcome {
   updated: boolean;
   from_version: string;

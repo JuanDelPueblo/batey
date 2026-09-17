@@ -96,14 +96,26 @@ describe('ApiService', () => {
     const installPromise = api.installRegistryAgent({ registry_id: 'native-agent', distribution: 'binary' });
     const install = http.expectOne('/api/agents/registry/install');
     expect(install.request.body).toEqual({ registry_id: 'native-agent', distribution: 'binary' });
-    install.flush({ id: 'native-agent' });
-    await expect(installPromise).resolves.toMatchObject({ id: 'native-agent' });
+    install.flush({ id: 'op-1', agent_id: 'native-agent', kind: 'install', state: 'running', stage: 'resolving' });
+    await expect(installPromise).resolves.toMatchObject({ id: 'op-1', kind: 'install' });
 
     const updatePromise = api.updateRegistryAgent('native-agent');
     const update = http.expectOne('/api/agents/native-agent/update');
     expect(update.request.method).toBe('POST');
-    update.flush({ updated: false, from_version: '1', to_version: '1', agent: { id: 'native-agent' } });
-    await expect(updatePromise).resolves.toMatchObject({ updated: false });
+    update.flush({ id: 'op-2', agent_id: 'native-agent', kind: 'update', state: 'running', stage: 'resolving' });
+    await expect(updatePromise).resolves.toMatchObject({ id: 'op-2', kind: 'update' });
+
+    const getOpPromise = api.getAgentOperation('op-1');
+    const getOp = http.expectOne('/api/agent-operations/op-1');
+    expect(getOp.request.method).toBe('GET');
+    getOp.flush({ id: 'op-1', state: 'succeeded', stage: 'completed' });
+    await expect(getOpPromise).resolves.toMatchObject({ id: 'op-1', state: 'succeeded' });
+
+    const listOpsPromise = api.listAgentOperations();
+    const listOps = http.expectOne('/api/agent-operations');
+    expect(listOps.request.method).toBe('GET');
+    listOps.flush([{ id: 'op-1' }]);
+    await expect(listOpsPromise).resolves.toHaveLength(1);
 
     const removePromise = api.removeAgent('native-agent');
     const remove = http.expectOne('/api/agents/native-agent');

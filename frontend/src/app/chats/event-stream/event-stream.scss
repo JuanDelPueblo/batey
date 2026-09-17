@@ -2,7 +2,7 @@
 .stream { height: 100%; overflow: auto; overscroll-behavior: contain; padding: 28px max(var(--hub-gutter), calc((100% - var(--hub-measure)) / 2)); }
 .stream-content { max-width: var(--hub-measure); margin: 0 auto; }
 .history-control { display: flex; justify-content: center; padding-bottom: 18px; }
-.history-control button { display: inline-flex; align-items: center; gap: 8px; }
+.history-control__content { display: inline-flex; align-items: center; gap: 8px; }
 .scroll-control { position: absolute; right: 0; bottom: 20px; left: 0; display: flex; justify-content: center; pointer-events: none; z-index: 1; }
 .scroll-control button { pointer-events: auto; }
 @media (max-width: 599px) { .stream { padding: 20px 16px; } }

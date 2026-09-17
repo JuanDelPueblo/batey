@@ -42,19 +42,6 @@ export class PermissionCardComponent {
   );
   readonly review = computed(() => parseStructuredReview(this.permission().description));
 
-  optionScope(option: { kind: string }): string | null {
-    switch (option.kind) {
-      case 'allow_once':
-      case 'reject_once':
-        return 'One time';
-      case 'allow_always':
-      case 'reject_always':
-        return 'Persistent';
-      default:
-        return null;
-    }
-  }
-
   private optionName(optionId: string): string {
     return this.permission().options?.find((option) => option.optionId === optionId)?.name ?? optionId;
   }

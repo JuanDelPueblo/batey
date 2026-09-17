@@ -60,10 +60,10 @@ describe('PermissionCardComponent', () => {
     expect(markdownHost.textContent).toContain('Proposed Plan');
 
     const buttons = fixture.nativeElement.querySelectorAll('button');
-    expect(buttons[0].textContent).toContain('Reject');
-    expect(buttons[1].textContent).toContain('Approve Plan');
-    expect(buttons[0].getAttribute('aria-label')).toBe('Reject, One time');
-    expect(buttons[1].getAttribute('aria-label')).toBe('Approve Plan, One time');
+    expect(buttons[0].textContent?.trim()).toBe('Reject');
+    expect(buttons[1].textContent?.trim()).toBe('Approve Plan');
+    expect(buttons[0].getAttribute('aria-label')).toBe('Reject');
+    expect(buttons[1].getAttribute('aria-label')).toBe('Approve Plan');
 
     buttons[1].click();
     await fixture.whenStable();
@@ -72,7 +72,7 @@ describe('PermissionCardComponent', () => {
     expect(fixture.nativeElement.querySelector('.decision')?.textContent).toContain('Approve Plan');
   });
 
-  it('distinguishes same-named permission choices by scope', async () => {
+  it('renders permission choices exactly as provided by the agent without scope wording', async () => {
     const genericPerm: TurnEntryPermission = {
       id: 2,
       type: 'permission_request',
@@ -80,8 +80,14 @@ describe('PermissionCardComponent', () => {
       method: 'bash',
       description: 'cargo build',
       options: [
-        { optionId: 'allow-once', name: 'Allow', kind: 'allow_once' },
-        { optionId: 'allow', name: 'Allow', kind: 'allow_always' },
+        { optionId: 'yes', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'no', name: 'No', kind: 'reject_once' },
+        { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+        {
+          optionId: 'allow-always',
+          name: "Yes, and don't ask again for cargo clippy * commands",
+          kind: 'allow_always',
+        },
       ],
       responded: false,
     };
@@ -96,16 +102,30 @@ describe('PermissionCardComponent', () => {
     expect(heading.textContent).toBe('Permission request');
 
     const buttons = fixture.nativeElement.querySelectorAll('button');
-    expect(buttons[0].textContent).toContain('Allow');
-    expect(buttons[1].textContent).toContain('Allow');
-    expect(buttons[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('Allow One time');
-    expect(buttons[1].textContent?.replace(/\s+/g, ' ').trim()).toBe('Allow Persistent');
-    expect(buttons[0].getAttribute('aria-label')).toBe('Allow, One time');
-    expect(buttons[1].getAttribute('aria-label')).toBe('Allow, Persistent');
+    expect(buttons).toHaveLength(4);
 
-    buttons[1].click();
+    expect(buttons[0].textContent?.trim()).toBe('Yes');
+    expect(buttons[0].getAttribute('aria-label')).toBe('Yes');
+
+    expect(buttons[1].textContent?.trim()).toBe('No');
+    expect(buttons[1].getAttribute('aria-label')).toBe('No');
+
+    expect(buttons[2].textContent?.trim()).toBe('Allow once');
+    expect(buttons[2].getAttribute('aria-label')).toBe('Allow once');
+
+    expect(buttons[3].textContent?.trim()).toBe("Yes, and don't ask again for cargo clippy * commands");
+    expect(buttons[3].getAttribute('aria-label')).toBe("Yes, and don't ask again for cargo clippy * commands");
+
+    for (const button of buttons) {
+      expect(button.textContent).not.toContain('One time');
+      expect(button.textContent).not.toContain('Persistent');
+      expect(button.getAttribute('aria-label')).not.toContain('One time');
+      expect(button.getAttribute('aria-label')).not.toContain('Persistent');
+    }
+
+    buttons[3].click();
     await fixture.whenStable();
-    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', optionId: 'allow' }]);
+    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', optionId: 'allow-always' }]);
   });
 
   it('renders a complete review as structured details without repeating its raw content', () => {

@@ -328,7 +328,13 @@ impl EventLog {
 
         if let Some(store) = &self.store {
             if let Err(error) = store.save_event(&event) {
-                tracing::error!(%error, "Failed to persist activity event");
+                tracing::error!(
+                    session_id = %event.session_id,
+                    agent_id = %event.agent,
+                    seq = event.seq,
+                    %error,
+                    "failed to persist activity event"
+                );
                 *self.persistence_error.lock().unwrap() = Some(error.to_string());
                 return Err(anyhow::anyhow!("Failed to persist activity event: {error}"));
             }

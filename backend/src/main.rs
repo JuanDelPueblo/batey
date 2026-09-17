@@ -10,6 +10,18 @@ use batey::{
 use clap::Parser;
 use std::{path::PathBuf, sync::Arc};
 
+const DEFAULT_LOG_FILTER: &str = "warn,batey=info";
+
+fn log_filter(rust_log: Option<&str>) -> tracing_subscriber::EnvFilter {
+    match rust_log {
+        Some(value) => tracing_subscriber::EnvFilter::try_new(value).unwrap_or_else(|error| {
+            eprintln!("Invalid RUST_LOG value; using default filter: {error}");
+            tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER)
+        }),
+        None => tracing_subscriber::EnvFilter::new(DEFAULT_LOG_FILTER),
+    }
+}
+
 /// The auth flow temporarily points `BROWSER` at this executable. Browser
 /// launchers append the URL as an argument; this tiny process forwards it to
 /// the flow's loopback listener and opens it with the platform browser API.
@@ -143,8 +155,9 @@ async fn main() -> anyhow::Result<()> {
     // `pass_env`.
     let secrets = batey::workspace_env::take_secret_env(&args.secret_env_vars);
     let secret_count = secrets.len();
+    let rust_log = std::env::var("RUST_LOG").ok();
     tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_env_filter(log_filter(rust_log.as_deref()))
         .init();
     tracing::info!(count = secret_count, "stashed secret environment variables");
     let paths = BateyPaths::from_overrides(PathOverrides {
@@ -155,8 +168,35 @@ async fn main() -> anyhow::Result<()> {
         log_dir: args.log_dir,
         managed_worktrees: args.worktrees_dir,
     });
-    let store = Arc::new(Store::open_with_paths(&paths)?);
-    let events = Arc::new(EventLog::persistent(store.clone())?);
+    tracing::info!(
+        version = env!("CARGO_PKG_VERSION"),
+        database = %paths.database.display(),
+        data_dir = %paths.data_dir.display(),
+        state_dir = %paths.state_dir.display(),
+        "starting Batey"
+    );
+    let store = Arc::new(match Store::open_with_paths(&paths) {
+        Ok(store) => store,
+        Err(error) => {
+            tracing::error!(
+                database = %paths.database.display(),
+                %error,
+                "failed to open database or apply migrations"
+            );
+            return Err(error.into());
+        }
+    });
+    let events = Arc::new(match EventLog::persistent(store.clone()) {
+        Ok(events) => events,
+        Err(error) => {
+            tracing::error!(
+                database = %paths.database.display(),
+                %error,
+                "failed to restore the persistent event log"
+            );
+            return Err(error);
+        }
+    });
     let mut config = Config {
         paths,
         ..Config::default()
@@ -209,10 +249,18 @@ async fn main() -> anyhow::Result<()> {
         config.paths.installed_agents.clone(),
         Arc::new(HostRuntimeProbe),
     );
-    let loaded = agent_manager
-        .load_persisted()
-        .map_err(|error| anyhow::anyhow!("{error}"))?;
-    tracing::info!(count = loaded, "loaded installed agents");
+    let loaded = match agent_manager.load_persisted() {
+        Ok(loaded) => loaded,
+        Err(error) => {
+            tracing::error!(%error, "failed to restore installed agents");
+            return Err(anyhow::anyhow!("{error}"));
+        }
+    };
+    tracing::info!(
+        configured_agents = config.agents.len(),
+        installed_agents = loaded,
+        "loaded agent catalog"
+    );
     config.agent_manager = Some(agent_manager);
 
     let manager = SessionManager::with_store(config.agents.clone(), events, Some(store));
@@ -234,8 +282,39 @@ async fn main() -> anyhow::Result<()> {
         #[cfg(not(unix))]
         let _ = tokio::signal::ctrl_c().await;
     };
-    let result = tokio::select! { r = web.run() => r, _ = shutdown => Ok(()) };
+    let result = tokio::select! {
+        r = web.run() => {
+            if let Err(error) = &r {
+                tracing::error!(%error, "web server stopped with an error");
+            }
+            r
+        },
+        _ = shutdown => {
+            tracing::info!("received shutdown signal");
+            Ok(())
+        }
+    };
     agent_auth.shutdown();
     manager.shutdown_all().await;
+    tracing::info!("Batey shutdown complete");
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_filter;
+
+    #[test]
+    fn default_filter_is_quiet_for_dependencies_and_verbose_for_batey() {
+        let filter = log_filter(None).to_string();
+        assert!(filter.contains("warn"));
+        assert!(filter.contains("batey=info"));
+    }
+
+    #[test]
+    fn explicit_rust_log_overrides_the_default_filter() {
+        let filter = log_filter(Some("batey=debug,reqwest=trace")).to_string();
+        assert!(filter.contains("batey=debug"));
+        assert!(filter.contains("reqwest=trace"));
+    }
 }

@@ -144,6 +144,8 @@ enum WriterMsg {
 }
 
 pub struct AcpClient {
+    agent_id: String,
+    chat_id: String,
     replaying: Arc<AtomicBool>,
     pub capabilities: tokio::sync::RwLock<serde_json::Value>,
     prompt_capabilities: tokio::sync::RwLock<agent_client_protocol_schema::PromptCapabilities>,
@@ -188,7 +190,31 @@ impl AcpClient {
         effective_roots: Vec<std::path::PathBuf>,
         stderr_policy: StderrPolicy,
     ) -> anyhow::Result<Self> {
-        let proc = AcpProcess::spawn(command, args, env_vars, cwd)?;
+        tracing::info!(
+            agent_id = %agent_name,
+            chat_id = %session_id,
+            command,
+            "ACP process spawn attempt"
+        );
+        let proc = match AcpProcess::spawn(command, args, env_vars, cwd) {
+            Ok(proc) => proc,
+            Err(error) => {
+                tracing::error!(
+                    agent_id = %agent_name,
+                    chat_id = %session_id,
+                    command,
+                    %error,
+                    "ACP process spawn failed"
+                );
+                return Err(error);
+            }
+        };
+        tracing::info!(
+            agent_id = %agent_name,
+            chat_id = %session_id,
+            pid = ?proc.root_pid,
+            "ACP process spawned"
+        );
 
         let (writer_tx, writer_rx) = mpsc::channel::<WriterMsg>(64);
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<ResponseResult>>>> =
@@ -214,6 +240,8 @@ impl AcpClient {
             connected.clone(),
             child.clone(),
             child_root_pid,
+            session_id.clone(),
+            agent_name.clone(),
         ));
 
         let stderr_tail = StderrTail::new();
@@ -238,8 +266,8 @@ impl AcpClient {
             child.clone(),
             child_root_pid,
             event_log.clone(),
-            session_id,
-            agent_name,
+            session_id.clone(),
+            agent_name.clone(),
             config_options.clone(),
             available_commands.clone(),
             session_modes.clone(),
@@ -249,9 +277,17 @@ impl AcpClient {
             stderr_tail.clone(),
         ));
 
-        let wait_handle = tokio::spawn(wait_task(child.clone(), child_root_pid, connected.clone()));
+        let wait_handle = tokio::spawn(wait_task(
+            child.clone(),
+            child_root_pid,
+            connected.clone(),
+            session_id.clone(),
+            agent_name.clone(),
+        ));
 
         Ok(Self {
+            agent_id: agent_name,
+            chat_id: session_id,
             replaying,
             capabilities: tokio::sync::RwLock::new(serde_json::json!({})),
             prompt_capabilities: tokio::sync::RwLock::new(
@@ -308,6 +344,13 @@ impl AcpClient {
                 // Tell the agent the request is abandoned first.
                 self.pending.lock().await.remove(&id);
                 self.cancel_request(id).await;
+                tracing::warn!(
+                    agent_id = %self.agent_id,
+                    chat_id = %self.chat_id,
+                    request_id = id,
+                    operation = method,
+                    "ACP request timed out"
+                );
                 Err(anyhow::Error::new(RequestTimedOut { method }))
             }
         }
@@ -1068,17 +1111,33 @@ async fn writer_task(
     connected: Arc<AtomicBool>,
     child: SharedChild,
     child_root_pid: Option<u32>,
+    chat_id: String,
+    agent_id: String,
 ) {
     let mut needs_child_cleanup = false;
     while let Some(msg) = rx.recv().await {
         match msg {
             WriterMsg::Line(line) => {
                 let data = format!("{}\n", line);
-                if stdin.write_all(data.as_bytes()).await.is_err() {
+                if let Err(error) = stdin.write_all(data.as_bytes()).await {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        chat_id = %chat_id,
+                        pid = ?child_root_pid,
+                        error = %error,
+                        "ACP transport write failed"
+                    );
                     needs_child_cleanup = true;
                     break;
                 }
-                if stdin.flush().await.is_err() {
+                if let Err(error) = stdin.flush().await {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        chat_id = %chat_id,
+                        pid = ?child_root_pid,
+                        error = %error,
+                        "ACP transport flush failed"
+                    );
                     needs_child_cleanup = true;
                     break;
                 }
@@ -1131,7 +1190,12 @@ async fn reader_task(
                 let msg: IncomingMessage = match serde_json::from_str(trimmed) {
                     Ok(m) => m,
                     Err(e) => {
-                        tracing::debug!(agent = %agent_name, "Invalid JSON from agent: {}", e);
+                        tracing::warn!(
+                            agent_id = %agent_name,
+                            chat_id = %session_id,
+                            error = %e,
+                            "ACP agent sent invalid JSON"
+                        );
                         continue;
                     }
                 };
@@ -1374,18 +1438,35 @@ async fn reader_task(
                         });
                     }
                     IncomingKind::Invalid => {
-                        tracing::debug!(agent = %agent_name, "Invalid JSON-RPC message");
+                        tracing::warn!(
+                            agent_id = %agent_name,
+                            chat_id = %session_id,
+                            "ACP agent sent an invalid JSON-RPC message"
+                        );
                     }
                 }
             }
             Err(e) => {
-                tracing::debug!(agent = %agent_name, "stdout read error: {}", e);
+                tracing::warn!(
+                    agent_id = %agent_name,
+                    chat_id = %session_id,
+                    error = %e,
+                    "ACP transport read failed"
+                );
                 break;
             }
         }
     }
 
-    connected.store(false, Ordering::SeqCst);
+    let unexpected = connected.swap(false, Ordering::SeqCst);
+    if unexpected {
+        tracing::warn!(
+            agent_id = %agent_name,
+            chat_id = %session_id,
+            pid = ?child_root_pid,
+            "ACP transport closed unexpectedly"
+        );
+    }
     let _ = event_log.append(
         &session_id,
         &agent_name,
@@ -1900,19 +1981,44 @@ fn extract_parent_id(meta: Option<&agent_client_protocol_schema::Meta>) -> Optio
         })
 }
 
-async fn wait_task(child: SharedChild, child_root_pid: Option<u32>, connected: Arc<AtomicBool>) {
-    loop {
+async fn wait_task(
+    child: SharedChild,
+    child_root_pid: Option<u32>,
+    connected: Arc<AtomicBool>,
+    chat_id: String,
+    agent_id: String,
+) {
+    let exit_status = loop {
         {
             let mut guard = child.lock().await;
-            let Some(c) = guard.as_mut() else { break };
+            let Some(c) = guard.as_mut() else { break None };
             match c.try_wait() {
-                Ok(Some(_)) | Err(_) => break,
+                Ok(Some(status)) => break Some(status),
+                Err(error) => {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        chat_id = %chat_id,
+                        pid = ?child_root_pid,
+                        error = %error,
+                        "failed to read ACP process exit status"
+                    );
+                    break None;
+                }
                 Ok(None) => {}
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
+    let unexpected = connected.swap(false, Ordering::SeqCst);
+    if unexpected {
+        tracing::warn!(
+            agent_id = %agent_id,
+            chat_id = %chat_id,
+            pid = ?child_root_pid,
+            exit_status = ?exit_status,
+            "ACP process exited unexpectedly"
+        );
     }
-    connected.store(false, Ordering::SeqCst);
     kill_child(&child, child_root_pid).await;
 }
 

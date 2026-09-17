@@ -36,12 +36,17 @@
           type="button"
           (click)="respond(option.optionId)"
           [disabled]="responding()"
-          [attr.aria-label]="option.name"
+          [attr.aria-label]="option.name + (optionScope(option) ? ', ' + optionScope(option) : '')"
         >
           @if (responding() && selectedOptionId() === option.optionId) {
             <mat-spinner diameter="18" />
           } @else {
-            <span>{{ option.name }}</span>
+            <span class="option-content">
+              <span>{{ option.name }}</span>&nbsp;
+              @if (optionScope(option)) {
+                <small class="option-scope">{{ optionScope(option) }}</small>
+              }
+            </span>
           }
         </button>
       }

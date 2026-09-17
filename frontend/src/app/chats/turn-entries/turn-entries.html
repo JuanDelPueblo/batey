@@ -1,16 +1,28 @@
 @for (entry of entries(); track entry.id) { @switch (entry.type) { @case ('message_chunk') { @if
 (entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else {
 <div class="message-text"><hub-markdown [content]="entry.text" /></div>
-} } @case ('thought_chunk') {
-<mat-expansion-panel class="thought">
-  <mat-expansion-panel-header>
-    <mat-panel-title><mat-icon>psychology</mat-icon><span>Thought process</span></mat-panel-title>
-  </mat-expansion-panel-header>
+} } @case ('thought_chunk') { @if (isLongThought(entry)) {
+<details class="reasoning reasoning-details">
+  <summary>
+    <mat-icon aria-hidden="true">psychology</mat-icon
+    ><span class="reasoning-label">Agent reasoning</span> @if (thoughtPreview(entry)) {
+    <span class="reasoning-preview">{{ thoughtPreview(entry) }}</span> }
+  </summary>
+  <div class="reasoning-content">
+    @if (entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else {
+    <hub-markdown [content]="entry.text" /> }
+  </div>
+</details>
+} @else {
+<section class="reasoning reasoning-inline" aria-label="Agent reasoning">
+  <span class="reasoning-label"
+    ><mat-icon aria-hidden="true">psychology</mat-icon>Agent reasoning</span
+  >
   @if (entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else {
-  <div class="thought-text"><hub-markdown [content]="entry.text" /></div>
+  <div class="reasoning-content"><hub-markdown [content]="entry.text" /></div>
   }
-</mat-expansion-panel>
-} @case ('tool_call') {
+</section>
+} } @case ('tool_call') {
 <hub-tool-call [tool]="entry" />
 } @case ('plan') {
 <hub-plan-view [entries]="entry.entries" />

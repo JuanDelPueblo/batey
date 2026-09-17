@@ -12,7 +12,7 @@ describe('MessageItemComponent', () => {
     }).compileComponents();
   });
 
-  it('uses the expandable thought process panel', () => {
+  it('uses a lightweight inline reasoning display for short thoughts', () => {
     const message = TestBed.createComponent(MessageItemComponent);
     message.componentRef.setInput('item', {
       id: 1,
@@ -26,14 +26,11 @@ describe('MessageItemComponent', () => {
     });
     message.detectChanges();
 
-    const thought = message.nativeElement.querySelector('.thought') as HTMLElement;
-    expect(thought.querySelector('mat-expansion-panel-header')).not.toBeNull();
-    expect(thought.querySelector('mat-panel-title mat-icon')?.textContent?.trim()).toBe('psychology');
-    expect(thought.querySelector('mat-panel-title')?.textContent).toContain('Thought process');
-
-    (thought.querySelector('mat-expansion-panel-header') as HTMLElement).click();
-    message.detectChanges();
-    expect(thought.classList.contains('mat-expanded')).toBe(true);
+    const thought = message.nativeElement.querySelector('.reasoning-inline') as HTMLElement;
+    expect(thought.getAttribute('aria-label')).toBe('Agent reasoning');
+    expect(thought.querySelector('.reasoning-label mat-icon')?.textContent?.trim()).toBe('psychology');
+    expect(thought.textContent).toContain('Inspecting the repository');
+    expect(message.nativeElement.querySelector('mat-expansion-panel')).toBeNull();
   });
 
   it('renders persisted user and turn timestamps as local date/time values', () => {

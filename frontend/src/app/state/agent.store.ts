@@ -203,6 +203,7 @@ export class AgentStore {
    */
   async refreshAuth(id: string): Promise<AgentAuthState> {
     this.setLoading(id, true);
+    this.clearAuthError(id);
     try {
       const result = await this.api.refreshAgentAuth(id);
       const { refresh_error, ...state } = result;

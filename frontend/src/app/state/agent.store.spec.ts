@@ -207,6 +207,24 @@ describe('AgentStore', () => {
     expect(state.methods.length).toBe(1);
     expect(store.authByAgent()['codex'].methods.length).toBe(1);
     expect(store.authErrors()['codex']).toBe("Agent 'codex' did not start in time");
+
+    // Retrying refresh immediately clears the prior authError while in flight
+    let inFlightError: string | undefined = "initial";
+    api.refreshAgentAuth.mockImplementationOnce(async () => {
+      inFlightError = store.authErrors()['codex'];
+      return {
+        agent_id: 'codex',
+        methods: [{ id: 'm1', name: 'M1', type: 'agent', supported: true }],
+        logout_supported: true,
+        terminal_supported: true,
+        observed_state: 'authenticated',
+        freshness: 'fresh',
+        observed_freshness: 'fresh',
+      };
+    });
+    await store.refreshAuth('codex');
+    expect(inFlightError).toBeUndefined();
+    expect(store.authErrors()['codex']).toBeUndefined();
   });
 
   it('starts a terminal flow and refreshes state after it', async () => {

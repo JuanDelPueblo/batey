@@ -807,11 +807,25 @@ describe('fake backend seed history', () => {
     assert.equal(interaction.manual_callback, true);
     assert.match(interaction.url, /^https:\/\/accounts\.anthropic\.com/);
 
+    // Rejects relay on non-browser or non-waiting flow
+    const nonBrowserFlow = state.startProtocolFlow("codex", "openai-oauth");
+    assert.throws(
+      () => state.relayProtocolAuthCallback(nonBrowserFlow.flow_id, "http://localhost:43123/callback?code=fake"),
+      /Flow is not waiting for browser authentication/
+    );
+    assert.notEqual(state.protocolFlowView(nonBrowserFlow.flow_id).state, "succeeded");
+
     // Relaying callback completes the flow and clears interaction
     state.relayProtocolAuthCallback(flow.flow_id, "http://localhost:43123/callback?code=fake-code");
     assert.equal(state.protocolFlowView(flow.flow_id).state, "succeeded");
     assert.equal(state.protocolAuthInteraction(flow.flow_id), null);
     assert.equal(state.agentAuth("claude").observed_state, "authenticated");
+
+    // Once succeeded, relaying callback again is rejected without state change
+    assert.throws(
+      () => state.relayProtocolAuthCallback(flow.flow_id, "http://localhost:43123/callback?code=fake-code"),
+      /Flow is not waiting for browser authentication/
+    );
   });
 
   it("T142: handles refresh failure while preserving cached discovery methods", () => {

@@ -1220,6 +1220,10 @@ export class FakeState {
     const flow = this.protocolFlows.get(flowId);
     if (!flow) throw Object.assign(new Error('Protocol flow not found'), { status: 404 });
     if (!callbackUrl) throw Object.assign(new Error('Missing callback_url'), { status: 400 });
+    const interaction = this.protocolInteractions.get(flowId);
+    if (!interaction || interaction.type !== 'browser' || flow.state !== 'waiting_for_user') {
+      throw Object.assign(new Error('Flow is not waiting for browser authentication'), { status: 400 });
+    }
     this.protocolInteractions.delete(flowId);
     flow.state = 'succeeded';
     flow.completed_at = new Date().toISOString();

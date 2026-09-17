@@ -3,8 +3,10 @@
     @if (hasOlderHistory()) {
       <div class="history-control">
         <button mat-stroked-button type="button" (click)="requestOlder()" [disabled]="historyLoading()">
-          @if (historyLoading()) { <mat-spinner diameter="18" /> } @else { <mat-icon>history</mat-icon> }
-          {{ historyLoading() ? 'Loading older history…' : 'Load older history' }}
+          <span class="history-control__content">
+            @if (historyLoading()) { <mat-spinner diameter="18" /> } @else { <mat-icon>history</mat-icon> }
+            <span>{{ historyLoading() ? 'Loading older history…' : 'Load older history' }}</span>
+          </span>
         </button>
       </div>
     }

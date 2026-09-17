@@ -72,7 +72,7 @@ describe('PermissionCardComponent', () => {
     expect(fixture.nativeElement.querySelector('.decision')?.textContent).toContain('Approve Plan');
   });
 
-  it('renders generic permission choices including persistent scope', async () => {
+  it('distinguishes same-named permission choices by scope', async () => {
     const genericPerm: TurnEntryPermission = {
       id: 2,
       type: 'permission_request',
@@ -80,7 +80,7 @@ describe('PermissionCardComponent', () => {
       method: 'bash',
       description: 'cargo build',
       options: [
-        { optionId: 'deny', name: 'Deny', kind: 'reject_once' },
+        { optionId: 'allow-once', name: 'Allow', kind: 'allow_once' },
         { optionId: 'allow', name: 'Allow', kind: 'allow_always' },
       ],
       responded: false,
@@ -96,14 +96,16 @@ describe('PermissionCardComponent', () => {
     expect(heading.textContent).toBe('Permission request');
 
     const buttons = fixture.nativeElement.querySelectorAll('button');
-    expect(buttons[0].textContent).toContain('Deny');
+    expect(buttons[0].textContent).toContain('Allow');
     expect(buttons[1].textContent).toContain('Allow');
-    expect(buttons[0].querySelector('.option-scope')?.textContent).toBe('One time');
-    expect(buttons[1].querySelector('.option-scope')?.textContent).toBe('Persistent');
+    expect(buttons[0].textContent?.replace(/\s+/g, ' ').trim()).toBe('Allow One time');
+    expect(buttons[1].textContent?.replace(/\s+/g, ' ').trim()).toBe('Allow Persistent');
+    expect(buttons[0].getAttribute('aria-label')).toBe('Allow, One time');
+    expect(buttons[1].getAttribute('aria-label')).toBe('Allow, Persistent');
 
-    buttons[0].click();
+    buttons[1].click();
     await fixture.whenStable();
-    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', optionId: 'deny' }]);
+    expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', optionId: 'allow' }]);
   });
 
   it('locks every choice until the response succeeds', async () => {

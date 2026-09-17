@@ -7,6 +7,7 @@
 use super::hub::{hub, ApiError, Result};
 use super::AppState;
 use crate::store::validate_project_path;
+pub use crate::workspace::sanitize_credentials;
 use axum::{extract::State, http::StatusCode, Json};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -56,33 +57,6 @@ pub fn derive_repo_name(url: &str) -> Option<String> {
     } else {
         Some(clean.to_string())
     }
-}
-
-/// Remove the userinfo of every URL in `msg`.
-///
-/// A token can appear as the user name alone, as in `https://TOKEN@host/repo`.
-/// This function therefore redacts the complete userinfo, not only the part
-/// after the colon.
-pub fn sanitize_credentials(msg: &str) -> String {
-    let mut out = String::new();
-    let mut remaining = msg;
-    while let Some(proto_idx) = remaining.find("://") {
-        out.push_str(&remaining[..proto_idx + 3]);
-        let after_proto = &remaining[proto_idx + 3..];
-        // The authority ends at the path, the query, the fragment, or a space.
-        let authority_end = after_proto
-            .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace())
-            .unwrap_or(after_proto.len());
-        let authority = &after_proto[..authority_end];
-        if let Some(at_idx) = authority.rfind('@') {
-            out.push_str("***@");
-            remaining = &after_proto[at_idx + 1..];
-            continue;
-        }
-        remaining = after_proto;
-    }
-    out.push_str(remaining);
-    out
 }
 
 pub fn validate_clone_destination_name(name: &str) -> anyhow::Result<()> {

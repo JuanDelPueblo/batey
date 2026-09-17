@@ -348,6 +348,13 @@ export interface WorkspaceOptions {
   branches: WorkspaceBranch[];
 }
 
+export interface WorkspaceSyncResult {
+  branch: string;
+  remote: string;
+  updated: boolean;
+  head_sha: string;
+}
+
 export interface ChatWorkspaceSelection {
   mode: WorkspaceMode;
   branch: string;
@@ -496,6 +503,12 @@ export interface PlanEntry {
   status: string;
 }
 
+export interface TaskList {
+  entries: PlanEntry[];
+  /** Fields supplied by the agent which a PlanEntry cannot represent. */
+  details?: unknown[];
+}
+
 /** Stable ACP v1 blocks Batey accepts and renders. No executable content is a DOM surface. */
 export type RichContentBlock =
   | { type: 'text'; text: string }
@@ -531,6 +544,7 @@ export interface TurnEntryTool {
   parentId?: string;
   locations?: Array<{ path: string; line?: number | null }> | null;
   content?: unknown;
+  taskList?: TaskList;
 }
 
 export interface TurnEntryElicitation {

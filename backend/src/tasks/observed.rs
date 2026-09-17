@@ -73,6 +73,17 @@ const GENERIC_TITLES: &[&str] = &[
     "zsh",
 ];
 
+/// Public task id for an observational record namespaced by chat. Agent-owned
+/// tool-call ids are only unique within their own ACP session, so two chats
+/// can legitimately report the same id (for example `tool-1`). The composite
+/// stays stable for the (chat, tool) pair for the tracker's lifetime, which
+/// is all the task API needs. Chat ids are server-generated UUIDs without
+/// colons, so the encoding is unambiguous. Managed terminal ids never contain
+/// a colon and can never collide with this namespace.
+pub fn observed_task_id(chat_id: &str, tool_call_id: &str) -> String {
+    format!("obs:{chat_id}:{tool_call_id}")
+}
+
 /// Normalized observational update extracted from one tool-call event.
 #[derive(Debug, Clone)]
 pub struct ObservedUpdate {

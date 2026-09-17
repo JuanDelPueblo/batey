@@ -11,6 +11,7 @@ import type { PlanEntry } from '../../core/api/types';
 })
 export class PlanViewComponent {
   readonly entries = input<PlanEntry[]>([]);
+  readonly heading = input('Execution plan');
 
   statusIcon(status: string): string {
     if (status === 'completed') return 'check_circle';

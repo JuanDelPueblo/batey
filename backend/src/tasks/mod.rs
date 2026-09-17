@@ -1,5 +1,5 @@
 pub mod observed;
-pub use observed::{parse_observed_update, tool_kind_str, ObservedUpdate};
+pub use observed::{observed_task_id, parse_observed_update, tool_kind_str, ObservedUpdate};
 
 use agent_client_protocol_schema::v1::TerminalExitStatus;
 use chrono::{DateTime, Utc};
@@ -482,8 +482,11 @@ impl TerminalTaskTracker {
 
     /// Creates or updates an observational task for an agent-owned command.
     /// Returns the task and whether it newly reached a terminal state.
-    /// A managed task with the same id always wins: the native terminal path
-    /// stays authoritative and the observational update is ignored.
+    /// `task_id` is the agent's tool-call id, which is only unique within its
+    /// own chat; the tracker's public id namespaces it by chat (see
+    /// [`observed_task_id`]), so the same tool id in two chats yields one task
+    /// per chat. Managed terminal ids live in a disjoint namespace and keep
+    /// their current identity semantics.
     /// A missing command means there is not enough structured information;
     /// the update is ignored unless the task already exists.
     #[allow(clippy::too_many_arguments)]
@@ -497,14 +500,10 @@ impl TerminalTaskTracker {
         exit_code: Option<i32>,
         state: TaskState,
     ) -> Option<(Arc<ManagedTask>, bool)> {
-        let existing = self.get_task(task_id).await;
+        let public_id = observed_task_id(chat_id, task_id);
+        let existing = self.get_task(&public_id).await;
         if let Some(task) = existing {
-            if task.chat_id != chat_id {
-                return None;
-            }
-            if task.managed {
-                return Some((task, false));
-            }
+            debug_assert!(!task.managed);
             let became_terminal = task
                 .apply_observed_update(command, cwd, output, exit_code, state)
                 .await;
@@ -519,7 +518,7 @@ impl TerminalTaskTracker {
         }
         let cwd_value = cwd.cloned().unwrap_or_else(|| PathBuf::from(""));
         let task = Arc::new(ManagedTask::new_observed(
-            task_id.to_string(),
+            public_id.clone(),
             chat_id.to_string(),
             cmd.to_string(),
             cwd_value,
@@ -528,14 +527,12 @@ impl TerminalTaskTracker {
         // that was just set. Metadata was already provided above.
         task.merge_observed_output(output).await;
         let became_terminal = task.record_observed_state(state, exit_code).await;
-        // Insert directly so a concurrent native registration with the same id
-        // cannot produce a duplicate queue entry.
+        // Insert directly so a concurrent duplicate upsert cannot produce a
+        // duplicate queue entry.
         {
             let mut inner = self.inner.write().await;
-            if let Some(managed) = inner.tasks_by_id.get(task_id) {
-                if managed.managed {
-                    return Some((managed.clone(), false));
-                }
+            if let Some(existing) = inner.tasks_by_id.get(&public_id) {
+                return Some((existing.clone(), false));
             }
             inner.tasks_by_id.insert(task.id.clone(), task.clone());
             inner
@@ -546,6 +543,16 @@ impl TerminalTaskTracker {
         }
         self.prune_chat_tasks(chat_id).await;
         Some((task, became_terminal))
+    }
+
+    /// Fetches an observational task by its chat and agent tool-call id.
+    pub async fn get_observed_task(
+        &self,
+        chat_id: &str,
+        tool_call_id: &str,
+    ) -> Option<Arc<ManagedTask>> {
+        self.get_task(&observed_task_id(chat_id, tool_call_id))
+            .await
     }
 
     /// Whether the id names a managed terminal Batey spawned. Used to
@@ -813,7 +820,12 @@ mod tests {
             .await
             .unwrap();
         assert!(!became_terminal);
-        let details = tracker.get_task("tool-1").await.unwrap().details().await;
+        let details = tracker
+            .get_observed_task("c1", "tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
         assert_eq!(details.output, "running tests...");
 
         // Completion with exit code and final output.
@@ -830,7 +842,12 @@ mod tests {
             .await
             .unwrap();
         assert!(became_terminal);
-        let details = tracker.get_task("tool-1").await.unwrap().details().await;
+        let details = tracker
+            .get_observed_task("c1", "tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
         assert_eq!(details.state, TaskState::Completed);
         assert_eq!(details.exit_code, Some(0));
         assert!(details.completed_at.is_some());
@@ -849,7 +866,12 @@ mod tests {
             .await
             .unwrap();
         assert!(!became_terminal);
-        let details = tracker.get_task("tool-1").await.unwrap().details().await;
+        let details = tracker
+            .get_observed_task("c1", "tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
         assert_eq!(details.state, TaskState::Completed);
     }
 
@@ -882,13 +904,18 @@ mod tests {
             .await
             .unwrap();
         assert!(became_terminal);
-        let details = tracker.get_task("tool-fail").await.unwrap().details().await;
+        let details = tracker
+            .get_observed_task("c1", "tool-fail")
+            .await
+            .unwrap()
+            .details()
+            .await;
         assert_eq!(details.state, TaskState::Failed);
         assert_eq!(details.exit_code, Some(1));
     }
 
     #[tokio::test]
-    async fn test_observed_requires_command_and_ignores_wrong_chat() {
+    async fn test_observed_requires_command() {
         let tracker = TerminalTaskTracker::new(10);
         let cwd = PathBuf::from("/tmp");
         assert!(tracker
@@ -903,37 +930,104 @@ mod tests {
             )
             .await
             .is_none());
-        tracker
+    }
+
+    #[tokio::test]
+    async fn test_observed_same_tool_id_in_two_chats_yields_two_tasks() {
+        // Agent-owned tool-call ids are only unique within their own chat.
+        // The same id reported by two chats must produce one task per chat
+        // rather than dropping the second.
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/tmp");
+        let (first, _) = tracker
             .upsert_observed(
                 "c1",
-                "tool-chat",
+                "tool-1",
                 Some("echo hi"),
                 Some(&cwd),
-                None,
+                Some("hi from c1"),
                 None,
                 TaskState::Running,
             )
             .await
             .unwrap();
-        // Same id in another chat never merges.
-        assert!(tracker
+        let (second, _) = tracker
             .upsert_observed(
                 "c2",
-                "tool-chat",
+                "tool-1",
                 Some("echo hi"),
                 Some(&cwd),
+                Some("hi from c2"),
                 None,
-                None,
-                TaskState::Running
+                TaskState::Running,
             )
             .await
-            .is_none());
+            .unwrap();
+        assert_ne!(first.id, second.id);
+        assert_eq!(first.chat_id, "c1");
+        assert_eq!(second.chat_id, "c2");
         assert_eq!(tracker.list_chat_tasks("c1").await.len(), 1);
-        assert_eq!(tracker.list_chat_tasks("c2").await.len(), 0);
+        assert_eq!(tracker.list_chat_tasks("c2").await.len(), 1);
+        assert_eq!(
+            tracker
+                .get_observed_task("c1", "tool-1")
+                .await
+                .unwrap()
+                .details()
+                .await
+                .output,
+            "hi from c1"
+        );
+        assert_eq!(
+            tracker
+                .get_observed_task("c2", "tool-1")
+                .await
+                .unwrap()
+                .details()
+                .await
+                .output,
+            "hi from c2"
+        );
+        // Completing one chat's task leaves the other's running.
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-1",
+                None,
+                None,
+                None,
+                Some(0),
+                TaskState::Completed,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            tracker
+                .get_observed_task("c1", "tool-1")
+                .await
+                .unwrap()
+                .details()
+                .await
+                .state,
+            TaskState::Completed
+        );
+        assert_eq!(
+            tracker
+                .get_observed_task("c2", "tool-1")
+                .await
+                .unwrap()
+                .details()
+                .await
+                .state,
+            TaskState::Running
+        );
     }
 
     #[tokio::test]
-    async fn test_managed_stays_authoritative_over_observed_id() {
+    async fn test_managed_and_observed_namespaces_do_not_collide() {
+        // Managed terminal ids and observational task ids live in disjoint
+        // namespaces, so an agent tool id equal to a terminal id can never
+        // overwrite the native record.
         let tracker = TerminalTaskTracker::new(10);
         let managed = Arc::new(ManagedTask::new(
             "shared-id".into(),
@@ -944,7 +1038,7 @@ mod tests {
         ));
         tracker.register_task(managed.clone()).await;
         let cwd = PathBuf::from("/tmp");
-        let (task, _) = tracker
+        let (observed, _) = tracker
             .upsert_observed(
                 "c1",
                 "shared-id",
@@ -956,10 +1050,12 @@ mod tests {
             )
             .await
             .unwrap();
-        assert!(task.managed);
+        assert!(!observed.managed);
+        assert_ne!(observed.id, managed.id);
         // Managed output is never overwritten by observational data.
-        assert!(task.details().await.output.is_empty());
-        assert_eq!(tracker.list_chat_tasks("c1").await.len(), 1);
+        assert!(managed.details().await.output.is_empty());
+        assert_eq!(observed.details().await.output, "agent output");
+        assert_eq!(tracker.list_chat_tasks("c1").await.len(), 2);
     }
 
     #[tokio::test]

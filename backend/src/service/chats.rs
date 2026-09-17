@@ -553,7 +553,10 @@ impl HubService {
         Ok(self.view(chat).await)
     }
 
-    async fn ensure_primary_checkout_available(&self, repository_root: &Path) -> ServiceResult<()> {
+    pub(super) async fn ensure_primary_checkout_available(
+        &self,
+        repository_root: &Path,
+    ) -> ServiceResult<()> {
         let chats = self.store.chats()?;
         let projects = self.store.projects()?;
         let workspaces = self.store.list_workspaces()?;

@@ -26,6 +26,7 @@ describe('fake scripted turns', () => {
     assert.equal(scenarioFor('a long answer'), 'long');
     assert.equal(scenarioFor('make it error'), 'error');
     assert.equal(scenarioFor('streaming-markdown demo'), 'streaming-markdown');
+    assert.equal(scenarioFor('show todo updates'), 'todos');
   });
 
   it('creates rich output and a running terminal task through normal events', async () => {
@@ -56,6 +57,20 @@ describe('fake scripted turns', () => {
     const history = historyFor(state, chat.id);
     assert.ok(history.some((event) => event.payload.type === 'error'));
     assert.ok(history.some((event) => event.payload.type === 'turn_complete' && event.payload.stop_reason === 'error'));
+  });
+
+  it('emits one OpenCode-style task-list tool call with duplicate structured and JSON updates', async () => {
+    const state = new FakeState();
+    const projectId = [...state.projects.values()][0].id;
+    const chat = state.createChat(projectId, 'opencode', 'Manual todo scenario');
+    startTurn(state, chat, 'show todo updates', 0);
+    await waitFor(() => !isRunning(chat.id));
+    const tools = historyFor(state, chat.id).filter((event) => event.payload.type.startsWith('tool_call'));
+    assert.equal(tools.length, 3);
+    assert.equal(tools[0].payload.kind, 'todo');
+    assert.equal(tools[0].payload.content.length, 9);
+    assert.equal(tools[1].payload.output, JSON.stringify(tools[1].payload.content));
+    assert.equal(tools[2].payload.content[1].status, 'completed');
   });
 
   it('streams split Markdown as text deltas with stable message ids', async () => {

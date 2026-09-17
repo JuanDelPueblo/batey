@@ -138,12 +138,60 @@ pub fn map_auth_required(agent: &str, error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// Returns a stable category for ACP failures without exposing agent-controlled
+/// error text in operational logs.
+pub fn failure_category(error: &anyhow::Error) -> &'static str {
+    if error.is::<RequestTimedOut>() || error.to_string().contains("timed out") {
+        "timeout"
+    } else if error.is::<AuthRequired>() {
+        "authentication_required"
+    } else if error.is::<AcpRpcError>() {
+        "agent_rpc_error"
+    } else {
+        "acp_failure"
+    }
+}
+
+/// Returns a stable category for process-start failures without logging the
+/// command or the operating system's raw error text.
+pub fn spawn_failure_category(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.ends_with("executable not found") {
+        "executable_not_found"
+    } else if message.contains("executable exists but the process could not start") {
+        "executable_start_failed"
+    } else {
+        "process_spawn_failed"
+    }
+}
+
+fn sanitized_executable_identifier(command: &str) -> String {
+    let basename = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    let identifier: String = basename
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+        .take(128)
+        .collect();
+    if identifier.is_empty() {
+        "unknown".to_owned()
+    } else {
+        identifier
+    }
+}
+
 enum WriterMsg {
     Line(String),
     Shutdown,
 }
 
 pub struct AcpClient {
+    agent_id: String,
+    chat_id: String,
     replaying: Arc<AtomicBool>,
     pub capabilities: tokio::sync::RwLock<serde_json::Value>,
     prompt_capabilities: tokio::sync::RwLock<agent_client_protocol_schema::PromptCapabilities>,
@@ -188,7 +236,32 @@ impl AcpClient {
         effective_roots: Vec<std::path::PathBuf>,
         stderr_policy: StderrPolicy,
     ) -> anyhow::Result<Self> {
-        let proc = AcpProcess::spawn(command, args, env_vars, cwd)?;
+        let executable_identifier = sanitized_executable_identifier(command);
+        tracing::info!(
+            agent_id = %agent_name,
+            chat_id = %session_id,
+            executable = %executable_identifier,
+            "ACP process spawn attempt"
+        );
+        let proc = match AcpProcess::spawn(command, args, env_vars, cwd) {
+            Ok(proc) => proc,
+            Err(error) => {
+                tracing::error!(
+                    agent_id = %agent_name,
+                    chat_id = %session_id,
+                    executable = %executable_identifier,
+                    error_category = %spawn_failure_category(&error),
+                    "ACP process spawn failed"
+                );
+                return Err(error);
+            }
+        };
+        tracing::info!(
+            agent_id = %agent_name,
+            chat_id = %session_id,
+            pid = ?proc.root_pid,
+            "ACP process spawned"
+        );
 
         let (writer_tx, writer_rx) = mpsc::channel::<WriterMsg>(64);
         let pending: Arc<Mutex<HashMap<i64, oneshot::Sender<ResponseResult>>>> =
@@ -218,6 +291,8 @@ impl AcpClient {
             connected.clone(),
             child.clone(),
             child_root_pid,
+            session_id.clone(),
+            agent_name.clone(),
         ));
 
         let stderr_tail = StderrTail::new();
@@ -242,8 +317,8 @@ impl AcpClient {
             child.clone(),
             child_root_pid,
             event_log.clone(),
-            session_id,
-            agent_name,
+            session_id.clone(),
+            agent_name.clone(),
             config_options.clone(),
             available_commands.clone(),
             session_modes.clone(),
@@ -255,9 +330,17 @@ impl AcpClient {
             cwd_for_reader,
         ));
 
-        let wait_handle = tokio::spawn(wait_task(child.clone(), child_root_pid, connected.clone()));
+        let wait_handle = tokio::spawn(wait_task(
+            child.clone(),
+            child_root_pid,
+            connected.clone(),
+            session_id.clone(),
+            agent_name.clone(),
+        ));
 
         Ok(Self {
+            agent_id: agent_name,
+            chat_id: session_id,
             replaying,
             capabilities: tokio::sync::RwLock::new(serde_json::json!({})),
             prompt_capabilities: tokio::sync::RwLock::new(
@@ -314,6 +397,13 @@ impl AcpClient {
                 // Tell the agent the request is abandoned first.
                 self.pending.lock().await.remove(&id);
                 self.cancel_request(id).await;
+                tracing::warn!(
+                    agent_id = %self.agent_id,
+                    chat_id = %self.chat_id,
+                    request_id = id,
+                    operation = method,
+                    "ACP request timed out"
+                );
                 Err(anyhow::Error::new(RequestTimedOut { method }))
             }
         }
@@ -1074,17 +1164,33 @@ async fn writer_task(
     connected: Arc<AtomicBool>,
     child: SharedChild,
     child_root_pid: Option<u32>,
+    chat_id: String,
+    agent_id: String,
 ) {
     let mut needs_child_cleanup = false;
     while let Some(msg) = rx.recv().await {
         match msg {
             WriterMsg::Line(line) => {
                 let data = format!("{}\n", line);
-                if stdin.write_all(data.as_bytes()).await.is_err() {
+                if let Err(error) = stdin.write_all(data.as_bytes()).await {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        chat_id = %chat_id,
+                        pid = ?child_root_pid,
+                        error = %error,
+                        "ACP transport write failed"
+                    );
                     needs_child_cleanup = true;
                     break;
                 }
-                if stdin.flush().await.is_err() {
+                if let Err(error) = stdin.flush().await {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        chat_id = %chat_id,
+                        pid = ?child_root_pid,
+                        error = %error,
+                        "ACP transport flush failed"
+                    );
                     needs_child_cleanup = true;
                     break;
                 }
@@ -1139,7 +1245,12 @@ async fn reader_task(
                 let msg: IncomingMessage = match serde_json::from_str(trimmed) {
                     Ok(m) => m,
                     Err(e) => {
-                        tracing::debug!(agent = %agent_name, "Invalid JSON from agent: {}", e);
+                        tracing::warn!(
+                            agent_id = %agent_name,
+                            chat_id = %session_id,
+                            error = %e,
+                            "ACP agent sent invalid JSON"
+                        );
                         continue;
                     }
                 };
@@ -1384,18 +1495,35 @@ async fn reader_task(
                         });
                     }
                     IncomingKind::Invalid => {
-                        tracing::debug!(agent = %agent_name, "Invalid JSON-RPC message");
+                        tracing::warn!(
+                            agent_id = %agent_name,
+                            chat_id = %session_id,
+                            "ACP agent sent an invalid JSON-RPC message"
+                        );
                     }
                 }
             }
             Err(e) => {
-                tracing::debug!(agent = %agent_name, "stdout read error: {}", e);
+                tracing::warn!(
+                    agent_id = %agent_name,
+                    chat_id = %session_id,
+                    error = %e,
+                    "ACP transport read failed"
+                );
                 break;
             }
         }
     }
 
-    connected.store(false, Ordering::SeqCst);
+    let unexpected = connected.swap(false, Ordering::SeqCst);
+    if unexpected {
+        tracing::warn!(
+            agent_id = %agent_name,
+            chat_id = %session_id,
+            pid = ?child_root_pid,
+            "ACP transport closed unexpectedly"
+        );
+    }
     let _ = event_log.append(
         &session_id,
         &agent_name,
@@ -1599,9 +1727,9 @@ async fn ingest_tool_call_task(
     };
     let tool_id = tc.tool_call_id.to_string();
     let existed = tracker
-        .get_task(&tool_id)
+        .get_observed_task(session_id, &tool_id)
         .await
-        .is_some_and(|t| t.chat_id == session_id);
+        .is_some();
     let cwd = update
         .cwd
         .clone()
@@ -1707,7 +1835,11 @@ async fn ingest_tool_call_update_task(
         // update carries them without a command. Re-parse with a permissive
         // command so existing tasks can advance.
         let tool_id = tcu.tool_call_id.to_string();
-        if tracker.get_task(&tool_id).await.is_none() {
+        if tracker
+            .get_observed_task(session_id, &tool_id)
+            .await
+            .is_none()
+        {
             return Ok(());
         }
         // Fall through to a direct merge below.
@@ -1724,9 +1856,9 @@ async fn ingest_tool_call_update_task(
     };
     let tool_id = tcu.tool_call_id.to_string();
     let existed = tracker
-        .get_task(&tool_id)
+        .get_observed_task(session_id, &tool_id)
         .await
-        .is_some_and(|t| t.chat_id == session_id);
+        .is_some();
     let cwd = update
         .cwd
         .clone()
@@ -1763,10 +1895,10 @@ async fn merge_update_into_existing(
     typed_status: Option<&str>,
 ) -> anyhow::Result<()> {
     let tool_id = tcu.tool_call_id.to_string();
-    let Some(task) = tracker.get_task(&tool_id).await else {
+    let Some(task) = tracker.get_observed_task(session_id, &tool_id).await else {
         return Ok(());
     };
-    if task.chat_id != session_id || task.managed {
+    if task.managed {
         return Ok(());
     }
     // Reuse the full provider-neutral parse with the existing command as a
@@ -2225,19 +2357,44 @@ fn extract_parent_id(meta: Option<&agent_client_protocol_schema::Meta>) -> Optio
         })
 }
 
-async fn wait_task(child: SharedChild, child_root_pid: Option<u32>, connected: Arc<AtomicBool>) {
-    loop {
+async fn wait_task(
+    child: SharedChild,
+    child_root_pid: Option<u32>,
+    connected: Arc<AtomicBool>,
+    chat_id: String,
+    agent_id: String,
+) {
+    let exit_status = loop {
         {
             let mut guard = child.lock().await;
-            let Some(c) = guard.as_mut() else { break };
+            let Some(c) = guard.as_mut() else { break None };
             match c.try_wait() {
-                Ok(Some(_)) | Err(_) => break,
+                Ok(Some(status)) => break Some(status),
+                Err(error) => {
+                    tracing::warn!(
+                        agent_id = %agent_id,
+                        chat_id = %chat_id,
+                        pid = ?child_root_pid,
+                        error = %error,
+                        "failed to read ACP process exit status"
+                    );
+                    break None;
+                }
                 Ok(None) => {}
             }
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    };
+    let unexpected = connected.swap(false, Ordering::SeqCst);
+    if unexpected {
+        tracing::warn!(
+            agent_id = %agent_id,
+            chat_id = %chat_id,
+            pid = ?child_root_pid,
+            exit_status = ?exit_status,
+            "ACP process exited unexpectedly"
+        );
     }
-    connected.store(false, Ordering::SeqCst);
     kill_child(&child, child_root_pid).await;
 }
 
@@ -2749,7 +2906,7 @@ mod tests {
         .await
         .unwrap();
         let task = tracker
-            .get_task("codex-tool-1")
+            .get_observed_task("s1", "codex-tool-1")
             .await
             .expect("task created while running");
         assert!(!task.managed);
@@ -2771,7 +2928,7 @@ mod tests {
         .await
         .unwrap();
         let details = tracker
-            .get_task("codex-tool-1")
+            .get_observed_task("s1", "codex-tool-1")
             .await
             .unwrap()
             .details()
@@ -2840,7 +2997,7 @@ mod tests {
         .await
         .unwrap();
         let details = tracker
-            .get_task("agy-tool-1")
+            .get_observed_task("s1", "agy-tool-1")
             .await
             .unwrap()
             .details()
@@ -2868,7 +3025,10 @@ mod tests {
         .await
         .unwrap();
         // Generic "bash" title alone creates no task.
-        assert!(tracker.get_task("opencode-tool-1").await.is_none());
+        assert!(tracker
+            .get_observed_task("s1", "opencode-tool-1")
+            .await
+            .is_none());
         let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
             "opencode-tool-1",
             ToolCallUpdateFields::new()
@@ -2885,7 +3045,10 @@ mod tests {
         )
         .await
         .unwrap();
-        assert!(tracker.get_task("opencode-tool-1").await.is_some());
+        assert!(tracker
+            .get_observed_task("s1", "opencode-tool-1")
+            .await
+            .is_some());
         let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
             "opencode-tool-1",
             ToolCallUpdateFields::new()
@@ -2902,7 +3065,7 @@ mod tests {
         .await
         .unwrap();
         let details = tracker
-            .get_task("opencode-tool-1")
+            .get_observed_task("s1", "opencode-tool-1")
             .await
             .unwrap()
             .details()
@@ -2938,7 +3101,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(tracker.list_chat_tasks("s1").await.len(), 1);
-        assert!(tracker.get_task("tool-dedup").await.is_none());
+        assert!(tracker
+            .get_observed_task("s1", "tool-dedup")
+            .await
+            .is_none());
         assert!(tracker.get_task("term-1").await.is_some());
     }
 
@@ -2988,5 +3154,67 @@ mod tests {
             .unwrap();
         }
         assert_eq!(tracker.list_chat_tasks("s1").await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_same_tool_id_in_two_chats_yields_two_tasks() {
+        use super::agent_client_protocol_schema::ToolCall;
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        for chat in ["s1", "s2"] {
+            let tc = ToolCall::new("tool-1", "Terminal: echo hi")
+                .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+                .raw_input(serde_json::json!({"command": "echo hi"}));
+            let update = SessionUpdate::ToolCall(tc);
+            handle_session_update(
+                &log, &None, chat, "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(tracker.list_chat_tasks("s1").await.len(), 1);
+        assert_eq!(tracker.list_chat_tasks("s2").await.len(), 1);
+        assert_eq!(
+            tracker
+                .get_observed_task("s1", "tool-1")
+                .await
+                .unwrap()
+                .chat_id,
+            "s1"
+        );
+        assert_eq!(
+            tracker
+                .get_observed_task("s2", "tool-1")
+                .await
+                .unwrap()
+                .chat_id,
+            "s2"
+        );
+    }
+
+    #[test]
+    fn operational_error_categories_do_not_expose_error_text() {
+        let error = anyhow::anyhow!("agent returned a private prompt and timed out");
+        assert_eq!(failure_category(&error), "timeout");
+        assert_eq!(
+            spawn_failure_category(&anyhow::anyhow!(
+                "Failed to spawn ACP agent '/private/agent': executable not found"
+            )),
+            "executable_not_found"
+        );
+    }
+
+    #[test]
+    fn executable_identifier_keeps_only_a_safe_basename() {
+        assert_eq!(
+            sanitized_executable_identifier("/private/path/agent-with_args"),
+            "agent-with_args"
+        );
+        assert_eq!(
+            sanitized_executable_identifier("/private/path/agent secret"),
+            "agentsecret"
+        );
     }
 }

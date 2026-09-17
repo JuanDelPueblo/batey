@@ -34,6 +34,149 @@ fn init_repo_at(path: &Path) {
     git(path, &["commit", "-m", "init"]);
 }
 
+fn init_repo_with_remote() -> (tempfile::TempDir, tempfile::TempDir) {
+    let remote = tempfile::tempdir().unwrap();
+    git(remote.path(), &["init", "--bare", "-b", "main"]);
+    let local = init_repo();
+    git(
+        local.path(),
+        &["remote", "add", "origin", remote.path().to_str().unwrap()],
+    );
+    git(local.path(), &["push", "-u", "origin", "main"]);
+    (local, remote)
+}
+
+/// Advances the bare `remote` by one commit through a second clone, so the
+/// change reaches the remote without ever touching `local`.
+fn advance_remote(remote: &Path, file: &str, content: &str) {
+    let scratch = tempfile::tempdir().unwrap();
+    git(scratch.path(), &["clone", remote.to_str().unwrap(), "."]);
+    git(scratch.path(), &["config", "user.email", "t@t.t"]);
+    git(scratch.path(), &["config", "user.name", "t"]);
+    fs::write(scratch.path().join(file), content).unwrap();
+    git(scratch.path(), &["add", "."]);
+    git(scratch.path(), &["commit", "-m", "advance"]);
+    git(scratch.path(), &["push", "origin", "main"]);
+}
+
+#[test]
+fn fetch_fast_forwards_a_clean_behind_branch() {
+    let (local, remote) = init_repo_with_remote();
+    advance_remote(remote.path(), "new.txt", "new");
+
+    let before = resolve_ref(local.path(), "main").unwrap();
+    let outcome = fetch_and_fast_forward(local.path()).unwrap();
+
+    assert!(outcome.updated);
+    assert_eq!(outcome.branch, "main");
+    assert_eq!(outcome.remote, "origin");
+    assert_eq!(outcome.previous_sha, before);
+    assert_ne!(outcome.head_sha, before);
+    assert_eq!(resolve_ref(local.path(), "main").unwrap(), outcome.head_sha);
+    assert!(local.path().join("new.txt").exists());
+}
+
+#[test]
+fn fetch_reports_already_up_to_date_without_changes() {
+    let (local, _remote) = init_repo_with_remote();
+    let before = resolve_ref(local.path(), "main").unwrap();
+
+    let outcome = fetch_and_fast_forward(local.path()).unwrap();
+
+    assert!(!outcome.updated);
+    assert_eq!(outcome.head_sha, before);
+    assert_eq!(resolve_ref(local.path(), "main").unwrap(), before);
+}
+
+#[test]
+fn fetch_reports_already_up_to_date_when_local_is_ahead() {
+    let (local, _remote) = init_repo_with_remote();
+    fs::write(local.path().join("ahead.txt"), "ahead").unwrap();
+    git(local.path(), &["add", "."]);
+    git(local.path(), &["commit", "-m", "ahead"]);
+    let before = resolve_ref(local.path(), "main").unwrap();
+
+    let outcome = fetch_and_fast_forward(local.path()).unwrap();
+
+    assert!(!outcome.updated);
+    assert_eq!(outcome.head_sha, before);
+}
+
+#[test]
+fn fetch_refuses_a_dirty_checkout_and_leaves_it_untouched() {
+    let (local, remote) = init_repo_with_remote();
+    advance_remote(remote.path(), "new.txt", "new");
+    fs::write(local.path().join("f.txt"), "dirty").unwrap();
+    let before = resolve_ref(local.path(), "main").unwrap();
+
+    let error = fetch_and_fast_forward(local.path()).unwrap_err();
+
+    assert!(matches!(error, WorkspaceError::Conflict(_)));
+    assert_eq!(resolve_ref(local.path(), "main").unwrap(), before);
+    assert_eq!(
+        fs::read_to_string(local.path().join("f.txt")).unwrap(),
+        "dirty"
+    );
+    assert!(!local.path().join("new.txt").exists());
+}
+
+#[test]
+fn fetch_refuses_diverged_history() {
+    let (local, remote) = init_repo_with_remote();
+    advance_remote(remote.path(), "remote-only.txt", "remote");
+    fs::write(local.path().join("local-only.txt"), "local").unwrap();
+    git(local.path(), &["add", "."]);
+    git(local.path(), &["commit", "-m", "diverge"]);
+    let before = resolve_ref(local.path(), "main").unwrap();
+
+    let error = fetch_and_fast_forward(local.path()).unwrap_err();
+
+    assert!(matches!(error, WorkspaceError::Conflict(_)));
+    assert_eq!(resolve_ref(local.path(), "main").unwrap(), before);
+}
+
+#[test]
+fn fetch_refuses_without_an_upstream() {
+    let td = init_repo();
+
+    let error = fetch_and_fast_forward(td.path()).unwrap_err();
+
+    assert!(matches!(error, WorkspaceError::Conflict(_)));
+}
+
+#[test]
+fn fetch_refuses_a_detached_head() {
+    let (local, _remote) = init_repo_with_remote();
+    let sha = resolve_ref(local.path(), "main").unwrap();
+    git(local.path(), &["checkout", &sha]);
+
+    let error = fetch_and_fast_forward(local.path()).unwrap_err();
+
+    assert!(matches!(error, WorkspaceError::Conflict(_)));
+}
+
+#[test]
+fn fetch_reports_a_sanitized_fetch_failure() {
+    let (local, _remote) = init_repo_with_remote();
+    git(
+        local.path(),
+        &[
+            "remote",
+            "set-url",
+            "origin",
+            "https://ghp_SECRET@example.invalid/does/not/exist.git",
+        ],
+    );
+
+    let error = fetch_and_fast_forward(local.path()).unwrap_err();
+
+    let WorkspaceError::Failed(message) = error else {
+        panic!("expected a fetch Failed error, got {error:?}");
+    };
+    assert!(message.starts_with("Fetch failed:"));
+    assert!(!message.contains("ghp_SECRET"));
+}
+
 fn create_many_refs(repo: &Path, base: &str) {
     let mut child = Command::new("git")
         .args(["update-ref", "--stdin"])

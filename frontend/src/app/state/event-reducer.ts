@@ -5,7 +5,9 @@ import type {
   DisplayTurn,
   DisplayUserMessage,
   RichContentBlock,
+  PlanEntry,
   SessionEvent,
+  TaskList,
   TurnEntry,
   TurnEntryTool,
   AgentPermissionOption,
@@ -265,6 +267,9 @@ export class EventReducer {
       const locations = Array.isArray(payload['locations'])
         ? (payload['locations'] as Array<{ path: string; line?: number | null }>)
         : null;
+      const contentTaskList = this.parseTaskList(payload.content);
+      const outputTaskList = this.parseTaskList(payload.output);
+      const taskList = this.combineTaskLists(contentTaskList, outputTaskList);
       return {
         ...turn,
         entries: [
@@ -279,7 +284,8 @@ export class EventReducer {
             kind,
             parentId,
             locations,
-            ...(payload.content !== undefined ? { content: payload.content } : {}),
+            ...(taskList ? { taskList } : {}),
+            ...(payload.content !== undefined && !contentTaskList ? { content: payload.content } : {}),
           },
         ],
       };
@@ -297,22 +303,34 @@ export class EventReducer {
         const status = this.stringValue(payload.status);
         const title = this.stringValue(payload.title);
         const kind = this.stringValue(payload['kind']);
-        const updated: TurnEntryTool = {
+        const contentTaskList = this.parseTaskList(payload.content);
+        const outputTaskList = this.parseTaskList(payload.output);
+        const taskList = this.combineTaskLists(contentTaskList, outputTaskList);
+        let updated: TurnEntryTool = {
           ...tool,
           title: title ?? tool.title,
           kind: kind ?? tool.kind,
           status: status ?? tool.status,
-          output:
-            payload.output !== undefined && payload.output !== null
+          output: outputTaskList
+            ? null
+            : payload.output !== undefined && payload.output !== null
               ? (tool.output || '') + String(payload.output)
               : tool.output,
           ...(locations !== undefined ? { locations } : {}),
-          ...(payload.content !== undefined ? { content: payload.content } : {}),
+          ...(taskList ? { taskList } : {}),
+          ...(payload.content !== undefined && !contentTaskList ? { content: payload.content } : {}),
         };
+        if (contentTaskList) {
+          const { content: _content, ...withoutContent } = updated;
+          updated = withoutContent;
+        }
         const nextEntries = [...entries];
         nextEntries[index] = updated;
         return { ...turn, entries: nextEntries };
       }
+      const contentTaskList = this.parseTaskList(payload.content);
+      const outputTaskList = this.parseTaskList(payload.output);
+      const taskList = this.combineTaskLists(contentTaskList, outputTaskList);
       return {
         ...turn,
         entries: [
@@ -323,11 +341,12 @@ export class EventReducer {
             toolCallId: toolId,
             title: this.stringValue(payload.title) ?? 'Tool Call',
             status: this.stringValue(payload.status) ?? 'in_progress',
-            output: payload.output == null ? null : String(payload.output),
+            output: outputTaskList ? null : payload.output == null ? null : String(payload.output),
             kind: this.stringValue(payload['kind']),
             parentId: this.stringValue(payload['parent_id'] ?? payload['parentId']),
             locations: locations ?? null,
-            ...(payload.content !== undefined ? { content: payload.content } : {}),
+            ...(taskList ? { taskList } : {}),
+            ...(payload.content !== undefined && !contentTaskList ? { content: payload.content } : {}),
           },
         ],
       };
@@ -350,6 +369,15 @@ export class EventReducer {
       const requestId = this.stringValue(payload.id) ?? '';
       const localDecision = this.localPermissionResponses.get(requestId);
       const options = this.permissionOptions(payload.options);
+      const candidate = {
+        requestId,
+        method: this.stringValue(payload.method) ?? '',
+        description: this.stringValue(payload.description) ?? '',
+        title: this.stringValue(payload['title']),
+        kind: this.stringValue(payload['kind']),
+        options,
+      };
+      if (entries.some((entry) => this.isEquivalentPermission(entry, candidate))) return turn;
       return {
         ...turn,
         entries: [
@@ -357,12 +385,7 @@ export class EventReducer {
           {
             id: this.nextId++,
             type: 'permission_request',
-            requestId,
-            method: this.stringValue(payload.method) ?? '',
-            description: this.stringValue(payload.description) ?? '',
-            title: this.stringValue(payload['title']),
-            kind: this.stringValue(payload['kind']),
-            options,
+            ...candidate,
             responded: localDecision !== undefined,
             ...(localDecision !== undefined ? this.permissionPresentation(options, localDecision) : {}),
           },
@@ -401,6 +424,20 @@ export class EventReducer {
     }
 
     return turn;
+  }
+
+  /** Suppress only an exact representation of a request already in this turn. */
+  private isEquivalentPermission(
+    entry: TurnEntry,
+    candidate: Pick<Extract<TurnEntry, { type: 'permission_request' }>, 'requestId' | 'method' | 'description' | 'title' | 'kind' | 'options'>,
+  ): boolean {
+    return entry.type === 'permission_request'
+      && entry.requestId === candidate.requestId
+      && entry.method === candidate.method
+      && entry.description === candidate.description
+      && entry.title === candidate.title
+      && entry.kind === candidate.kind
+      && JSON.stringify(entry.options ?? []) === JSON.stringify(candidate.options);
   }
 
   /** Returns new entries with the first matching permission resolved, else null. */
@@ -556,6 +593,69 @@ export class EventReducer {
     return value.filter((block): block is RichContentBlock =>
       !!block && typeof block === 'object' && typeof (block as { type?: unknown }).type === 'string',
     );
+  }
+
+  /** Recognizes an explicit structured task-list payload, never free-form prose. */
+  private parseTaskList(value: unknown): TaskList | undefined {
+    const parsed = this.parseJsonValue(value);
+    if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+
+    const entries: PlanEntry[] = [];
+    const details: unknown[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) return undefined;
+      const record = item as Record<string, unknown>;
+      if (typeof record['content'] !== 'string' || !record['content'].trim() || typeof record['status'] !== 'string') {
+        return undefined;
+      }
+      entries.push({ content: record['content'], status: record['status'] });
+      const extra = Object.fromEntries(Object.entries(record).filter(([key]) => key !== 'content' && key !== 'status'));
+      if (Object.keys(extra).length > 0) details.push(extra);
+    }
+    return { entries, ...(details.length > 0 ? { details } : {}) };
+  }
+
+  private parseJsonValue(value: unknown): unknown {
+    if (typeof value === 'string') {
+      const trimmed = value.trim().replace(/^```(?:json)?\s*|\s*```$/g, '');
+      try {
+        return JSON.parse(trimmed);
+      } catch {
+        return value;
+      }
+    }
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const wrapper = value as { type?: unknown; content?: unknown; text?: unknown };
+      if (wrapper.type === 'content') return this.parseJsonValue(wrapper.content);
+      if (wrapper.type === 'text') return this.parseJsonValue(wrapper.text);
+    }
+    if (
+      Array.isArray(value) &&
+      value.length === 1 &&
+      value[0] &&
+      typeof value[0] === 'object' &&
+      ((value[0] as { type?: unknown }).type === 'content' ||
+        (value[0] as { type?: unknown }).type === 'text')
+    ) {
+      return this.parseJsonValue(value[0]);
+    }
+    return value;
+  }
+
+  private combineTaskLists(...lists: Array<TaskList | undefined>): TaskList | undefined {
+    const recognized = lists.filter((list): list is TaskList => !!list);
+    if (recognized.length === 0) return undefined;
+    const primary = recognized[0];
+    const details = recognized.flatMap((list) => list.details ?? []);
+    for (const list of recognized.slice(1)) {
+      if (JSON.stringify(list.entries) !== JSON.stringify(primary.entries)) {
+        details.push({ task_list: list.entries, ...(list.details?.length ? { details: list.details } : {}) });
+      }
+    }
+    const uniqueDetails = details.filter((detail, index) =>
+      details.findIndex((candidate) => JSON.stringify(candidate) === JSON.stringify(detail)) === index,
+    );
+    return { ...primary, ...(uniqueDetails.length > 0 ? { details: uniqueDetails } : {}) };
   }
 
   /**

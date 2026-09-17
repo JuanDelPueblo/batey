@@ -82,10 +82,14 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("WebSocket lagged by {} events", n);
+                    tracing::warn!(
+                        skipped_events = n,
+                        "WebSocket event stream lagged; replaying"
+                    );
                     let through = match event_log_send.high_watermark() {
                         Ok(seq) => seq,
                         Err(error) => {
+                            tracing::error!(%error, "WebSocket replay high-watermark lookup failed");
                             let control = serde_json::json!({"type":"stream_error","code":"event_store_unavailable","error":error.to_string()});
                             let mut sender = sender_clone.lock().await;
                             let _ = sender.send(Message::Text(control.to_string())).await;
@@ -97,6 +101,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                         let page = match event_log_send.replay_page(cursor, through, 512) {
                             Ok(page) => page,
                             Err(error) => {
+                                tracing::error!(from_seq = cursor, through_seq = through, %error, "WebSocket lag recovery failed");
                                 let control = serde_json::json!({"type":"stream_error","code":"replay_failed","error":error.to_string()});
                                 let mut sender = sender_clone.lock().await;
                                 let _ = sender.send(Message::Text(control.to_string())).await;
@@ -115,6 +120,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                 .await
                                 .is_err()
                             {
+                                tracing::warn!("WebSocket disconnected during lag recovery");
                                 return;
                             }
                         }
@@ -128,17 +134,23 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     // Recv task: parse client messages
     let action_tx_clone = action_tx.clone();
     let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(msg)) = receiver.next().await {
-            match msg {
-                Message::Text(text) => {
-                    if let Ok(cmd) = serde_json::from_str::<ClientMessage>(&text) {
-                        if action_tx_clone.send(cmd).await.is_err() {
-                            break;
+        while let Some(result) = receiver.next().await {
+            match result {
+                Err(error) => {
+                    tracing::warn!(%error, "WebSocket receive failed");
+                    break;
+                }
+                Ok(msg) => match msg {
+                    Message::Text(text) => {
+                        if let Ok(cmd) = serde_json::from_str::<ClientMessage>(&text) {
+                            if action_tx_clone.send(cmd).await.is_err() {
+                                break;
+                            }
                         }
                     }
-                }
-                Message::Close(_) => break,
-                _ => {}
+                    Message::Close(_) => break,
+                    _ => {}
+                },
             }
         }
     });
@@ -157,6 +169,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                     let through = match event_log.high_watermark() {
                         Ok(seq) => seq,
                         Err(error) => {
+                            tracing::error!(from_seq, %error, "WebSocket replay high-watermark lookup failed");
                             let control = serde_json::json!({"type":"stream_error","code":"event_store_unavailable","error":error.to_string()});
                             let _ = sender.send(Message::Text(control.to_string())).await;
                             return;
@@ -172,6 +185,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                             let page = match event_log.replay_page(cursor, through, 512) {
                                 Ok(page) => page,
                                 Err(error) => {
+                                    tracing::error!(from_seq, through_seq = through, %error, "WebSocket replay failed");
                                     let control = serde_json::json!({"type":"stream_error","code":"replay_failed","error":error.to_string()});
                                     let _ = sender.send(Message::Text(control.to_string())).await;
                                     return;
@@ -187,6 +201,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
                                     .await
                                     .is_err()
                                 {
+                                    tracing::warn!("WebSocket disconnected during replay");
                                     return;
                                 }
                             }

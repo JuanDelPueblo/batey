@@ -3,8 +3,17 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(not(unix))]
+use process_wrap::std::StdCommandWrap;
+#[cfg(unix)]
+use process_wrap::std::{ProcessGroup, StdCommandWrap};
+
 /// Default bound for every `git` invocation.
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Bound for `git fetch`, which is network-bound and slower than the local
+/// plumbing `GIT_TIMEOUT` covers.
+pub const GIT_FETCH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Branch prefix for managed chat worktrees.
 pub const MANAGED_PREFIX: &str = "batey/chat/";
@@ -61,28 +70,60 @@ pub enum Recovered {
     Recreated(PathBuf),
 }
 
+/// Outcome of `fetch_and_fast_forward`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SyncOutcome {
+    pub branch: String,
+    pub remote: String,
+    pub upstream: String,
+    pub previous_sha: String,
+    pub head_sha: String,
+    pub updated: bool,
+}
+
 struct GitOutput {
     stdout: String,
 }
 
+/// Joins both reader threads and discards their results. Used on every exit
+/// path so a killed or errored child never leaves its reader threads running
+/// past this function's return.
+fn join_readers(
+    stdout_reader: thread::JoinHandle<std::io::Result<String>>,
+    stderr_reader: thread::JoinHandle<std::io::Result<String>>,
+) {
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
+}
+
 /// Run `git` with captured output, `GIT_TERMINAL_PROMPT=0`, no network, bounded time.
+///
+/// On Unix, `git` runs as the leader of a new process group, so a timeout
+/// kill (`killpg`) reaches any SSH, credential-helper, or remote-helper
+/// descendant `git fetch` spawns, not only the `git` process itself. Killing
+/// only the direct child would leave those descendants running past the
+/// timeout.
 fn run_git_output(
     dir: &Path,
     args: &[&str],
     timeout: Duration,
 ) -> Result<GitOutput, WorkspaceError> {
-    let mut child = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut wrap = StdCommandWrap::from(cmd);
+    #[cfg(unix)]
+    wrap.wrap(ProcessGroup::leader());
+    let mut child = wrap
         .spawn()
         .map_err(|e| WorkspaceError::Failed(format!("cannot run git: {e}")))?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
+    let stdout = child.stdout().take().expect("piped stdout");
+    let stderr = child.stderr().take().expect("piped stderr");
     let stdout_reader = thread::spawn(move || {
         let mut output = String::new();
         std::io::Read::read_to_string(&mut std::io::BufReader::new(stdout), &mut output)
@@ -120,8 +161,11 @@ fn run_git_output(
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    // `kill()` sends the group-wide (Unix) or direct kill and
+                    // then reaps the child; the pipes' write ends close with
+                    // it, so the reader threads see EOF and join promptly.
                     let _ = child.kill();
-                    let _ = child.wait();
+                    join_readers(stdout_reader, stderr_reader);
                     return Err(WorkspaceError::Failed(format!(
                         "git {} timed out",
                         args.join(" ")
@@ -131,7 +175,7 @@ fn run_git_output(
             }
             Err(e) => {
                 let _ = child.kill();
-                let _ = child.wait();
+                join_readers(stdout_reader, stderr_reader);
                 return Err(WorkspaceError::Failed(format!("git wait failed: {e}")));
             }
         }
@@ -492,6 +536,150 @@ pub fn validate_direct(
         ))),
         None => Err(WorkspaceError::Conflict("checkout is detached".to_string())),
     }
+}
+
+/// Remove the userinfo of every URL in `msg`.
+///
+/// A token can appear as the user name alone, as in `https://TOKEN@host/repo`.
+/// This function therefore redacts the complete userinfo, not only the part
+/// after the colon.
+pub fn sanitize_credentials(msg: &str) -> String {
+    let mut out = String::new();
+    let mut remaining = msg;
+    while let Some(proto_idx) = remaining.find("://") {
+        out.push_str(&remaining[..proto_idx + 3]);
+        let after_proto = &remaining[proto_idx + 3..];
+        // The authority ends at the path, the query, the fragment, or a space.
+        let authority_end = after_proto
+            .find(|c: char| c == '/' || c == '?' || c == '#' || c.is_whitespace())
+            .unwrap_or(after_proto.len());
+        let authority = &after_proto[..authority_end];
+        if let Some(at_idx) = authority.rfind('@') {
+            out.push_str("***@");
+            remaining = &after_proto[at_idx + 1..];
+            continue;
+        }
+        remaining = after_proto;
+    }
+    out.push_str(remaining);
+    out
+}
+
+/// Fetch the configured remotes, then fast-forward the checked-out branch to
+/// its upstream when that is safe.
+///
+/// Only ordinary, explicit Git commands run: `fetch --prune`, then, when
+/// safe, `merge --ff-only`. Refuses instead of ever resetting, stashing,
+/// rebasing, merging non-fast-forward, or switching branches:
+///
+/// - detached HEAD: refused before any network call;
+/// - fetch failure (network/auth): surfaced as `Failed`, credentials redacted;
+/// - no upstream configured for the current branch: `Conflict`;
+/// - local and remote histories diverged: `Conflict`;
+/// - the checkout is dirty and an update would touch it: `Conflict`.
+///
+/// Already up to date, or local already ahead of the upstream, is a
+/// successful no-op (`updated: false`).
+pub fn fetch_and_fast_forward(repo: &Path) -> Result<SyncOutcome, WorkspaceError> {
+    let branch = run_git_ok(repo, &["branch", "--show-current"])?
+        .trim()
+        .to_string();
+    if branch.is_empty() {
+        return Err(WorkspaceError::Conflict(
+            "checkout is in a detached HEAD state; refuse to update".to_string(),
+        ));
+    }
+
+    match run_git(repo, &["fetch", "--prune"], GIT_FETCH_TIMEOUT) {
+        Ok(_) => {}
+        Err(WorkspaceError::Failed(message)) => {
+            return Err(WorkspaceError::Failed(format!(
+                "Fetch failed: {}",
+                sanitize_credentials(&message)
+            )));
+        }
+        Err(error) => return Err(error),
+    }
+
+    let upstream = run_git(
+        repo,
+        &["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        GIT_TIMEOUT,
+    )
+    .map_err(|_| WorkspaceError::Conflict(format!("no upstream configured for {branch}")))?
+    .trim()
+    .to_string();
+    let remote = upstream
+        .split_once('/')
+        .map(|(remote, _)| remote)
+        .unwrap_or(&upstream)
+        .to_string();
+
+    let local_sha = run_git_ok(repo, &["rev-parse", "HEAD"])?.trim().to_string();
+    let remote_sha = run_git_ok(repo, &["rev-parse", &upstream])?
+        .trim()
+        .to_string();
+
+    if local_sha == remote_sha {
+        return Ok(SyncOutcome {
+            branch,
+            remote,
+            upstream,
+            previous_sha: local_sha.clone(),
+            head_sha: local_sha,
+            updated: false,
+        });
+    }
+
+    let merge_base = run_git_ok(repo, &["merge-base", "HEAD", &upstream])?
+        .trim()
+        .to_string();
+
+    if merge_base == remote_sha {
+        // The local branch already contains the upstream tip; nothing to pull.
+        return Ok(SyncOutcome {
+            branch,
+            remote,
+            upstream,
+            previous_sha: local_sha.clone(),
+            head_sha: local_sha,
+            updated: false,
+        });
+    }
+
+    if merge_base != local_sha {
+        return Err(WorkspaceError::Conflict(format!(
+            "local and remote histories for {branch} have diverged"
+        )));
+    }
+
+    // Fast-forward is possible: `local_sha` is an ancestor of `remote_sha`.
+    let dirty = !run_git_ok(repo, &["status", "--porcelain"])?
+        .trim()
+        .is_empty();
+    if dirty {
+        return Err(WorkspaceError::Conflict(
+            "checkout has uncommitted changes; refuse to update".to_string(),
+        ));
+    }
+
+    run_git_ok(repo, &["merge", "--ff-only", &upstream])?;
+
+    let head_sha = run_git_ok(repo, &["rev-parse", "HEAD"])?.trim().to_string();
+    if head_sha != remote_sha {
+        return Err(WorkspaceError::Failed(
+            "fast-forward did not reach the expected remote commit".to_string(),
+        ));
+    }
+
+    Ok(SyncOutcome {
+        branch,
+        remote,
+        upstream,
+        previous_sha: local_sha,
+        head_sha,
+        updated: true,
+    })
 }
 
 fn canonical_path(path: &Path) -> Result<PathBuf, WorkspaceError> {

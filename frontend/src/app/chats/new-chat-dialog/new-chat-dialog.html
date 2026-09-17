@@ -31,6 +31,22 @@
           @for (branch of options()?.branches ?? []; track branch.name) { <mat-option [value]="branch.name">{{ branch.name }}</mat-option> }
         </mat-select>
       </mat-form-field>
+      <div class="sync-row">
+        <button mat-stroked-button type="button" (click)="updateFromRemote()" [disabled]="syncing() || creating()">
+          @if (syncing()) {
+            <ng-container>
+              <mat-spinner diameter="18" />
+              Updating…
+            </ng-container>
+          } @else {
+            <ng-container>
+              <mat-icon>sync</mat-icon>
+              Update from remote
+            </ng-container>
+          }
+        </button>
+        @if (syncMessage()) { <span class="sync-status" role="status">{{ syncMessage() }}</span> }
+      </div>
       @if (options()?.dirty && selectedMode() === 'managed_worktree') {
         <p class="notice" role="note">This checkout has uncommitted changes. They are not included; the selected committed branch is the source.</p>
       }
@@ -42,7 +58,7 @@
 </mat-dialog-content>
 <mat-dialog-actions align="end">
   <button mat-button type="button" (click)="dialogRef.close()" [disabled]="creating()">Cancel</button>
-  <button mat-flat-button type="button" (click)="create()" [disabled]="loading() || creating() || !selectedAgent() || (options()?.is_git && !selectedBranch())">
+  <button mat-flat-button type="button" (click)="create()" [disabled]="loading() || creating() || syncing() || !selectedAgent() || (options()?.is_git && !selectedBranch())">
     @if (creating()) { Creating… } @else { Create chat }
   </button>
 </mat-dialog-actions>

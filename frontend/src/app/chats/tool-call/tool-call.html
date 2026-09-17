@@ -1,3 +1,20 @@
+@if (taskList(); as list) {
+  <hub-plan-view [entries]="list.entries" heading="Task list" />
+  @if (taskListDetailsJson() || cleanOutput() || richContent().length) {
+    <details class="task-list-details">
+      <summary>Additional details</summary>
+      @if (taskListDetailsJson()) {
+        <pre class="tool-output">{{ taskListDetailsJson() }}</pre>
+      }
+      @if (cleanOutput()) {
+        <pre class="tool-output">{{ cleanOutput() }}</pre>
+      }
+      @if (richContent().length) {
+        <hub-rich-content [blocks]="richContent()" />
+      }
+    </details>
+  }
+} @else {
 <div
   class="tool-activity"
   [class.status-running]="isRunning()"
@@ -142,3 +159,4 @@
     </div>
   }
 </div>
+}

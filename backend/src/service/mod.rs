@@ -21,7 +21,7 @@ pub use chats::{
 };
 pub use error::{ServiceError, ServiceResult};
 pub use view::{ChatHistoryPage, ChatView, ChatWorkspaceSummary};
-pub use workspaces::{WorkspaceBranch, WorkspaceOptions};
+pub use workspaces::{WorkspaceBranch, WorkspaceOptions, WorkspaceSyncResult};
 
 use crate::agents::{AgentCatalog, AgentManager, AgentSummary, HostRuntimeProbe};
 use crate::auth::AgentAuthService;

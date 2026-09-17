@@ -32,8 +32,20 @@ mat-form-field {
   gap: 12px;
   margin-top: -4px;
 }
-.sync-row button mat-icon {
-  margin-right: 4px;
+// Keep the Material icon-to-label rhythm: the sync icon uses the button's own
+// icon tokens, and the loading spinner mirrors that spacing so the label
+// stays on the same axis in both states.
+.sync-button {
+  display: inline-flex;
+  align-items: center;
+}
+.sync-button > mat-icon,
+.sync-button > mat-spinner {
+  flex-shrink: 0;
+}
+.sync-button > mat-spinner {
+  margin-right: var(--mat-outlined-button-icon-spacing, 8px);
+  margin-left: var(--mat-outlined-button-icon-offset, -8px);
 }
 .sync-status {
   font: var(--mat-sys-body-small);

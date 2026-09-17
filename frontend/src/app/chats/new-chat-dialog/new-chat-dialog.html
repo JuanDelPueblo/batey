@@ -39,12 +39,13 @@
     <button
       mat-stroked-button
       type="button"
+      class="sync-button"
       (click)="updateFromRemote()"
       [disabled]="syncing() || creating()"
     >
       @if (syncing()) {
       <ng-container>
-        <mat-spinner diameter="18" />
+        <mat-spinner diameter="18" matButtonIcon />
         Updating…
       </ng-container>
       } @else {

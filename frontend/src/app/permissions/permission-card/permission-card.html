@@ -92,11 +92,13 @@
       </mat-expansion-panel-header>
       <ng-template matExpansionPanelContent><pre>{{ review.action }}</pre></ng-template>
     </mat-expansion-panel>
-    <mat-expansion-panel class="raw-review">
+    @if (review.unmatchedDetails) {
+    <mat-expansion-panel class="raw-review review-additional">
       <mat-expansion-panel-header>
-        <mat-panel-title>Raw request</mat-panel-title>
+        <mat-panel-title>Additional details</mat-panel-title>
       </mat-expansion-panel-header>
-      <ng-template matExpansionPanelContent><pre>{{ permission().description }}</pre></ng-template>
+      <ng-template matExpansionPanelContent><pre>{{ review.unmatchedDetails }}</pre></ng-template>
     </mat-expansion-panel>
+    }
   </section>
 </ng-template>

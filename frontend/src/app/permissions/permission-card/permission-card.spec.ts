@@ -1,6 +1,6 @@
 import { ComponentFixture, TestBed } from '@angular/core/testing';
 import { describe, expect, it, beforeEach, vi } from 'vitest';
-import { PermissionCardComponent } from './permission-card';
+import { parseStructuredReview, PermissionCardComponent } from './permission-card';
 import { AppStateService } from '../../state/app-state.service';
 import type { TurnEntryPermission } from '../../core/api/types';
 
@@ -38,50 +38,46 @@ describe('PermissionCardComponent', () => {
       requestId: 'perm-1',
       method: 'session/request_permission',
       title: 'Approve Plan',
-      kind: 'switch_mode',
-      description: '### Proposed Plan\n\n1. Step one\n2. Step two',
+      description: '### Proposed Steps\n\n1. Run migrations\n2. Deploy services\n3. Verify health',
       options: [
-        { optionId: 'reject', name: 'Reject', kind: 'reject_once' },
         { optionId: 'approve', name: 'Approve Plan', kind: 'allow_once' },
+        { optionId: 'reject', name: 'Reject Plan', kind: 'deny' },
       ],
       responded: false,
     };
     fixture.componentRef.setInput('permission', planPerm);
     fixture.detectChanges();
 
-    expect(component.isPlanApproval()).toBe(true);
-    expect(component.icon()).toBe('assignment_turned_in');
+    expect(fixture.nativeElement.querySelector('.permission-title')?.textContent?.trim()).toBe('Approve Plan');
+    expect(fixture.nativeElement.querySelector('.permission-method')).toBeNull();
+    expect(fixture.nativeElement.querySelector('mat-icon')?.textContent?.trim()).toBe('assignment_turned_in');
 
-    const heading = fixture.nativeElement.querySelector('.permission-title');
-    expect(heading.textContent).toBe('Approve Plan');
-
-    const markdownHost = fixture.nativeElement.querySelector('hub-markdown');
-    expect(markdownHost).not.toBeNull();
-    expect(markdownHost.textContent).toContain('Proposed Plan');
+    const steps = fixture.nativeElement.querySelectorAll('.plan-content li');
+    expect(steps).toHaveLength(3);
+    expect(steps[0].textContent).toContain('Run migrations');
+    expect(steps[1].textContent).toContain('Deploy services');
+    expect(steps[2].textContent).toContain('Verify health');
 
     const buttons = fixture.nativeElement.querySelectorAll('button');
-    expect(buttons[0].textContent?.trim()).toBe('Reject');
-    expect(buttons[1].textContent?.trim()).toBe('Approve Plan');
-    expect(buttons[0].getAttribute('aria-label')).toBe('Reject');
-    expect(buttons[1].getAttribute('aria-label')).toBe('Approve Plan');
+    expect(buttons).toHaveLength(2);
+    expect(buttons[0].textContent?.trim()).toBe('Approve Plan');
+    expect(buttons[1].textContent?.trim()).toBe('Reject Plan');
 
-    buttons[1].click();
+    buttons[0].click();
     await fixture.whenStable();
     expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-1', optionId: 'approve' }]);
-    expect(fixture.nativeElement.querySelectorAll('button')).toHaveLength(0);
-    expect(fixture.nativeElement.querySelector('.decision')?.textContent).toContain('Approve Plan');
   });
 
-  it('renders permission choices exactly as provided by the agent without scope wording', async () => {
-    const genericPerm: TurnEntryPermission = {
+  it('renders standard permissions with shield icon, method, raw description, and raw option names', async () => {
+    fixture.componentRef.setInput('permission', {
       id: 2,
       type: 'permission_request',
       requestId: 'perm-2',
-      method: 'bash',
-      description: 'cargo build',
+      method: 'execute_command',
+      description: 'Run cargo clippy --fix',
       options: [
-        { optionId: 'yes', name: 'Yes', kind: 'allow_once' },
-        { optionId: 'no', name: 'No', kind: 'reject_once' },
+        { optionId: 'allow_once', name: 'Yes', kind: 'allow_once' },
+        { optionId: 'deny', name: 'No', kind: 'deny' },
         { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
         {
           optionId: 'allow-always',
@@ -90,16 +86,17 @@ describe('PermissionCardComponent', () => {
         },
       ],
       responded: false,
-    };
-
-    fixture.componentRef.setInput('permission', genericPerm);
+    });
     fixture.detectChanges();
 
-    expect(component.isPlanApproval()).toBe(false);
-    expect(component.icon()).toBe('shield_person');
-
-    const heading = fixture.nativeElement.querySelector('.permission-title');
-    expect(heading.textContent).toBe('Permission request');
+    expect(fixture.nativeElement.querySelector('.permission-title')?.textContent?.trim()).toBe(
+      'Permission request',
+    );
+    expect(fixture.nativeElement.querySelector('.permission-method')?.textContent?.trim()).toBe(
+      'execute_command',
+    );
+    expect(fixture.nativeElement.querySelector('mat-icon')?.textContent?.trim()).toBe('shield_person');
+    expect(fixture.nativeElement.querySelector('pre')?.textContent).toContain('Run cargo clippy --fix');
 
     const buttons = fixture.nativeElement.querySelectorAll('button');
     expect(buttons).toHaveLength(4);
@@ -114,7 +111,9 @@ describe('PermissionCardComponent', () => {
     expect(buttons[2].getAttribute('aria-label')).toBe('Allow once');
 
     expect(buttons[3].textContent?.trim()).toBe("Yes, and don't ask again for cargo clippy * commands");
-    expect(buttons[3].getAttribute('aria-label')).toBe("Yes, and don't ask again for cargo clippy * commands");
+    expect(buttons[3].getAttribute('aria-label')).toBe(
+      "Yes, and don't ask again for cargo clippy * commands",
+    );
 
     for (const button of buttons) {
       expect(button.textContent).not.toContain('One time');
@@ -141,12 +140,59 @@ describe('PermissionCardComponent', () => {
     });
     fixture.detectChanges();
 
+    const rootText = fixture.nativeElement.textContent ?? '';
     expect(fixture.nativeElement.querySelector('.review-facts')?.textContent).toContain('Medium');
-    expect(fixture.nativeElement.querySelector('.review-facts')?.textContent).toContain('User approval required');
+    expect(fixture.nativeElement.querySelector('.review-facts')?.textContent).toContain(
+      'User approval required',
+    );
     expect(fixture.nativeElement.querySelector('.review-action')).not.toBeNull();
-    expect(fixture.nativeElement.querySelector('.raw-review')).not.toBeNull();
-    expect(fixture.nativeElement.querySelector('.raw-review pre')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.review-action')?.textContent).toContain(
+      'nix run .#verify -- --a-command-that-is-deliberately-very-long',
+    );
+
+    // Each review field is rendered exactly once across the whole card
+    expect((rootText.match(/Status/g) ?? []).length).toBe(1);
+    expect((rootText.match(/Risk/g) ?? []).length).toBe(1);
+    expect((rootText.match(/Authorization/g) ?? []).length).toBe(1);
+    expect((rootText.match(/Rationale/g) ?? []).length).toBe(1);
+
+    // No raw review fallback or extra details panel rendered when all content is consumed
+    expect(fixture.nativeElement.querySelector('.raw-review')).toBeNull();
+    expect(fixture.nativeElement.querySelector('.review-additional')).toBeNull();
+
+    // The raw Status: ... Action: ... block is not rendered as raw pre text
+    expect(fixture.nativeElement.querySelector('pre')).toBeNull();
     expect(fixture.nativeElement.querySelectorAll('button')).toHaveLength(1);
+  });
+
+  it('retains unmatched extra text as optional additional details without repeating parsed fields', () => {
+    fixture.componentRef.setInput('permission', {
+      id: 55,
+      type: 'permission_request',
+      requestId: 'review-extra',
+      method: 'execute_command',
+      title: 'Review request',
+      description: `Guardian Review\nStatus: Pending\nAction: nix run .#verify\nRisk: Medium\nAuthorization: User approval required\nRationale: Verify the requested change.\n\nAdditional notes:\nRun within nix develop shell.`,
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+      responded: false,
+    });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.review-facts')?.textContent).toContain('Medium');
+    expect(fixture.nativeElement.querySelector('.review-action')).not.toBeNull();
+
+    const additionalPanel = fixture.nativeElement.querySelector('.review-additional');
+    expect(additionalPanel).not.toBeNull();
+    expect(additionalPanel.textContent).toContain('Additional details');
+
+    // When expanded, Additional details contains ONLY the unmatched text, not repeated parsed fields
+    additionalPanel.querySelector('mat-expansion-panel-header')?.click();
+    fixture.detectChanges();
+
+    const additionalPre = additionalPanel.querySelector('pre');
+    expect(additionalPre?.textContent).toContain('Run within nix develop shell.');
+    expect(additionalPre?.textContent).not.toContain('Status: Pending');
+    expect(additionalPre?.textContent).not.toContain('Rationale: Verify the requested change.');
   });
 
   it('keeps non-review permission text as a faithful raw fallback', () => {
@@ -162,16 +208,19 @@ describe('PermissionCardComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.review')).toBeNull();
-    expect(fixture.nativeElement.querySelector('pre')?.textContent).toContain('Apply this ordinary ACP edit request exactly as supplied.');
+    expect(fixture.nativeElement.querySelector('pre')?.textContent).toContain(
+      'Apply this ordinary ACP edit request exactly as supplied.',
+    );
   });
 
-  it('collapses resolved structured reviews into a concise historical record', () => {
+  it('collapses resolved structured reviews into a concise historical record without repeating content', () => {
     fixture.componentRef.setInput('permission', {
       id: 7,
       type: 'permission_request',
       requestId: 'review-2',
       method: 'execute_command',
-      description: 'Status: Approved\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.',
+      description:
+        'Status: Approved\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.',
       options: [],
       responded: true,
       decision: 'Allowed once',
@@ -179,16 +228,29 @@ describe('PermissionCardComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.decision')?.textContent).toContain('Allowed once');
-    expect(fixture.nativeElement.querySelector('.review-details')).not.toBeNull();
+    const detailsPanel = fixture.nativeElement.querySelector('.review-details');
+    expect(detailsPanel).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.review-details pre')).toBeNull();
     expect(fixture.nativeElement.querySelectorAll('button')).toHaveLength(0);
+
+    // Expanding review details reveals the structured details without any duplicate raw review
+    detailsPanel.querySelector('mat-expansion-panel-header')?.click();
+    fixture.detectChanges();
+
+    expect(detailsPanel.querySelector('.review-facts')?.textContent).toContain('Approved');
+    expect(detailsPanel.querySelector('.review-facts')?.textContent).toContain('Run focused tests.');
+    expect(detailsPanel.querySelector('.raw-review')).toBeNull();
+    expect(detailsPanel.querySelector('.review-additional')).toBeNull();
   });
 
   it('locks every choice until the response succeeds', async () => {
     let resolveResponse!: () => void;
-    respondPermission.mockImplementationOnce(() => new Promise<void>((resolve) => {
-      resolveResponse = resolve;
-    }));
+    respondPermission.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveResponse = resolve;
+        }),
+    );
     fixture.componentRef.setInput('permission', {
       id: 3,
       type: 'permission_request',
@@ -232,7 +294,9 @@ describe('PermissionCardComponent', () => {
     fixture.nativeElement.querySelector('button').click();
     await fixture.whenStable();
     fixture.detectChanges();
-    expect(fixture.nativeElement.querySelector('[role="alert"]').textContent).toContain('Permission service unavailable');
+    expect(fixture.nativeElement.querySelector('[role="alert"]').textContent).toContain(
+      'Permission service unavailable',
+    );
     expect(fixture.nativeElement.querySelector('button').disabled).toBe(false);
 
     fixture.nativeElement.querySelector('button').click();
@@ -240,5 +304,103 @@ describe('PermissionCardComponent', () => {
     fixture.detectChanges();
     expect(respondPermission).toHaveBeenCalledTimes(2);
     expect(fixture.nativeElement.querySelectorAll('button')).toHaveLength(0);
+  });
+});
+
+describe('parseStructuredReview', () => {
+  it('parses the exact five-field Guardian review without unmatched details', () => {
+    const raw = `Guardian Review\nStatus: Pending\nAction: nix run .#verify -- --a-command-that-is-deliberately-very-long\nRisk: Medium\nAuthorization: User approval required\nRationale: Verify the requested change.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result).toEqual({
+      title: 'Guardian Review',
+      status: 'Pending',
+      action: 'nix run .#verify -- --a-command-that-is-deliberately-very-long',
+      risk: 'Medium',
+      authorization: 'User approval required',
+      rationale: 'Verify the requested change.',
+    });
+    expect(result?.unmatchedDetails).toBeUndefined();
+  });
+
+  it('parses bold markdown forms with colons inside asterisks (**Status:**) and cleans headers with trailing colon', () => {
+    const raw = `**Guardian Review**:\n**Status:** Pending\n**Action:** cargo test\n**Risk:** Low\n**Authorization:** Allowed once\n**Rationale:** Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result).toEqual({
+      title: 'Guardian Review',
+      status: 'Pending',
+      action: 'cargo test',
+      risk: 'Low',
+      authorization: 'Allowed once',
+      rationale: 'Run focused tests.',
+    });
+    expect(result?.unmatchedDetails).toBeUndefined();
+  });
+
+  it('parses bold markdown forms with colons outside asterisks (**Status**:) and cleans headers with internal colon', () => {
+    const raw = `**Guardian Review:**\n**Status**: Pending\n**Action**: cargo test\n**Risk**: Low\n**Authorization**: Allowed once\n**Rationale**: Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result).toEqual({
+      title: 'Guardian Review',
+      status: 'Pending',
+      action: 'cargo test',
+      risk: 'Low',
+      authorization: 'Allowed once',
+      rationale: 'Run focused tests.',
+    });
+    expect(result?.unmatchedDetails).toBeUndefined();
+  });
+
+  it('cleans header titles with markdown headings and delimiters', () => {
+    const raw = `### **Guardian Review**:\nStatus: Pending\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result?.title).toBe('Guardian Review');
+  });
+
+  it('parses 5 fields alone without header or unmatched details', () => {
+    const raw = `Status: Pending\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result).toEqual({
+      status: 'Pending',
+      action: 'cargo test',
+      risk: 'Low',
+      authorization: 'Allowed once',
+      rationale: 'Run focused tests.',
+    });
+    expect(result?.unmatchedDetails).toBeUndefined();
+    expect(result?.title).toBeUndefined();
+  });
+
+  it('preserves unmatched pre-text at the top', () => {
+    const raw = `Important note: do not run in production!\nStatus: Pending\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result?.status).toBe('Pending');
+    expect(result?.unmatchedDetails).toBe('Important note: do not run in production!');
+  });
+
+  it('preserves unmatched trailing notes', () => {
+    const raw = `Status: Pending\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.\n\nAdditional notes:\nEnsure database is running.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result?.status).toBe('Pending');
+    expect(result?.unmatchedDetails).toBe('Additional notes:\nEnsure database is running.');
+  });
+
+  it('preserves multi-line action without treating it as unmatched text', () => {
+    const raw = `Status: Pending\nAction: git checkout main\ngit pull\nRisk: Low\nAuthorization: Allowed once\nRationale: Update repository.`;
+    const result = parseStructuredReview(raw);
+
+    expect(result?.action).toBe('git checkout main\ngit pull');
+    expect(result?.unmatchedDetails).toBeUndefined();
+  });
+
+  it('returns null for unstructured permission descriptions', () => {
+    expect(parseStructuredReview('Apply this ordinary ACP edit request exactly as supplied.')).toBeNull();
+    expect(parseStructuredReview('Status: Pending\nAction: cargo test')).toBeNull();
   });
 });

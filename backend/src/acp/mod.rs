@@ -1904,11 +1904,13 @@ async fn merge_update_into_existing(
     // Reuse the full provider-neutral parse with the existing command as a
     // fallback title so nested shapes (for example `metadata.exit`) share one
     // extraction path. Never creates a new task; the caller already verified
-    // existence.
+    // existence. The stored command is already known-good, so it carries the
+    // established terminal marker past title prose validation.
     let existing_command = task.task_command().await;
     if existing_command.trim().is_empty() {
         return Ok(());
     }
+    let fallback_title = format!("Terminal: {}", existing_command.trim());
     let kind_str = tcu
         .fields
         .kind
@@ -1916,7 +1918,7 @@ async fn merge_update_into_existing(
         .unwrap_or_else(|| "execute".to_string());
     let Some(update) = crate::tasks::observed::parse_observed_update(
         &kind_str,
-        Some(&existing_command),
+        Some(&fallback_title),
         tcu.fields.raw_input.as_ref(),
         tcu.fields.raw_output.as_ref(),
         content_text,
@@ -3072,6 +3074,51 @@ mod tests {
             .await;
         assert_eq!(details.exit_code, Some(0));
         assert!(details.output.contains("hello-from-smoke"));
+        assert!(matches!(details.state, crate::tasks::TaskState::Completed));
+    }
+
+    #[tokio::test]
+    async fn test_merge_update_keeps_prose_shaped_stored_command() {
+        use super::agent_client_protocol_schema::{ToolCall, ToolCallUpdateFields};
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        // Structured raw command values are accepted verbatim, even when
+        // prose-shaped; later command-less updates must still merge.
+        let tc = ToolCall::new("prose-tool-1", "Run thing")
+            .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+            .raw_input(serde_json::json!({"command": "Run the thing"}));
+        let update = SessionUpdate::ToolCall(tc);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        assert!(tracker
+            .get_observed_task("s1", "prose-tool-1")
+            .await
+            .is_some());
+        let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
+            "prose-tool-1",
+            ToolCallUpdateFields::new()
+                .status(super::agent_client_protocol_schema::ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({"output": "done", "exit_code": 0})),
+        );
+        let update = SessionUpdate::ToolCallUpdate(tcu);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        let details = tracker
+            .get_observed_task("s1", "prose-tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_eq!(details.exit_code, Some(0));
+        assert!(details.output.contains("done"));
         assert!(matches!(details.state, crate::tasks::TaskState::Completed));
     }
 

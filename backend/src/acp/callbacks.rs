@@ -1040,9 +1040,11 @@ async fn supervise_terminal(
     event_log: Arc<crate::events::EventLog>,
     task_tracker: Arc<crate::tasks::TerminalTaskTracker>,
 ) {
+    let mut kill_requested = false;
     let status = loop {
         tokio::select! {
-            _ = &mut kill_rx => {
+            _ = &mut kill_rx, if !kill_requested => {
+                kill_requested = true;
                 let _ = child.start_kill();
             }
             _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}

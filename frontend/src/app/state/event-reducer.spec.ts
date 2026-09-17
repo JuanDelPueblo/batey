@@ -148,6 +148,63 @@ describe('EventReducer', () => {
     expect(reducer.items().some((item) => (item as unknown as { type: string }).type === 'state_change')).toBe(false);
   });
 
+  it('normalizes an OpenCode-style task-list tool payload and retains item metadata as details', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'tool_call', {
+      id: 'todos', title: 'Update task list', kind: 'todo', status: 'in_progress',
+      content: [{ content: 'Inspect the reducer', status: 'in_progress', priority: 'high' }],
+    }));
+
+    const entry = (reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries[0];
+    expect(entry).toMatchObject({
+      type: 'tool_call',
+      taskList: { entries: [{ content: 'Inspect the reducer', status: 'in_progress' }], details: [{ priority: 'high' }] },
+    });
+    expect(entry['content']).toBeUndefined();
+  });
+
+  it('renders equivalent structured and JSON task-list data once and replaces its current state', () => {
+    const reducer = new EventReducer();
+    const pending = [{ content: 'Run tests', status: 'pending' }];
+    const completed = [{ content: 'Run tests', status: 'completed' }];
+    reducer.ingest(event(1, 'tool_call', { id: 'todos', title: 'Tasks', kind: 'todo', status: 'in_progress', content: pending }));
+    reducer.ingest(event(2, 'tool_call_update', {
+      id: 'todos', status: 'completed', content: completed, output: JSON.stringify(completed),
+    }));
+
+    const entries = (reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ taskList: { entries: completed }, output: null });
+    expect(entries[0]['content']).toBeUndefined();
+  });
+
+  it('normalizes equivalent JSON inside nested ACP content wrappers without retaining duplicate content', () => {
+    const reducer = new EventReducer();
+    const todos = [{ content: 'Run tests', status: 'completed' }];
+    const json = JSON.stringify(todos);
+    reducer.ingest(event(1, 'tool_call_update', {
+      id: 'todos', title: 'Tasks', kind: 'todo', status: 'completed', output: json,
+      content: [{ type: 'content', content: { type: 'text', text: json } }],
+    }));
+
+    const entries = (reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ taskList: { entries: todos }, output: null });
+    expect(entries[0]['content']).toBeUndefined();
+  });
+
+  it('keeps unknown tool payloads on the existing fallback path', () => {
+    const reducer = new EventReducer();
+    reducer.ingest(event(1, 'tool_call', { id: 'unknown', title: 'Inspect metadata', status: 'in_progress' }));
+    reducer.ingest(event(2, 'tool_call_update', {
+      id: 'unknown', status: 'completed', output: JSON.stringify([{ label: 'not a task' }]),
+    }));
+
+    const entry = (reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries[0];
+    expect(entry['taskList']).toBeUndefined();
+    expect(entry['output']).toBe(JSON.stringify([{ label: 'not a task' }]));
+  });
+
   it('keeps process state events out of an empty transcript', () => {
     const reducer = new EventReducer();
     expect(reducer.ingest(event(1, 'state_change', { process: 'STARTING', turn: 'IDLE' }))).toBeNull();

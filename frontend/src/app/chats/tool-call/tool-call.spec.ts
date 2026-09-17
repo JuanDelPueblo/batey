@@ -15,6 +15,32 @@ describe('ToolCallComponent', () => {
     component = fixture.componentInstance;
   });
 
+  it('presents recognized task lists through the shared plan view without raw JSON', () => {
+    const tool: TurnEntryTool = {
+      id: 0,
+      type: 'tool_call',
+      toolCallId: 'todos',
+      title: 'Update task list',
+      kind: 'todo',
+      status: 'completed',
+      output: null,
+      taskList: {
+        entries: [
+          { content: 'Pending item', status: 'pending' },
+          { content: 'Current item', status: 'in_progress' },
+          { content: 'Finished item', status: 'completed' },
+        ],
+      },
+    };
+    fixture.componentRef.setInput('tool', tool);
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('hub-plan-view')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.plan-title')?.textContent).toContain('Task list');
+    expect(fixture.nativeElement.querySelector('.tool-activity')).toBeNull();
+    expect(fixture.nativeElement.textContent).not.toContain('"status"');
+  });
+
   it('displays read icon for read kind, concise title, secondary summary, and strips fence', () => {
     const tool: TurnEntryTool = {
       id: 1,

@@ -27,6 +27,7 @@ export function scenarioFor(text) {
   if (lower.includes('usage')) return 'usage';
   if (lower.includes('message-id')) return 'message-id';
   if (lower.includes('streaming-markdown') || lower.includes('markdown') || lower.includes('stream')) return 'streaming-markdown';
+  if (lower.includes('todo')) return 'todos';
   if (lower.includes('plan')) return 'plan';
   if (lower.includes('rich')) return 'rich';
   if (lower.includes('terminal') || lower.includes('task')) return 'terminal';
@@ -291,6 +292,29 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
       type: 'message_chunk',
       text: 'The frontend test suite is running in the background. The task remains available from the chat header.',
     });
+    emit({ type: 'turn_complete', stop_reason: 'end_turn' });
+    return;
+  }
+
+  if (scenario === 'todos') {
+    const toolId = randomUUID();
+    const todos = [
+      'Inspect the current state', 'Identify the rendering boundary', 'Normalize structured task data',
+      'Reuse the existing checklist', 'Avoid duplicate JSON output', 'Handle incremental updates',
+      'Add fake-backend coverage', 'Run focused tests', 'Report the result',
+    ].map((content, index) => ({ content, status: index === 0 ? 'in_progress' : 'pending', priority: index < 3 ? 'high' : 'normal' }));
+    emit({ type: 'tool_call', id: toolId, title: 'Update task list', kind: 'todo', status: 'in_progress', content: todos.map((todo) => ({ ...todo })) });
+    await pause(150);
+    todos[0].status = 'completed';
+    todos[1].status = 'in_progress';
+    const inProgressTodos = todos.map((todo) => ({ ...todo }));
+    emit({ type: 'tool_call_update', id: toolId, title: 'Update task list', kind: 'todo', status: 'in_progress', output: JSON.stringify(inProgressTodos), content: inProgressTodos });
+    await pause(150);
+    todos[1].status = 'completed';
+    todos[2].status = 'in_progress';
+    const completedTodos = todos.map((todo) => ({ ...todo }));
+    emit({ type: 'tool_call_update', id: toolId, title: 'Update task list', kind: 'todo', status: 'completed', output: JSON.stringify(completedTodos), content: completedTodos });
+    await stream('message_chunk', 'I updated the task list as the work progressed.');
     emit({ type: 'turn_complete', stop_reason: 'end_turn' });
     return;
   }

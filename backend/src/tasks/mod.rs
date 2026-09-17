@@ -301,15 +301,18 @@ impl ManagedTask {
         }
     }
 
-    /// Records an observational state transition. Terminal states are sticky:
-    /// a late running update never reopens a completed task. The completion
+    /// Records an observational state transition. Terminal states are fully
+    /// sticky: once a task is Completed, Failed, or Stopped, only a repeat of
+    /// that same outcome is accepted (for example a later exit code arriving
+    /// for an already-failed task); any different state, terminal or not, is
+    /// rejected. The check and the transition happen under one write-lock
+    /// critical section, so whichever terminal update reaches this method
+    /// first is authoritative even when a turn-end reconciliation pass races
+    /// a concurrent ToolCallUpdate for the same task. The completion
     /// timestamp is set once on the first terminal transition.
     pub async fn record_observed_state(&self, state: TaskState, exit_code: Option<i32>) -> bool {
         if self.managed {
             return false;
-        }
-        if let Some(code) = exit_code {
-            *self.exit_code.write().await = Some(code);
         }
         let mut state_guard = self.state.write().await;
         let current = *state_guard;
@@ -317,8 +320,11 @@ impl ManagedTask {
             current,
             TaskState::Completed | TaskState::Failed | TaskState::Stopped
         );
-        if is_terminal && state == TaskState::Running {
+        if is_terminal && state != current {
             return false;
+        }
+        if let Some(code) = exit_code {
+            *self.exit_code.write().await = Some(code);
         }
         if current == state && exit_code.is_none() {
             return false;
@@ -1202,6 +1208,68 @@ mod tests {
             TaskState::Failed
         );
         assert_eq!(*managed.state.read().await, TaskState::Running);
+    }
+
+    #[tokio::test]
+    async fn test_record_observed_state_terminal_transitions_are_fully_sticky() {
+        // Reconciliation reads the task's state, then separately calls
+        // record_observed_state; a concurrent ToolCallUpdate can land a real
+        // Failed transition in between. The terminal-state guard inside
+        // record_observed_state (not the caller's pre-check) must be what
+        // keeps the first terminal outcome authoritative, so it stays
+        // correct even when the two calls race.
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        let (task, _) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-race",
+                Some("cargo build"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+
+        // The concurrent explicit failure lands first...
+        assert!(task.record_observed_state(TaskState::Failed, Some(1)).await);
+        // ...then a reconciliation pass (or any other Completed update)
+        // racing for the same task must not overwrite it.
+        assert!(!task.record_observed_state(TaskState::Completed, None).await);
+
+        let details = task.details().await;
+        assert_eq!(details.state, TaskState::Failed);
+        assert_eq!(details.exit_code, Some(1));
+
+        // The reverse order also holds: once Completed wins, a later Failed
+        // update must not flip it either.
+        let (other, _) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-race-2",
+                Some("cargo build"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        assert!(
+            other
+                .record_observed_state(TaskState::Completed, Some(0))
+                .await
+        );
+        assert!(
+            !other
+                .record_observed_state(TaskState::Failed, Some(1))
+                .await
+        );
+        let other_details = other.details().await;
+        assert_eq!(other_details.state, TaskState::Completed);
+        assert_eq!(other_details.exit_code, Some(0));
     }
 
     #[tokio::test]

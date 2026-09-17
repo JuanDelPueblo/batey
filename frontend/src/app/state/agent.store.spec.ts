@@ -312,6 +312,53 @@ describe('AgentStore', () => {
     expect(store.isAgentBusy('fail-agent')).toBe(false);
   });
 
+  it('keeps operation id, agent id, and registry id namespaces isolated', () => {
+    const agentOperation = {
+      id: 'shared',
+      agent_id: 'agent-key',
+      registry_id: 'registry-a',
+      state: 'running',
+    } as AgentOperation;
+    const registryOperation = {
+      id: 'op-registry',
+      agent_id: 'agent-b',
+      registry_id: 'agent-key',
+      state: 'running',
+    } as AgentOperation;
+    store.recordOperation(agentOperation);
+    store.recordOperation(registryOperation);
+
+    expect(store.operationForAgent('agent-key')?.id).toBe('shared');
+    expect(store.operationForRegistry('agent-key')?.id).toBe('op-registry');
+    store.clearOperation(agentOperation);
+    expect(store.operationForRegistry('agent-key')?.id).toBe('op-registry');
+  });
+
+  it('does not clear a newer operation stored under the same alias', () => {
+    const older = { id: 'op-old', agent_id: 'same-agent', registry_id: 'old-registry' } as AgentOperation;
+    const newer = { id: 'op-new', agent_id: 'same-agent', registry_id: 'new-registry' } as AgentOperation;
+    store.recordOperation(older);
+    store.recordOperation(newer);
+    store.clearOperation(older);
+    expect(store.operationForAgent('same-agent')?.id).toBe('op-new');
+  });
+
+  it('clears a tracked operation when polling fails', async () => {
+    const active = {
+      id: 'op-network-error',
+      agent_id: 'network-agent',
+      registry_id: 'network-agent',
+      kind: 'install',
+      state: 'running',
+    } as AgentOperation;
+    api.installRegistryAgent.mockResolvedValueOnce(active);
+    api.getAgentOperation.mockRejectedValueOnce(new Error('poll unavailable'));
+
+    await expect(store.installRegistryAgent({ registry_id: 'network-agent' }))
+      .rejects.toThrow('poll unavailable');
+    expect(store.isAgentBusy('network-agent')).toBe(false);
+  });
+
   it('validates and persists custom definitions', async () => {
     const input = { id: 'a', command: 'c', args: [], env: {} };
     await store.validateCustomAgent(input);

@@ -51,15 +51,11 @@ impl HubService {
         self: &Arc<Self>,
         request: InstallRequest,
     ) -> ServiceResult<AgentOperationView> {
-        let agent_id = self.agent_manager.validate_install(&request)?;
+        let (agent_id, registry_id) = self.agent_manager.validate_install(&request)?;
         let tracker = self
             .agent_manager
             .operations()
-            .register(
-                agent_id.clone(),
-                request.registry_id.clone(),
-                AgentOperationKind::Install,
-            )
+            .register(agent_id.clone(), registry_id, AgentOperationKind::Install)
             .map_err(ServiceError::Conflict)?;
 
         let initial_view = tracker.view();
@@ -73,7 +69,7 @@ impl HubService {
                 Ok(summary) => {
                     hub.agent_auth.invalidate_agent(&summary.id);
                     hub.notify_metadata_changed();
-                    tracker.succeed(None);
+                    tracker.succeed(None, None);
                 }
                 Err(error) => {
                     tracker.fail(error.to_string());
@@ -128,7 +124,10 @@ impl HubService {
                             .await;
                         hub.notify_metadata_changed();
                     }
-                    tracker.succeed(outcome.updated.then_some(outcome.to_version));
+                    tracker.succeed(
+                        Some(outcome.updated),
+                        outcome.updated.then_some(outcome.to_version),
+                    );
                 }
                 Err(error) => {
                     tracker.fail(error.to_string());

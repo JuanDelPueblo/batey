@@ -221,8 +221,8 @@ async fn agent_operation_install_and_update_lifecycle() {
 
     // 1. POST /api/agents/registry/install
     let install_req = json!({
-        "registry_id": "fixture-acp",
-        "agent_id": "fixture-acp",
+        "registry_id": "  fixture-acp  ",
+        "agent_id": "fixture-custom",
     });
     let response = app
         .clone()
@@ -242,7 +242,8 @@ async fn agent_operation_install_and_update_lifecycle() {
     let op_view: Value =
         serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
     assert_eq!(op_view["kind"], "install");
-    assert_eq!(op_view["agent_id"], "fixture-acp");
+    assert_eq!(op_view["agent_id"], "fixture-custom");
+    assert_eq!(op_view["registry_id"], "fixture-acp");
     let op_id = op_view["id"].as_str().unwrap().to_string();
 
     // 2. Second install while running returns 409 Conflict
@@ -300,7 +301,7 @@ async fn agent_operation_install_and_update_lifecycle() {
         .any(|item| item["id"] == op_id));
 
     // 5. Poll until completed
-    let mut completed = false;
+    let mut final_operation = None;
     for _ in 0..50 {
         let response = app
             .clone()
@@ -317,12 +318,18 @@ async fn agent_operation_install_and_update_lifecycle() {
             serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
                 .unwrap();
         if current["state"] == "succeeded" || current["state"] == "failed" {
-            completed = true;
+            final_operation = Some(current);
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    assert!(completed);
+    let final_operation =
+        final_operation.expect("install operation did not reach a terminal state");
+    assert_eq!(
+        final_operation["state"], "succeeded",
+        "install operation failed: {}",
+        final_operation["error"]
+    );
 
     // An update against the current registry version still succeeds, but it
     // must not report a version change to the browser.
@@ -331,7 +338,7 @@ async fn agent_operation_install_and_update_lifecycle() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/api/agents/fixture-acp/update")
+                .uri("/api/agents/fixture-custom/update")
                 .header("host", "127.0.0.1:8765")
                 .body(Body::empty())
                 .unwrap(),
@@ -366,6 +373,7 @@ async fn agent_operation_install_and_update_lifecycle() {
     }
     let update_result = update_result.expect("no-op update did not finish");
     assert_eq!(update_result["state"], "succeeded");
+    assert_eq!(update_result["updated"], false);
     assert!(update_result["to_version"].is_null());
 
     sessions.shutdown_all().await;

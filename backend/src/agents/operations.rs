@@ -61,6 +61,8 @@ pub struct AgentOperationView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub completed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub to_version: Option<String>,
 }
 
@@ -72,6 +74,7 @@ struct OperationStatus {
     total_bytes: Option<u64>,
     error: Option<String>,
     completed_at: Option<DateTime<Utc>>,
+    updated: Option<bool>,
     to_version: Option<String>,
 }
 
@@ -105,6 +108,7 @@ impl AgentOperation {
                 total_bytes: None,
                 error: None,
                 completed_at: None,
+                updated: None,
                 to_version: None,
             }),
         }
@@ -124,6 +128,7 @@ impl AgentOperation {
             error: status.error.clone(),
             started_at: self.started_at,
             completed_at: status.completed_at,
+            updated: status.updated,
             to_version: status.to_version.clone(),
         }
     }
@@ -146,13 +151,14 @@ impl AgentOperation {
         status.total_bytes = total;
     }
 
-    pub fn succeed(&self, to_version: Option<String>) {
+    pub fn succeed(&self, updated: Option<bool>, to_version: Option<String>) {
         let mut status = self.status.lock().expect("operation status poisoned");
         if status.state != AgentOperationState::Running {
             return;
         }
         status.state = AgentOperationState::Succeeded;
         status.stage = AgentOperationStage::Completed;
+        status.updated = updated;
         status.to_version = to_version;
         status.completed_at = Some(Utc::now());
     }
@@ -347,10 +353,11 @@ mod tests {
         assert_eq!(op.view().stage, AgentOperationStage::Finalizing);
 
         // Complete successfully
-        op.succeed(Some("1.0.0".into()));
+        op.succeed(Some(true), Some("1.0.0".into()));
         let succeeded = op.view();
         assert_eq!(succeeded.state, AgentOperationState::Succeeded);
         assert_eq!(succeeded.stage, AgentOperationStage::Completed);
+        assert_eq!(succeeded.updated, Some(true));
         assert_eq!(succeeded.to_version.as_deref(), Some("1.0.0"));
         assert!(succeeded.completed_at.is_some());
 
@@ -425,7 +432,7 @@ mod tests {
         assert!(collision.is_err());
 
         // Completing op_a allows another operation for agent-a
-        op_a.succeed(None);
+        op_a.succeed(None, None);
         let second_a =
             operations.register("agent-a".into(), "reg-a".into(), AgentOperationKind::Update);
         assert!(second_a.is_ok());
@@ -443,7 +450,7 @@ mod tests {
                     AgentOperationKind::Install,
                 )
                 .unwrap();
-            op.succeed(None);
+            op.succeed(None, None);
         }
 
         let list = operations.list();

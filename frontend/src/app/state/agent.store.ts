@@ -56,6 +56,8 @@ export class AgentStore {
   readonly protocolLoading = signal<ReadonlySet<string>>(new Set());
   readonly terminalFlowsByAgent = signal<Record<string, AgentAuthFlow>>({});
   readonly operationsByAgent = signal<Record<string, AgentOperation>>({});
+  private readonly operationsByRegistry = signal<Record<string, AgentOperation>>({});
+  private readonly operationsById = signal<Record<string, AgentOperation>>({});
 
   private readonly operationPolls = new Map<string, Promise<AgentOperation>>();
 
@@ -89,6 +91,8 @@ export class AgentStore {
 
     const active = operations.filter((operation) => operation.state === 'running');
     this.operationsByAgent.set({});
+    this.operationsByRegistry.set({});
+    this.operationsById.set({});
     for (const operation of active) this.recordOperation(operation);
     for (const operation of active) {
       void this.waitForOperation(operation.id).catch(() => undefined);
@@ -115,29 +119,29 @@ export class AgentStore {
     return this.operationsByAgent()[key] ?? null;
   }
 
+  operationForRegistry(key: string): AgentOperation | null {
+    return this.operationsByRegistry()[key] ?? null;
+  }
+
   isAgentBusy(key: string): boolean {
     const op = this.operationForAgent(key);
     return op !== null && op.state === "running";
   }
 
   recordOperation(op: AgentOperation): void {
-    this.operationsByAgent.update((current) => {
-      const next = { ...current };
-      if (op.id) next[op.id] = op;
-      if (op.agent_id) next[op.agent_id] = op;
-      if (op.registry_id) next[op.registry_id] = op;
-      return next;
-    });
+    if (op.id) this.operationsById.update((current) => ({ ...current, [op.id]: op }));
+    if (op.agent_id) {
+      this.operationsByAgent.update((current) => ({ ...current, [op.agent_id]: op }));
+    }
+    if (op.registry_id) {
+      this.operationsByRegistry.update((current) => ({ ...current, [op.registry_id]: op }));
+    }
   }
 
   clearOperation(op: AgentOperation): void {
-    this.operationsByAgent.update((current) => {
-      const next = { ...current };
-      if (op.id) delete next[op.id];
-      if (op.agent_id) delete next[op.agent_id];
-      if (op.registry_id) delete next[op.registry_id];
-      return next;
-    });
+    if (op.id) this.clearOperationIndex(this.operationsById, op.id, op.id);
+    if (op.agent_id) this.clearOperationIndex(this.operationsByAgent, op.agent_id, op.id);
+    if (op.registry_id) this.clearOperationIndex(this.operationsByRegistry, op.registry_id, op.id);
   }
 
   async waitForOperation(id: string): Promise<AgentOperation> {
@@ -149,8 +153,23 @@ export class AgentStore {
     try {
       return await polling;
     } finally {
+      const tracked = this.operationsById()[id];
+      if (tracked) this.clearOperation(tracked);
       if (this.operationPolls.get(id) === polling) this.operationPolls.delete(id);
     }
+  }
+
+  private clearOperationIndex(
+    index: WritableSignal<Record<string, AgentOperation>>,
+    key: string,
+    operationId: string,
+  ): void {
+    index.update((current) => {
+      if (current[key]?.id !== operationId) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }
 
   private async pollOperation(id: string): Promise<AgentOperation> {

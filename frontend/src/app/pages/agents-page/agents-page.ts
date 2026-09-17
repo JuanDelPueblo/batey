@@ -398,7 +398,7 @@ export class AgentsPageComponent implements OnInit, OnDestroy {
     try {
       const outcome = await this.state.updateAgent(agent.id);
       this.notice.set(
-        outcome?.to_version
+        outcome.updated && outcome.to_version
           ? `Updated ${agent.display_name} to v${outcome.to_version}.`
           : `${agent.display_name} is already at the newest version.`,
       );

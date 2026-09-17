@@ -645,8 +645,30 @@ export class FakeState {
 
   agent(id) { return AGENTS.find((agent) => agent.id === id); }
 
+  _runningAgentOperation(id) {
+    return Array.from(this.agentOperations.values())
+      .find((op) => op.agent_id === id && op.state === 'running');
+  }
+
+  _assertNoRunningAgentOperation(id) {
+    if (this._runningAgentOperation(id)) {
+      throw Object.assign(
+        new Error(`An operation is already in progress for agent '${id}'`),
+        { status: 409 },
+      );
+    }
+  }
+
+  _failAgentOperation(op, message) {
+    op.state = 'failed';
+    op.stage = 'failed';
+    op.error = message;
+    op.completed_at = new Date().toISOString();
+  }
+
   createCustomAgent(input) {
     if (this.agent(input.id)) throw Object.assign(new Error('An agent already uses that id'), { status: 409 });
+    this._assertNoRunningAgentOperation(input.id);
     const agent = customSummary(input);
     AGENTS.push(agent);
     this.customDetails.set(agent.id, customDetail(input));
@@ -686,6 +708,7 @@ export class FakeState {
   }
 
   removeAgent(id) {
+    this._assertNoRunningAgentOperation(id);
     const index = AGENTS.findIndex((agent) => agent.id === id);
     if (index < 0) throw Object.assign(new Error('Agent not found'), { status: 404 });
     const agent = AGENTS[index];
@@ -829,11 +852,7 @@ export class FakeState {
     const id = (body.agent_id ?? "").trim() || entry.id;
     if (this.agent(id)) throw Object.assign(new Error("An agent already uses that id"), { status: 409 });
 
-    for (const op of this.agentOperations.values()) {
-      if (op.agent_id === id && op.state === "running") {
-        throw Object.assign(new Error(`An operation is already in progress for agent '${id}'`), { status: 409 });
-      }
-    }
+    this._assertNoRunningAgentOperation(id);
 
     const opId = "op-" + randomUUID();
     const isBinary = entry.selected_distribution === "binary";
@@ -858,12 +877,14 @@ export class FakeState {
 
     const completeAction = () => {
       if (body.simulate_failure || options.simulate_failure) {
-        op.state = "failed";
-        op.stage = "failed";
-        op.error = typeof (body.simulate_failure || options.simulate_failure) === "string"
+        const error = typeof (body.simulate_failure || options.simulate_failure) === "string"
           ? (body.simulate_failure || options.simulate_failure)
           : "Download integrity verification failed";
-        op.completed_at = new Date().toISOString();
+        this._failAgentOperation(op, error);
+        return;
+      }
+      if (this.agent(id)) {
+        this._failAgentOperation(op, `Agent '${id}' changed while its install was in progress`);
         return;
       }
       const agent = {
@@ -906,11 +927,7 @@ export class FakeState {
     const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === agent.registry_id);
     if (!entry) throw Object.assign(new Error("The registry entry is gone"), { status: 404 });
 
-    for (const op of this.agentOperations.values()) {
-      if (op.agent_id === id && op.state === "running") {
-        throw Object.assign(new Error(`An operation is already in progress for agent '${id}'`), { status: 409 });
-      }
-    }
+    this._assertNoRunningAgentOperation(id);
 
     const opId = "op-" + randomUUID();
     const isBinary = entry.selected_distribution === "binary";
@@ -935,16 +952,19 @@ export class FakeState {
 
     const completeAction = () => {
       if (options.simulate_failure) {
-        op.state = "failed";
-        op.stage = "failed";
-        op.error = typeof options.simulate_failure === "string"
+        const error = typeof options.simulate_failure === "string"
           ? options.simulate_failure
           : "Package update failed";
-        op.completed_at = new Date().toISOString();
+        this._failAgentOperation(op, error);
+        return;
+      }
+      if (this.agent(id) !== agent) {
+        this._failAgentOperation(op, `Agent '${id}' changed while its update was in progress`);
         return;
       }
       const from = agent.display?.version ?? "0.0.0";
-      if (from !== entry.version) {
+      op.updated = from !== entry.version;
+      if (op.updated) {
         agent.display = { ...agent.display, version: entry.version };
         op.to_version = entry.version;
         this.markAuthStale(id);
@@ -979,7 +999,9 @@ export class FakeState {
 
   listAgentOperations() {
     this._pruneAgentOperations();
-    return Array.from(this.agentOperations.values()).map(({ _completeAction, ...view }) => view);
+    return Array.from(this.agentOperations.values())
+      .map(({ _completeAction, ...view }) => view)
+      .sort((a, b) => b.started_at.localeCompare(a.started_at));
   }
 
   _pruneAgentOperations() {
@@ -1053,6 +1075,7 @@ export class FakeState {
     }
     const id = (body.agent_id ?? '').trim() || entry.id;
     if (this.agent(id)) throw Object.assign(new Error('An agent already uses that id'), { status: 409 });
+    this._assertNoRunningAgentOperation(id);
     const agent = {
       id,
       display_name: body.display_name?.trim() || entry.name,

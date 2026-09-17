@@ -270,7 +270,7 @@ impl AgentManager {
         &self.operations
     }
 
-    pub fn validate_install(&self, request: &InstallRequest) -> AgentResult<String> {
+    pub fn validate_install(&self, request: &InstallRequest) -> AgentResult<(String, String)> {
         let registry_id = request.registry_id.trim().to_string();
         if registry_id.is_empty() {
             return Err(AgentError::Invalid(
@@ -286,7 +286,7 @@ impl AgentManager {
             .to_string();
         validate_catalog_id(&agent_id)?;
         self.ensure_id_is_free(&agent_id)?;
-        Ok(agent_id)
+        Ok((agent_id, registry_id))
     }
 
     pub fn validate_update(&self, id: &str) -> AgentResult<String> {
@@ -1566,7 +1566,7 @@ mod tests {
 
         assert_eq!(summary.id, "example-acp");
         assert_eq!(tracker.view().stage, AgentOperationStage::Finalizing);
-        tracker.succeed(None);
+        tracker.succeed(None, None);
         assert_eq!(tracker.view().state, AgentOperationState::Succeeded);
         assert_eq!(tracker.view().stage, AgentOperationStage::Completed);
 
@@ -1594,7 +1594,7 @@ mod tests {
             .unwrap();
         assert!(outcome.updated);
         assert_eq!(update_tracker.view().stage, AgentOperationStage::Finalizing);
-        update_tracker.succeed(Some(outcome.to_version));
+        update_tracker.succeed(Some(outcome.updated), Some(outcome.to_version));
         assert_eq!(update_tracker.view().state, AgentOperationState::Succeeded);
         assert_eq!(update_tracker.view().stage, AgentOperationStage::Completed);
     }

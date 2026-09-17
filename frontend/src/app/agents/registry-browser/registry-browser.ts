@@ -35,7 +35,8 @@ export class RegistryBrowserComponent {
   readonly uninstalling = signal<string | null>(null);
   readonly entryErrors = signal<Record<string, string>>({});
   readonly _actionError = signal('');
-  readonly actionError = computed(() => this._actionError() || Object.values(this.entryErrors())[0] || '');
+  readonly actionError = computed(() => this._actionError());
+  readonly pendingEntries = signal<ReadonlySet<string>>(new Set());
   readonly busy = computed(() => {
     const active = Object.keys(this.state.operationsByAgent());
     return active[0] ?? this.uninstalling();
@@ -70,12 +71,14 @@ export class RegistryBrowserComponent {
 
   operationFor(entry: RegistryEntry): AgentOperation | null {
     const id = entry.installed_as ?? entry.id;
-    return this.state.operationForAgent(id) ?? this.state.operationForAgent(entry.id) ?? null;
+    return this.state.operationForAgent(id) ?? this.state.operationForRegistry(entry.id) ?? null;
   }
 
   isEntryBusy(entry: RegistryEntry): boolean {
     const op = this.operationFor(entry);
-    return (op !== null && op.state === 'running') || this.uninstalling() === entry.id;
+    return (op !== null && op.state === 'running')
+      || this.pendingEntries().has(entry.id)
+      || this.uninstalling() === entry.id;
   }
 
   errorFor(entry: RegistryEntry): string | null {
@@ -93,8 +96,16 @@ export class RegistryBrowserComponent {
   }
 
   setEntryError(entry: RegistryEntry, message: string): void {
-    this._actionError.set(message);
     this.entryErrors.update((current) => ({ ...current, [entry.id]: message }));
+  }
+
+  private setEntryPending(entry: RegistryEntry, pending: boolean): void {
+    this.pendingEntries.update((current) => {
+      const next = new Set(current);
+      if (pending) next.add(entry.id);
+      else next.delete(entry.id);
+      return next;
+    });
   }
 
   formatBytes(bytes: number): string {
@@ -150,6 +161,7 @@ export class RegistryBrowserComponent {
     if (!distribution) return;
     this.clearEntryError(entry);
     this.notice.set('');
+    this.setEntryPending(entry, true);
     try {
       await this.state.installRegistryAgent({
         registry_id: entry.id,
@@ -159,6 +171,8 @@ export class RegistryBrowserComponent {
       this.notice.set(`Installed ${entry.name}.`);
     } catch (error: unknown) {
       this.setEntryError(entry, this.message(error, `Failed to install ${entry.name}`));
+    } finally {
+      this.setEntryPending(entry, false);
     }
   }
 
@@ -166,15 +180,18 @@ export class RegistryBrowserComponent {
     const id = entry.installed_as ?? entry.id;
     this.clearEntryError(entry);
     this.notice.set('');
+    this.setEntryPending(entry, true);
     try {
       const outcome = await this.state.updateAgent(id);
       this.notice.set(
-        outcome?.to_version
+        outcome.updated && outcome.to_version
           ? `Updated ${entry.name} to v${outcome.to_version}.`
           : `${entry.name} is already at the newest version.`,
       );
     } catch (error: unknown) {
       this.setEntryError(entry, this.message(error, `Failed to update ${entry.name}`));
+    } finally {
+      this.setEntryPending(entry, false);
     }
   }
 

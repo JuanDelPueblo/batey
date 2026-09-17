@@ -102,6 +102,7 @@ export class AppStateService {
   loadRegistry(): Promise<void> { return this.agentStore.loadRegistry(); }
   refreshRegistry(): Promise<void> { return this.agentStore.refreshRegistry(); }
   operationForAgent(key: string) { return this.agentStore.operationForAgent(key); }
+  operationForRegistry(key: string) { return this.agentStore.operationForRegistry(key); }
   isAgentBusy(key: string) { return this.agentStore.isAgentBusy(key); }
   installRegistryAgent(input: import('../core/api/types').InstallRegistryAgentInput) { return this.agentStore.installRegistryAgent(input); }
   updateAgent(id: string) { return this.agentStore.updateAgent(id); }

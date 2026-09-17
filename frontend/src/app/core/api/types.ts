@@ -148,6 +148,7 @@ export interface AgentOperation {
   error: string | null;
   started_at: string;
   completed_at: string | null;
+  updated?: boolean | null;
   to_version?: string | null;
 }
 

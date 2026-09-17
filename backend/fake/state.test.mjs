@@ -477,6 +477,7 @@ describe('fake backend seed history', () => {
     state.agentOperations.get(operation.id)._completeAction();
     const completed = state.getAgentOperation(operation.id);
     assert.equal(completed.state, 'succeeded');
+    assert.equal(completed.updated, false);
     assert.equal(completed.to_version, null);
 
     state.removeAgent(installed.id);
@@ -496,6 +497,18 @@ describe('fake backend seed history', () => {
     // Conflict if starting another operation for same agent
     assert.throws(
       () => state.startInstall({ registry_id: 'native-agent' }),
+      (err) => err.status === 409
+    );
+    assert.throws(
+      () => state.createCustomAgent({ id: 'native-agent', command: 'custom', args: [], env: {} }),
+      (err) => err.status === 409
+    );
+    assert.throws(
+      () => state.installRegistryAgent({ registry_id: 'native-agent' }),
+      (err) => err.status === 409
+    );
+    assert.throws(
+      () => state.removeAgent('native-agent'),
       (err) => err.status === 409
     );
 
@@ -522,18 +535,31 @@ describe('fake backend seed history', () => {
     assert.equal(indetOp.state, 'running');
 
     // 3. Update operation
+    state.agent('example-acp').display = { ...state.agent('example-acp').display, version: '1.0.0' };
     const updateOp = state.startUpdate('example-acp');
     assert.equal(updateOp.kind, 'update');
     assert.equal(updateOp.state, 'running');
     assert.equal(updateOp.stage, 'resolving');
+    assert.throws(
+      () => state.removeAgent('example-acp'),
+      (err) => err.status === 409
+    );
 
     // 4. Two independent operations can run concurrently for different agents
     assert.equal(state.listAgentOperations().filter(op => op.state === 'running').length, 2);
+    opRecord.started_at = '2026-01-01T00:00:00.000Z';
+    state.agentOperations.get(indetOp.id).started_at = '2026-01-01T00:00:01.000Z';
+    state.agentOperations.get(updateOp.id).started_at = '2026-01-01T00:00:02.000Z';
+    assert.deepEqual(
+      state.listAgentOperations().map((op) => op.id),
+      [updateOp.id, indetOp.id, determinateOp.id],
+    );
 
     // Complete updateOp
     const updateRecord = state.agentOperations.get(updateOp.id);
     updateRecord._completeAction();
     assert.equal(state.getAgentOperation(updateOp.id).state, 'succeeded');
+    assert.equal(state.getAgentOperation(updateOp.id).updated, true);
     assert.equal(state.agent('example-acp').display.version, '1.2.0');
 
     // 5. Failure operation preserves previous install

@@ -55,6 +55,7 @@ describe('RegistryBrowserComponent', () => {
     registryError: ReturnType<typeof signal<string | null>>;
     operationsByAgent: ReturnType<typeof signal<Record<string, AgentOperation>>>;
     operationForAgent: ReturnType<typeof vi.fn>;
+    operationForRegistry: ReturnType<typeof vi.fn>;
     isAgentBusy: ReturnType<typeof vi.fn>;
     loadRegistry: ReturnType<typeof vi.fn>;
     refreshRegistry: ReturnType<typeof vi.fn>;
@@ -71,6 +72,7 @@ describe('RegistryBrowserComponent', () => {
       registryError: signal<string | null>(null),
       operationsByAgent: opsSignal,
       operationForAgent: vi.fn((key: string) => opsSignal()[key] ?? null),
+      operationForRegistry: vi.fn((key: string) => opsSignal()[key] ?? null),
       isAgentBusy: vi.fn((key: string) => {
         const op = opsSignal()[key];
         return op !== undefined && op.state === 'running';
@@ -102,6 +104,7 @@ describe('RegistryBrowserComponent', () => {
         error: null,
         started_at: '',
         completed_at: '',
+        updated: true,
         to_version: '1.2.0',
       } as AgentOperation)),
       removeAgent: vi.fn(async () => ({ id: 'example-acp', deleted: true, retained_chats: 0 })),
@@ -217,6 +220,7 @@ describe('RegistryBrowserComponent', () => {
       error: null,
       started_at: '',
       completed_at: '',
+      updated: false,
       to_version: null,
     } as AgentOperation);
     await fixture.componentInstance.update(catalog.agents[0]);
@@ -231,7 +235,34 @@ describe('RegistryBrowserComponent', () => {
   it('surfaces install errors', async () => {
     state.installRegistryAgent.mockRejectedValueOnce(new Error('integrity check failed'));
     await fixture.componentInstance.install(catalog.agents[1]);
-    expect(fixture.componentInstance.actionError()).toContain('integrity check failed');
+    expect(fixture.componentInstance.actionError()).toBe('');
+    expect(fixture.componentInstance.errorFor(catalog.agents[1])).toContain('integrity check failed');
+  });
+
+  it('keeps an entry busy until its initial install request settles', async () => {
+    let resolveInstall!: (operation: AgentOperation) => void;
+    state.installRegistryAgent.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveInstall = resolve;
+    }));
+
+    const installing = fixture.componentInstance.install(catalog.agents[1]);
+    expect(fixture.componentInstance.isEntryBusy(catalog.agents[1])).toBe(true);
+    resolveInstall({ state: 'succeeded' } as AgentOperation);
+    await installing;
+    expect(fixture.componentInstance.isEntryBusy(catalog.agents[1])).toBe(false);
+  });
+
+  it('keeps an entry busy until its initial update request settles', async () => {
+    let resolveUpdate!: (operation: AgentOperation) => void;
+    state.updateAgent.mockImplementationOnce(() => new Promise((resolve) => {
+      resolveUpdate = resolve;
+    }));
+
+    const updating = fixture.componentInstance.update(catalog.agents[0]);
+    expect(fixture.componentInstance.isEntryBusy(catalog.agents[0])).toBe(true);
+    resolveUpdate({ state: 'succeeded', updated: false } as AgentOperation);
+    await updating;
+    expect(fixture.componentInstance.isEntryBusy(catalog.agents[0])).toBe(false);
   });
 
   it('displays determinate progress and disables buttons only for the active agent', () => {

@@ -248,6 +248,30 @@ describe('EventStreamComponent', () => {
     expect(requested).toHaveBeenCalledTimes(1);
   });
 
+  it('discards a pending preserved-scroll request when switching chats', async () => {
+    const { requested, state, element } = create({
+      chatId: 'chat-1',
+      hasOlderHistory: true,
+      viewport: { scrollHeight: 1000, clientHeight: 400 },
+    });
+    await fixture.whenStable();
+
+    state.scrollTop = 50;
+    fixture.componentInstance.onScroll();
+    expect(requested).toHaveBeenCalledTimes(1);
+    expect(fixture.componentInstance.showScrollButton()).toBe(true);
+
+    fixture.componentRef.setInput('chatId', 'chat-2');
+    fixture.componentRef.setInput('items', [userMessage(2, 'new chat latest message')]);
+    fixture.componentRef.setInput('hasOlderHistory', false);
+    state.scrollHeight = 600;
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(element.scrollTop).toBe(600);
+    expect(fixture.componentInstance.showScrollButton()).toBe(false);
+  });
+
   it('keeps streaming output auto-scrolled only while the user stays near the bottom', async () => {
     const { state, element } = create({ hasOlderHistory: false, viewport: { scrollHeight: 1000, clientHeight: 400 } });
     await fixture.whenStable();

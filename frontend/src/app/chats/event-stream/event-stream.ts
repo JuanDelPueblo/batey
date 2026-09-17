@@ -41,6 +41,7 @@ export class EventStreamComponent {
   private readonly injector = inject(Injector);
   private autoScroll = true;
   private preserveScroll: { top: number; height: number } | null = null;
+  private viewportChatId: string | null = null;
 
   /** Tracks the chat the fill/prefetch state below belongs to, so a chat switch resets it. */
   private fillChatId: string | null = null;
@@ -53,6 +54,13 @@ export class EventStreamComponent {
     // The item list gets a new identity on every streamed chunk, so this reacts
     // to appended text inside an open turn as well as to a new item.
     effect(() => {
+      const chatId = this.chatId();
+      if (chatId !== this.viewportChatId) {
+        this.viewportChatId = chatId;
+        this.preserveScroll = null;
+        this.autoScroll = true;
+        this.showScrollButton.set(false);
+      }
       this.items();
       if (this.historyLoading()) return;
       const preserve = this.preserveScroll;
@@ -81,6 +89,9 @@ export class EventStreamComponent {
         this.fillChatId = chatId;
         this.initialFillSatisfied = false;
         this.fillRequestPending = false;
+        this.preserveScroll = null;
+        this.autoScroll = true;
+        this.showScrollButton.set(false);
       }
 
       if (loading) {

@@ -318,14 +318,32 @@ describe('AgentCardComponent', () => {
     expect(text).not.toContain('reports no authentication methods');
   });
 
-  it('offers a check action when sign-in state is not loaded', () => {
-    const retryAuth = vi.fn();
-    fixture.componentInstance.retryAuth.subscribe(retryAuth);
+  it('renders neutral loading state with no check action while saved sign-in status is loading', () => {
     render(summary('builtin'), null);
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('Sign-in status is not loaded.');
+    expect(text).toContain('Loading saved sign-in status…');
     const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
-      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check')) as HTMLButtonElement;
+      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check'));
+    expect(button).toBeUndefined();
+  });
+
+  it('offers a check action when discovery freshness is stale and methods are empty', () => {
+    const retryAuth = vi.fn();
+    fixture.componentInstance.retryAuth.subscribe(retryAuth);
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: false,
+      observed_state: 'unknown',
+      freshness: 'stale',
+      observed_freshness: 'stale',
+      methods: [],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Saved sign-in options may be out of date.');
+    expect(text).not.toContain('No sign-in options available.');
+    const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
+      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check sign-in options')) as HTMLButtonElement;
     expect(button).toBeDefined();
     button.click();
     expect(retryAuth).toHaveBeenCalled();

@@ -316,6 +316,7 @@ export class AgentStore {
     }
     if (flow.state === 'succeeded' || flow.state === 'failed' || flow.state === 'cancelled' || flow.state === 'timed_out') {
       this.protocolInteractionsByFlow.update((current) => ({ ...current, [flowId]: null }));
+      this.protocolElicitationsByFlow.update((current) => ({ ...current, [flowId]: [] }));
       await this.loadAuth(agentId).catch(() => undefined);
     }
     return flow;
@@ -325,6 +326,7 @@ export class AgentStore {
     const flow = await this.api.cancelProtocolAuthFlow(flowId);
     this.protocolFlowsByAgent.update((current) => ({ ...current, [agentId]: flow }));
     this.protocolInteractionsByFlow.update((current) => ({ ...current, [flowId]: null }));
+    this.protocolElicitationsByFlow.update((current) => ({ ...current, [flowId]: [] }));
     return flow;
   }
 

@@ -1167,9 +1167,11 @@ export class FakeState {
     this.protocolFlows.set(flow.flow_id, flow);
     // Browser-based OAuth flow with interactive page and optional callback.
     if (id === 'claude' || methodId === 'claude-oauth') {
+      const oauthState = `state-${flow.flow_id}`;
+      const redirectUri = 'http://localhost:43123/callback';
       this.protocolInteractions.set(flow.flow_id, {
         type: 'browser',
-        url: 'https://accounts.anthropic.com/oauth/authorize?client_id=fake-claude&response_type=code&redirect_uri=http%3A%2F%2Flocalhost%3A43123%2Fcallback',
+        url: `https://accounts.anthropic.com/oauth/authorize?client_id=fake-claude&response_type=code&redirect_uri=${encodeURIComponent(redirectUri)}&state=${encodeURIComponent(oauthState)}`,
         manual_callback: true,
       });
       flow.state = 'waiting_for_user';
@@ -1219,15 +1221,83 @@ export class FakeState {
   relayProtocolAuthCallback(flowId, callbackUrl) {
     const flow = this.protocolFlows.get(flowId);
     if (!flow) throw Object.assign(new Error('Protocol flow not found'), { status: 404 });
-    if (!callbackUrl) throw Object.assign(new Error('Missing callback_url'), { status: 400 });
+    if (!callbackUrl || typeof callbackUrl !== 'string' || !callbackUrl.trim()) {
+      throw Object.assign(new Error('Missing callback_url'), { status: 400 });
+    }
     const interaction = this.protocolInteractions.get(flowId);
     if (!interaction || interaction.type !== 'browser' || flow.state !== 'waiting_for_user') {
       throw Object.assign(new Error('Flow is not waiting for browser authentication'), { status: 400 });
     }
+
+    let authUrl;
+    try {
+      authUrl = new URL(interaction.url);
+    } catch {
+      throw Object.assign(new Error('Authentication interaction URL is malformed'), { status: 500 });
+    }
+    const expectedRedirectUriRaw = authUrl.searchParams.get('redirect_uri');
+    const expectedState = authUrl.searchParams.get('state');
+    if (!expectedRedirectUriRaw || !expectedState) {
+      throw Object.assign(new Error('Authentication interaction is missing redirect or state'), { status: 500 });
+    }
+    let expectedRedirect;
+    try {
+      expectedRedirect = new URL(expectedRedirectUriRaw);
+    } catch {
+      throw Object.assign(new Error('Authentication redirect URI is malformed'), { status: 500 });
+    }
+
+    let callback;
+    try {
+      callback = new URL(callbackUrl.trim());
+    } catch {
+      throw Object.assign(new Error('Callback URL is malformed'), { status: 400 });
+    }
+
+    if (callback.protocol !== 'http:' || callback.username || callback.password || callback.hash) {
+      throw Object.assign(new Error('Callback URL is malformed'), { status: 400 });
+    }
+
+    const isLoopback = (host) => host === 'localhost' || host === '127.0.0.1' || host === '[::1]';
+    if (!isLoopback(callback.hostname)) {
+      throw Object.assign(new Error('Callback URL is not a loopback address'), { status: 400 });
+    }
+
+    const normPort = (u) => u.port || '80';
+    const normPath = (u) => (u.pathname.length > 1 && u.pathname.endsWith('/') ? u.pathname.slice(0, -1) : u.pathname) || '/';
+
+    if (
+      callback.hostname !== expectedRedirect.hostname ||
+      normPort(callback) !== normPort(expectedRedirect) ||
+      normPath(callback) !== normPath(expectedRedirect)
+    ) {
+      throw Object.assign(new Error('Callback URL does not match the authentication endpoint'), { status: 400 });
+    }
+
+    const callbackState = callback.searchParams.get('state');
+    if (!callbackState || callbackState !== expectedState) {
+      throw Object.assign(new Error('Callback OAuth state does not match'), { status: 400 });
+    }
+
+    const code = callback.searchParams.get('code');
+    const error = callback.searchParams.get('error');
+    const hasCode = typeof code === 'string' && code.trim().length > 0;
+    const hasError = typeof error === 'string' && error.trim().length > 0;
+    if ((!hasCode && !hasError) || (hasCode && hasError)) {
+      throw Object.assign(new Error('Callback URL has no authorization result'), { status: 400 });
+    }
+
     this.protocolInteractions.delete(flowId);
-    flow.state = 'succeeded';
     flow.completed_at = new Date().toISOString();
-    this.setObservedAuth(flow.agent_id, 'authenticated');
+    if (hasError) {
+      flow.state = 'failed';
+      flow.reason = `OAuth error: ${error}`;
+      this.setObservedAuth(flow.agent_id, 'authentication_required');
+    } else {
+      flow.state = 'succeeded';
+      flow.reason = null;
+      this.setObservedAuth(flow.agent_id, 'authenticated');
+    }
     return flow;
   }
 

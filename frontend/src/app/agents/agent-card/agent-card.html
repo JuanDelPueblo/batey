@@ -258,6 +258,9 @@
             @if (neverChecked()) {
               <p class="auth-hint">Sign-in status has not been checked yet.</p>
               <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
+            } @else if (isDiscoveryStale()) {
+              <p class="auth-hint">Saved sign-in options may be out of date.</p>
+              <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
             } @else if (!logoutSupported()) {
               <p class="auth-hint">No sign-in options available.</p>
             }
@@ -289,8 +292,7 @@
       </div>
     } @else {
       <div class="auth-row loading">
-        <span class="auth-hint">Sign-in status is not loaded.</span>
-        <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
+        <span class="auth-hint">Loading saved sign-in status…</span>
       </div>
     }
   </section>

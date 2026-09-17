@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiService } from '../core/api/api.service';
-import type { AgentAuthState, AgentSummary } from '../core/api/types';
+import type { AgentAuthState, AgentSummary, ProtocolAuthElicitation, ProtocolAuthFlow } from '../core/api/types';
 import { AgentStore } from './agent.store';
 import { ProjectStore } from './project.store';
 
@@ -68,13 +68,17 @@ function makeApi() {
       method_id: 'm',
       state: 'running' as const,
     })),
-    fetchProtocolAuthFlow: vi.fn(async (flowId: string) => ({
+    fetchProtocolAuthFlow: vi.fn(async (flowId: string): Promise<ProtocolAuthFlow> => ({
       flow_id: flowId,
       agent_id: 'a',
       method_id: 'm',
-      state: 'succeeded' as const,
+      state: 'succeeded',
+      reason: null,
+      started_at: new Date().toISOString(),
+      completed_at: null,
     })),
-    fetchProtocolAuthElicitations: vi.fn(async () => []),
+    fetchProtocolAuthElicitations: vi.fn(async (): Promise<ProtocolAuthElicitation[]> => []),
+    fetchProtocolAuthInteraction: vi.fn(async () => null),
     cancelProtocolAuthFlow: vi.fn(async (flowId: string) => ({
       flow_id: flowId,
       agent_id: 'a',
@@ -225,6 +229,26 @@ describe('AgentStore', () => {
     await store.refreshAuth('codex');
     expect(inFlightError).toBeUndefined();
     expect(store.authErrors()['codex']).toBeUndefined();
+  });
+
+  it('clears elicitations when cancelling a protocol flow', async () => {
+    api.fetchProtocolAuthElicitations.mockResolvedValueOnce([
+      { id: 'el-1', mode: 'url', message: 'visit', schema: null, url: 'https://example.com' },
+    ]);
+    api.fetchProtocolAuthFlow.mockResolvedValueOnce({
+      flow_id: 'flow-1',
+      agent_id: 'a',
+      method_id: 'm',
+      state: 'waiting_for_user',
+      reason: null,
+      started_at: new Date().toISOString(),
+      completed_at: null,
+    });
+    await store.refreshProtocolFlow('a', 'flow-1');
+    expect(store.protocolElicitationsByFlow()['flow-1']).toHaveLength(1);
+
+    await store.cancelProtocolAuth('a', 'flow-1');
+    expect(store.protocolElicitationsByFlow()['flow-1']).toEqual([]);
   });
 
   it('starts a terminal flow and refreshes state after it', async () => {

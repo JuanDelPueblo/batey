@@ -147,11 +147,15 @@ export class RegistryBrowserComponent {
     this.clearCardError(entry.id);
     this.notice.set('');
     try {
-      await this.state.installRegistryAgent({
+      const operation = await this.state.installRegistryAgent({
         registry_id: entry.id,
         distribution,
         display_name: entry.name,
       });
+      if (operation.state === 'running') {
+        this.notice.set(`Install of ${entry.name} is still in progress; status will resume when available.`);
+        return;
+      }
       this.notice.set(`Installed ${entry.name}.`);
       this.clearCardError(entry.id);
       setTimeout(() => this.state.clearOperation(entry.id), 2000);
@@ -167,6 +171,10 @@ export class RegistryBrowserComponent {
     this.notice.set('');
     try {
       const outcome = await this.state.updateAgent(id);
+      if (outcome.operation?.state === 'running') {
+        this.notice.set(`Update of ${entry.name} is still in progress; status will resume when available.`);
+        return;
+      }
       this.notice.set(
         outcome?.updated
           ? `Updated ${entry.name}${outcome.to_version ? ` to v${outcome.to_version}` : ''}.`

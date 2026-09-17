@@ -81,6 +81,9 @@ impl HubService {
                 Ok(summary) => {
                     svc.agent_auth.invalidate_agent(&summary.id);
                     svc.notify_metadata_changed();
+                    svc.agent_manager
+                        .operations()
+                        .succeed_with_summary(&op_id, summary);
                 }
                 Err(err) => {
                     tracing::warn!(agent = %agent_id, error = %err, "Registry install failed");
@@ -137,6 +140,9 @@ impl HubService {
                             .await;
                         svc.notify_metadata_changed();
                     }
+                    svc.agent_manager
+                        .operations()
+                        .succeed_with_outcome(&op_id, outcome);
                 }
                 Err(err) => {
                     tracing::warn!(agent = %agent_id, error = %err, "Registry update failed");

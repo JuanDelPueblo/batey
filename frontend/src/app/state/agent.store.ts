@@ -23,6 +23,8 @@ import { ProjectStore } from './project.store';
 
 type ErrorMap = Record<string, string>;
 
+const MAX_OPERATION_POLL_FAILURES = 3;
+
 /**
  * Owns the agent management surface: the installed catalog, the ACP Registry
  * browse cache, editable custom definitions, and authentication state.
@@ -115,9 +117,10 @@ export class AgentStore {
       const ops = await this.api.fetchAgentOperations();
       for (const op of ops) {
         this.trackOperation(op);
-        if (op.state === 'running') {
-          void this.pollOperationUntilTerminal(op);
-        }
+        void this.pollOperationUntilTerminal(op).catch(() => {
+          // A server-reported failure is already retained in the operation
+          // signal. Startup recovery has no caller to which it can report it.
+        });
       }
     } catch {
       // Tolerate background load failure
@@ -147,10 +150,26 @@ export class AgentStore {
     this.activePolls.add(current.id);
 
     try {
+      let consecutiveFailures = 0;
       while (current.state === 'running') {
         await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-        current = await this.api.fetchAgentOperation(current.id);
-        this.trackOperation(current);
+        try {
+          const next = await this.api.fetchAgentOperation(current.id);
+          consecutiveFailures = 0;
+          current = next;
+          this.trackOperation(current);
+        } catch {
+          consecutiveFailures += 1;
+          if (consecutiveFailures >= MAX_OPERATION_POLL_FAILURES) {
+            // The operation is still running as far as the server last told us.
+            // Keep that snapshot and let a later startup/event recovery resume
+            // polling; a status endpoint outage is not an install failure.
+            return current;
+          }
+          // Retry with a small bounded backoff while preserving the last known
+          // operation in the UI.
+          await new Promise((resolve) => setTimeout(resolve, pollIntervalMs * consecutiveFailures));
+        }
       }
 
       if (current.state === 'succeeded') {
@@ -179,6 +198,9 @@ export class AgentStore {
     const terminal = await this.pollOperationUntilTerminal(op);
     const updatedAgent = this.installed().find((a) => a.id === id);
     const toVersion = updatedAgent?.display?.version ?? fromVersion;
+    if (terminal.update_outcome) {
+      return { ...terminal.update_outcome, operation: terminal };
+    }
     return {
       updated: fromVersion !== toVersion,
       from_version: fromVersion,

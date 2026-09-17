@@ -98,6 +98,7 @@ export class AppStateService {
   setShowArchived(show: boolean): void { this.uiStore.setShowArchived(show); }
   loadProjects(): Promise<void> { return this.projectStore.loadProjects(); }
   loadAgents(): Promise<void> { return this.agentStore.loadInstalled(); }
+  loadOperations(): Promise<void> { return this.agentStore.loadOperations(); }
   loadRegistry(): Promise<void> { return this.agentStore.loadRegistry(); }
   refreshRegistry(): Promise<void> { return this.agentStore.refreshRegistry(); }
   operationFor(registryId: string) { return this.agentStore.operationFor(registryId); }
@@ -210,7 +211,7 @@ export class AppStateService {
 
   private async initialize(): Promise<void> {
     if (typeof window === 'undefined') return;
-    await Promise.all([this.loadProjects(), this.loadAgents()]);
+    await Promise.all([this.loadProjects(), this.loadAgents(), this.agentStore.loadOperations()]);
   }
 
   private syncRoute(url: string): void {
@@ -230,6 +231,9 @@ export class AppStateService {
   private handleIncomingEvent(event: SessionEvent): void {
     if (event.payload.type === 'metadata_changed') {
       void this.loadProjects();
+      void this.loadAgents();
+      void this.loadRegistry();
+      void this.agentStore.loadOperations();
       for (const projectId of Object.keys(this.chatsByProject())) void this.loadChats(projectId);
       return;
     }

@@ -55,7 +55,7 @@ pub struct AgentOperation {
     pub kind: AgentOperationKind,
     pub state: AgentOperationState,
     pub stage: AgentOperationStage,
-    pub downloaded_bytes: u64,
+    pub bytes_downloaded: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_bytes: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -203,7 +203,7 @@ impl AgentOperations {
             kind,
             state: AgentOperationState::Running,
             stage: AgentOperationStage::Resolving,
-            downloaded_bytes: 0,
+            bytes_downloaded: 0,
             total_bytes: None,
             error: None,
             agent: None,
@@ -265,7 +265,7 @@ impl AgentOperations {
         let mut inner = self.inner.lock().unwrap();
         if let Some(record) = inner.operations.get_mut(id) {
             record.operation.stage = AgentOperationStage::Downloading;
-            record.operation.downloaded_bytes = downloaded;
+            record.operation.bytes_downloaded = downloaded;
             if total.is_some() {
                 record.operation.total_bytes = total;
             }
@@ -344,7 +344,7 @@ mod tests {
             .unwrap();
         assert_eq!(op.state, AgentOperationState::Running);
         assert_eq!(op.stage, AgentOperationStage::Resolving);
-        assert_eq!(op.downloaded_bytes, 0);
+        assert_eq!(op.bytes_downloaded, 0);
         assert_eq!(op.total_bytes, None);
         assert_eq!(op.error, None);
 
@@ -402,7 +402,7 @@ mod tests {
         ops.set_download_progress(&op.id, 1024, Some(2048));
         let progress = ops.get_operation(&op.id).unwrap();
         assert_eq!(progress.stage, AgentOperationStage::Downloading);
-        assert_eq!(progress.downloaded_bytes, 1024);
+        assert_eq!(progress.bytes_downloaded, 1024);
         assert_eq!(progress.total_bytes, Some(2048));
 
         ops.set_stage(&op.id, AgentOperationStage::Extracting);

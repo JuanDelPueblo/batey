@@ -8,14 +8,17 @@ import { AgentRegistryPageComponent } from './agent-registry-page';
 describe('AgentRegistryPageComponent', () => {
   let fixture: ComponentFixture<AgentRegistryPageComponent>;
   let loadRegistry: ReturnType<typeof vi.fn>;
+  let loadOperations: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     loadRegistry = vi.fn(async () => undefined);
+    loadOperations = vi.fn(async () => undefined);
     const state = {
       registry: signal(null),
       registryLoading: signal(false),
       registryError: signal<string | null>(null),
       loadRegistry,
+      loadOperations,
     };
 
     await TestBed.configureTestingModule({
@@ -46,5 +49,9 @@ describe('AgentRegistryPageComponent', () => {
 
   it('loads the registry catalog when the page opens', () => {
     expect(loadRegistry).toHaveBeenCalled();
+  });
+
+  it('recovers active operations when the page opens', () => {
+    expect(loadOperations).toHaveBeenCalled();
   });
 });

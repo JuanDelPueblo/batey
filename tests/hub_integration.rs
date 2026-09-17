@@ -261,6 +261,15 @@ async fn registry_install_starts_operation_and_reports_progress() {
     assert_eq!(op["agent_id"], "fixture-acp");
     assert_eq!(op["registry_id"], "fixture-acp");
     assert_eq!(op["kind"], "install");
+    // Wire contract assertion between backend and frontend: bytes_downloaded must be serialized
+    assert!(
+        op.get("bytes_downloaded").is_some(),
+        "wire contract must serialize bytes_downloaded"
+    );
+    assert!(
+        op.get("downloaded_bytes").is_none(),
+        "mismatched field downloaded_bytes must not appear on wire"
+    );
     let op_id = op["id"].as_str().unwrap().to_string();
 
     // GET /api/agents/operations lists active operations
@@ -306,6 +315,18 @@ async fn registry_install_starts_operation_and_reports_progress() {
         if status["state"] == "succeeded" {
             finished = true;
             assert_eq!(status["stage"], "completed");
+            assert!(
+                status.get("bytes_downloaded").is_some(),
+                "wire contract must serialize bytes_downloaded"
+            );
+            assert!(
+                status.get("downloaded_bytes").is_none(),
+                "mismatched field downloaded_bytes must not appear on wire"
+            );
+            assert!(status["bytes_downloaded"].is_u64());
+            assert!(status
+                .get("total_bytes")
+                .is_none_or(serde_json::Value::is_u64));
             break;
         }
     }

@@ -454,7 +454,12 @@ impl AgentManager {
             agent_id.clone(),
             registry_id.clone(),
         )?;
-        self.install_with_operation(request, &op.id).await
+        let result = self.install_with_operation(request, &op.id).await;
+        if let Ok(summary) = &result {
+            self.operations
+                .succeed_with_summary(&op.id, summary.clone());
+        }
+        result
     }
 
     /// Installs one registry agent under a Batey catalog id, reporting
@@ -592,7 +597,8 @@ impl AgentManager {
             return Err(agent_err);
         }
 
-        self.operations.succeed_with_summary(op_id, summary.clone());
+        // Operation remains in Finalizing stage so caller (HubService) can complete
+        // auth invalidation and metadata notification before marking succeeded.
         Ok(summary)
     }
 
@@ -615,7 +621,12 @@ impl AgentManager {
             id.to_string(),
             snapshot.registry_id.clone(),
         )?;
-        self.update_with_operation(id, &op.id).await
+        let result = self.update_with_operation(id, &op.id).await;
+        if let Ok(outcome) = &result {
+            self.operations
+                .succeed_with_outcome(&op.id, outcome.clone());
+        }
+        result
     }
 
     /// Updates one registry-installed agent, reporting progress through an
@@ -693,7 +704,8 @@ impl AgentManager {
                 agent: record.to_definition(&*self.probe).summary(),
                 previous_install_dir: None,
             };
-            self.operations.succeed_with_outcome(op_id, outcome.clone());
+            self.operations
+                .set_stage(op_id, AgentOperationStage::Finalizing);
             return Ok(outcome);
         }
 
@@ -783,7 +795,9 @@ impl AgentManager {
             previous_install_dir: previous_install_dir
                 .filter(|previous| Some(previous.as_str()) != updated_install_dir(&updated)),
         };
-        self.operations.succeed_with_outcome(op_id, outcome.clone());
+        // Operation remains in Finalizing stage so caller (HubService) can complete
+        // cleanup, auth invalidation, session invalidation, and metadata notification
+        // before marking succeeded.
         Ok(outcome)
     }
 
@@ -2164,12 +2178,24 @@ mod tests {
 
         assert_eq!(summary.id, "example-acp");
         let op_state = harness.manager.operations().get(&op.id).unwrap();
+        // install_with_operation leaves stage in Finalizing so service can finish post-install tasks
         assert_eq!(
             op_state.state,
+            super::super::operations::AgentOperationState::Running
+        );
+        assert_eq!(op_state.stage, AgentOperationStage::Finalizing);
+        assert!(op_state.bytes_downloaded > 0);
+
+        harness
+            .manager
+            .operations()
+            .succeed_with_summary(&op.id, summary);
+        let completed = harness.manager.operations().get(&op.id).unwrap();
+        assert_eq!(
+            completed.state,
             super::super::operations::AgentOperationState::Succeeded
         );
-        assert_eq!(op_state.stage, AgentOperationStage::Completed);
-        assert!(op_state.downloaded_bytes > 0);
+        assert_eq!(completed.stage, AgentOperationStage::Completed);
     }
 
     #[tokio::test]

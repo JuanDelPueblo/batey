@@ -17,5 +17,6 @@ export class AgentRegistryPageComponent implements OnInit {
 
   ngOnInit(): void {
     void this.state.loadRegistry();
+    void this.state.loadOperations();
   }
 }

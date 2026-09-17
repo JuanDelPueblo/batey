@@ -137,6 +137,7 @@ export interface AgentOperation {
   bytes_downloaded: number;
   total_bytes?: number | null;
   error?: string | null;
+  update_outcome?: UpdateOutcome | null;
   created_at: string;
   updated_at: string;
 }

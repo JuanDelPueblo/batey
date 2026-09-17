@@ -376,4 +376,53 @@ describe('AgentStore', () => {
     await expect(store.installRegistryAgent({ registry_id: 'bad-agent' })).rejects.toThrow('Corrupt archive payload');
     expect(store.operationsByRegistryId()['bad-agent']?.state).toBe('failed');
   });
+
+  it('recovers an active operation after a reload and refreshes the catalog', async () => {
+    const active = {
+      id: 'op-reload',
+      kind: 'install',
+      agent_id: 'native-agent',
+      registry_id: 'native-agent',
+      state: 'running',
+      stage: 'downloading',
+      bytes_downloaded: 100,
+      total_bytes: 200,
+      error: null,
+      created_at: '',
+      updated_at: '',
+    } as AgentOperation;
+    const completed = { ...active, state: 'succeeded', stage: 'completed', bytes_downloaded: 200 } as AgentOperation;
+    api.fetchAgentOperations.mockResolvedValueOnce([active]);
+    api.fetchAgentOperation.mockResolvedValueOnce(completed);
+
+    await store.loadOperations();
+    await new Promise((resolve) => setTimeout(resolve, 260));
+
+    expect(store.operationsByRegistryId()['native-agent']).toMatchObject({ state: 'succeeded' });
+    expect(api.fetchAgents).toHaveBeenCalled();
+  });
+
+  it('keeps the last known running operation across bounded polling failures', async () => {
+    const active = {
+      id: 'op-transient',
+      kind: 'install',
+      agent_id: 'native-agent',
+      registry_id: 'native-agent',
+      state: 'running',
+      stage: 'downloading',
+      bytes_downloaded: 100,
+      total_bytes: 200,
+      error: null,
+      created_at: '',
+      updated_at: '',
+    } as AgentOperation;
+    api.fetchAgentOperation
+      .mockRejectedValueOnce(new Error('temporary status outage'))
+      .mockResolvedValueOnce({ ...active, state: 'succeeded', stage: 'completed' } as AgentOperation);
+
+    const result = await store.pollOperationUntilTerminal(active, 0);
+
+    expect(result.state).toBe('succeeded');
+    expect(store.operationsByRegistryId()['native-agent']?.state).toBe('succeeded');
+  });
 });

@@ -12,6 +12,7 @@ mod definition;
 mod file;
 mod installed;
 mod manager;
+pub mod operations;
 pub mod registry;
 
 pub use compat::{
@@ -34,6 +35,9 @@ pub use manager::{
     AgentEnvEdit, AgentEnvPresence, AgentError, AgentManagementDetail, AgentManager, AgentResult,
     InstallRequest, RegistryCatalogView, RegistryEntryView, RegistryStatus, RemoveOutcome,
     UpdateOutcome,
+};
+pub use operations::{
+    AgentOperation, AgentOperationKind, AgentOperationStage, AgentOperationState, AgentOperations,
 };
 pub use registry::{DistributionKind, PlatformTarget};
 

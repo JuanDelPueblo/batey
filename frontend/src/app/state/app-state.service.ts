@@ -29,6 +29,7 @@ export class AppStateService {
   readonly registry = this.agentStore.registry;
   readonly registryLoading = this.agentStore.registryLoading;
   readonly registryError = this.agentStore.registryError;
+  readonly operationsByRegistryId = this.agentStore.operationsByRegistryId;
   readonly authByAgent = this.agentStore.authByAgent;
   readonly authLoading = this.agentStore.authLoading;
   readonly authErrors = this.agentStore.authErrors;
@@ -99,6 +100,8 @@ export class AppStateService {
   loadAgents(): Promise<void> { return this.agentStore.loadInstalled(); }
   loadRegistry(): Promise<void> { return this.agentStore.loadRegistry(); }
   refreshRegistry(): Promise<void> { return this.agentStore.refreshRegistry(); }
+  operationFor(registryId: string) { return this.agentStore.operationFor(registryId); }
+  clearOperation(registryId: string) { this.agentStore.clearOperation(registryId); }
   installRegistryAgent(input: import('../core/api/types').InstallRegistryAgentInput) { return this.agentStore.installRegistryAgent(input); }
   updateAgent(id: string) { return this.agentStore.updateAgent(id); }
   removeAgent(id: string) { return this.agentStore.removeAgent(id); }

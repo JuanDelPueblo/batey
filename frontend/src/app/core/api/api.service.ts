@@ -11,6 +11,7 @@ import type {
   ConfigOption,
   CustomAgentInput,
   DirectoryListing,
+  AgentOperation,
   InstallRegistryAgentInput,
   Project,
   ChatWorkspaceSelection,
@@ -318,17 +319,25 @@ export class ApiService {
     return this.request<RegistryCatalog>('/api/agents/registry/refresh', { method: 'POST' });
   }
 
-  installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentSummary> {
-    return this.request<AgentSummary>('/api/agents/registry/install', {
+  installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentOperation> {
+    return this.request<AgentOperation>('/api/agents/registry/install', {
       method: 'POST',
       body: input,
     });
   }
 
-  updateRegistryAgent(id: string): Promise<UpdateOutcome> {
-    return this.request<UpdateOutcome>(`/api/agents/${encodeURIComponent(id)}/update`, {
+  updateRegistryAgent(id: string): Promise<AgentOperation> {
+    return this.request<AgentOperation>(`/api/agents/${encodeURIComponent(id)}/update`, {
       method: 'POST',
     });
+  }
+
+  fetchAgentOperations(): Promise<AgentOperation[]> {
+    return this.request<AgentOperation[]>('/api/agents/operations');
+  }
+
+  fetchAgentOperation(id: string): Promise<AgentOperation> {
+    return this.request<AgentOperation>(`/api/agents/operations/${encodeURIComponent(id)}`);
   }
 
   async removeAgent(id: string): Promise<RemoveOutcome> {

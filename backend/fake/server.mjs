@@ -72,6 +72,8 @@ const routes = [
   ['GET', /^\/api\/agents$/, () => json(AGENTS)],
   ['POST', /^\/api\/agents$/, createAgent],
   ['POST', /^\/api\/agents\/validate$/, validateAgent],
+  ['GET', /^\/api\/agents\/operations$/, listAgentOperations],
+  ['GET', /^\/api\/agents\/operations\/([^/]+)$/, getAgentOperation],
   ['GET', /^\/api\/agents\/registry$/, registryAgents],
   ['POST', /^\/api\/agents\/registry\/refresh$/, refreshRegistry],
   ['POST', /^\/api\/agents\/registry\/install$/, installRegistryAgent],
@@ -373,9 +375,23 @@ function registryAgents({ url }) {
 
 function refreshRegistry() { return json(state.registryView('', true)); }
 
-function installRegistryAgent({ body }) { return json(state.installRegistryAgent(body)); }
+function listAgentOperations() {
+  return json(state.listAgentOperations());
+}
 
-function updateRegistryAgent({ params }) { return json(state.updateRegistryAgent(params[0])); }
+function getAgentOperation({ params }) {
+  const op = state.getAgentOperation(params[0]);
+  if (!op) throw httpError(404, 'Agent operation not found');
+  return json(op);
+}
+
+function installRegistryAgent({ body }) {
+  return json(state.startInstallOperation(body), 200);
+}
+
+function updateRegistryAgent({ params }) {
+  return json(state.startUpdateOperation(params[0]), 200);
+}
 
 // ------------------------------------------------------- authentication
 

@@ -5,10 +5,11 @@
 //! operation therefore never reaches a running chat.
 use super::{HubService, ServiceError, ServiceResult};
 use crate::agents::{
-    AgentEnvEdit, AgentEnvPresence, AgentError, AgentManagementDetail, AgentSummary,
-    CustomAgentInput, InstallRequest, RegistryCatalogView, RemoveOutcome, UpdateOutcome,
-    ValidationReport,
+    AgentEnvEdit, AgentEnvPresence, AgentError, AgentManagementDetail, AgentOperation,
+    AgentOperationKind, AgentSource, AgentSummary, CustomAgentInput, InstallRequest,
+    RegistryCatalogView, RemoveOutcome, ValidationReport,
 };
+use std::sync::Arc;
 
 impl From<AgentError> for ServiceError {
     fn from(error: AgentError) -> Self {
@@ -46,52 +47,119 @@ impl HubService {
         self.agent_manager.registry_catalog(true, None).await
     }
 
-    pub async fn install_registry_agent(
-        &self,
+    /// Starts an asynchronous install operation for an agent from the registry.
+    /// Returns the initial `AgentOperation` immediately. Progress can be polled
+    /// via `get_agent_operation`.
+    pub fn install_registry_agent(
+        self: &Arc<Self>,
         request: InstallRequest,
-    ) -> ServiceResult<AgentSummary> {
-        let summary = self.agent_manager.install(request).await?;
-        // A reinstall over a previously known id may change initialization
-        // or authentication methods. A brand-new id has no cache yet, so
-        // this is a no-op for it.
-        self.agent_auth.invalidate_agent(&summary.id);
-        self.notify_metadata_changed();
-        Ok(summary)
-    }
+    ) -> ServiceResult<AgentOperation> {
+        let registry_id = request.registry_id.clone();
+        let agent_id = request
+            .agent_id
+            .as_deref()
+            .unwrap_or(&registry_id)
+            .to_string();
 
-    /// Updates one registry-installed agent.
-    ///
-    /// The previous version's files stay on disk while a session is live, so
-    /// a running process never loses the binary it started from.
-    pub async fn update_registry_agent(&self, id: &str) -> ServiceResult<UpdateOutcome> {
-        let outcome = self.agent_manager.update(id).await?;
-        if outcome.updated {
-            if self.agent_has_live_session(id).await {
-                tracing::info!(
-                    agent = id,
-                    "Keeping the previous install; a live session is still using it"
-                );
-            } else {
-                self.agent_manager
-                    .remove_install_files(outcome.previous_install_dir.as_deref());
+        self.agent_manager.ensure_id_is_free(&agent_id)?;
+        crate::agents::AgentManager::validate_catalog_id(&registry_id)?;
+
+        let op = self.agent_manager.operations().start(
+            AgentOperationKind::Install,
+            agent_id.clone(),
+            registry_id,
+        )?;
+
+        let svc = Arc::clone(self);
+        let op_id = op.id.clone();
+        tokio::spawn(async move {
+            match svc
+                .agent_manager
+                .install_with_operation(request, &op_id)
+                .await
+            {
+                Ok(summary) => {
+                    svc.agent_auth.invalidate_agent(&summary.id);
+                    svc.notify_metadata_changed();
+                }
+                Err(err) => {
+                    tracing::warn!(agent = %agent_id, error = %err, "Registry install failed");
+                }
             }
-            // A new version may change initialization or authentication
-            // methods, so the cached discovery data can no longer be
-            // trusted as current.
-            self.agent_auth.invalidate_agent(id);
-            self.sessions
-                .invalidate_stopped_sessions_for_agent(id)
-                .await;
-            self.notify_metadata_changed();
-        }
-        Ok(outcome)
+        });
+
+        Ok(op)
     }
 
-    /// Removes one installed agent.
-    ///
-    /// A live session using the agent refuses the removal outright. Durable
-    /// chats do not: the manager retires the entry instead of deleting it, so
-    /// their history stays readable and marked unavailable.
+    /// Starts an asynchronous update operation for a registry-installed agent.
+    /// Returns the initial `AgentOperation` immediately.
+    pub fn update_registry_agent(self: &Arc<Self>, id: &str) -> ServiceResult<AgentOperation> {
+        let record = self.agent_manager.require_record(id)?;
+        if record.source != AgentSource::Registry {
+            return Err(ServiceError::Conflict(format!(
+                "Agent '{id}' comes from the {} source, so it has no registry update.",
+                record.source
+            )));
+        }
+        let snapshot = record.registry.clone().ok_or_else(|| {
+            ServiceError::Conflict(format!("Agent '{id}' has no registry snapshot to compare."))
+        })?;
+
+        let op = self.agent_manager.operations().start(
+            AgentOperationKind::Update,
+            id.to_string(),
+            snapshot.registry_id.clone(),
+        )?;
+
+        let svc = Arc::clone(self);
+        let op_id = op.id.clone();
+        let agent_id = id.to_string();
+        tokio::spawn(async move {
+            match svc
+                .agent_manager
+                .update_with_operation(&agent_id, &op_id)
+                .await
+            {
+                Ok(outcome) => {
+                    if outcome.updated {
+                        if svc.agent_has_live_session(&agent_id).await {
+                            tracing::info!(
+                                agent = %agent_id,
+                                "Keeping the previous install; a live session is still using it"
+                            );
+                        } else {
+                            svc.agent_manager
+                                .remove_install_files(outcome.previous_install_dir.as_deref());
+                        }
+                        svc.agent_auth.invalidate_agent(&agent_id);
+                        svc.sessions
+                            .invalidate_stopped_sessions_for_agent(&agent_id)
+                            .await;
+                        svc.notify_metadata_changed();
+                    }
+                }
+                Err(err) => {
+                    tracing::warn!(agent = %agent_id, error = %err, "Registry update failed");
+                }
+            }
+        });
+
+        Ok(op)
+    }
+
+    /// Lists all tracked agent operations.
+    pub fn list_agent_operations(&self) -> Vec<AgentOperation> {
+        self.agent_manager.operations().list()
+    }
+
+    /// Gets one agent operation by its ID.
+    pub fn get_agent_operation(&self, id: &str) -> ServiceResult<AgentOperation> {
+        self.agent_manager
+            .operations()
+            .get(id)
+            .ok_or_else(|| ServiceError::NotFound(format!("Agent operation '{id}' not found")))
+    }
+
     pub async fn remove_installed_agent(&self, id: &str) -> ServiceResult<RemoveOutcome> {
         if self.agent_has_live_session(id).await {
             return Err(ServiceError::Conflict(format!(

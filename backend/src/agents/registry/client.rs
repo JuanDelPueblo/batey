@@ -53,10 +53,22 @@ impl EmptyCatalog {
 
 pub type FetchFuture<'a> = Pin<Box<dyn Future<Output = anyhow::Result<Vec<u8>>> + Send + 'a>>;
 
+/// Callback invoked as chunks arrive during a download: `(downloaded_bytes, total_bytes)`.
+pub type ProgressReporter = Arc<dyn Fn(u64, Option<u64>) + Send + Sync>;
+
 /// The one place this subsystem touches the network. It is a trait so every
 /// registry, install, and update test runs against local fixtures.
 pub trait HttpFetch: Send + Sync + 'static {
     fn fetch(&self, url: String, max_bytes: u64) -> FetchFuture<'_>;
+
+    fn fetch_with_progress(
+        &self,
+        url: String,
+        max_bytes: u64,
+        _on_progress: Option<ProgressReporter>,
+    ) -> FetchFuture<'_> {
+        self.fetch(url, max_bytes)
+    }
 }
 
 /// The real client. TLS trust anchors are compiled in, so no system
@@ -80,29 +92,50 @@ impl HttpsFetch {
 
 impl HttpFetch for HttpsFetch {
     fn fetch(&self, url: String, max_bytes: u64) -> FetchFuture<'_> {
+        self.fetch_with_progress(url, max_bytes, None)
+    }
+
+    fn fetch_with_progress(
+        &self,
+        url: String,
+        max_bytes: u64,
+        on_progress: Option<ProgressReporter>,
+    ) -> FetchFuture<'_> {
         Box::pin(async move {
             anyhow::ensure!(
                 super::manifest::is_https(&url),
                 "Registry downloads use https only, but the URL was '{url}'"
             );
-            let response = self.client.get(&url).send().await?;
+            let mut response = self.client.get(&url).send().await?;
             let status = response.status();
             anyhow::ensure!(
                 status.is_success(),
                 "Download of {url} failed with {status}"
             );
-            if let Some(length) = response.content_length() {
+            let total_bytes = response.content_length();
+            if let Some(length) = total_bytes {
                 anyhow::ensure!(
                     length <= max_bytes,
                     "Download of {url} is {length} bytes, over the {max_bytes} byte limit"
                 );
             }
-            let body = response.bytes().await?;
-            anyhow::ensure!(
-                body.len() as u64 <= max_bytes,
-                "Download of {url} is over the {max_bytes} byte limit"
-            );
-            Ok(body.to_vec())
+            if let Some(ref reporter) = on_progress {
+                reporter(0, total_bytes);
+            }
+            let mut downloaded: u64 = 0;
+            let mut body = Vec::with_capacity(total_bytes.unwrap_or(0).min(max_bytes) as usize);
+            while let Some(chunk) = response.chunk().await? {
+                downloaded = downloaded.saturating_add(chunk.len() as u64);
+                anyhow::ensure!(
+                    downloaded <= max_bytes,
+                    "Download of {url} is over the {max_bytes} byte limit"
+                );
+                body.extend_from_slice(&chunk);
+                if let Some(ref reporter) = on_progress {
+                    reporter(downloaded, total_bytes);
+                }
+            }
+            Ok(body)
         })
     }
 }
@@ -337,9 +370,14 @@ pub(crate) mod testing {
 
     /// An `HttpFetch` backed by fixtures. Every registry test uses it, so no
     /// test reaches the public registry.
+    type StreamEntry = (Vec<Vec<u8>>, Option<u64>);
+
+    /// An `HttpFetch` backed by fixtures. Every registry test uses it, so no
+    /// test reaches the public registry.
     #[derive(Default)]
     pub struct FixtureFetch {
         responses: Mutex<HashMap<String, anyhow::Result<Vec<u8>>>>,
+        streams: Mutex<HashMap<String, StreamEntry>>,
         pub calls: AtomicUsize,
     }
 
@@ -353,6 +391,19 @@ pub(crate) mod testing {
                 .lock()
                 .unwrap()
                 .insert(url.to_string(), Ok(body.into()));
+            self
+        }
+
+        pub fn with_stream(
+            self,
+            url: &str,
+            chunks: Vec<Vec<u8>>,
+            total_bytes: Option<u64>,
+        ) -> Self {
+            self.streams
+                .lock()
+                .unwrap()
+                .insert(url.to_string(), (chunks, total_bytes));
             self
         }
 
@@ -385,12 +436,60 @@ pub(crate) mod testing {
 
     impl HttpFetch for FixtureFetch {
         fn fetch(&self, url: String, max_bytes: u64) -> FetchFuture<'_> {
+            self.fetch_with_progress(url, max_bytes, None)
+        }
+
+        fn fetch_with_progress(
+            &self,
+            url: String,
+            max_bytes: u64,
+            on_progress: Option<ProgressReporter>,
+        ) -> FetchFuture<'_> {
             self.calls.fetch_add(1, Ordering::SeqCst);
+
+            let stream_entry = self.streams.lock().unwrap().get(&url).cloned();
+            if let Some((chunks, total_bytes)) = stream_entry {
+                return Box::pin(async move {
+                    if let Some(total) = total_bytes {
+                        if total > max_bytes {
+                            return Err(anyhow::anyhow!(
+                                "Download of {url} is {total} bytes, over the {max_bytes} byte limit"
+                            ));
+                        }
+                    }
+                    if let Some(ref reporter) = on_progress {
+                        reporter(0, total_bytes);
+                    }
+                    let mut downloaded: u64 = 0;
+                    let mut body = Vec::new();
+                    for chunk in chunks {
+                        downloaded = downloaded.saturating_add(chunk.len() as u64);
+                        if downloaded > max_bytes {
+                            return Err(anyhow::anyhow!(
+                                "Download of {url} is over the {max_bytes} byte limit"
+                            ));
+                        }
+                        body.extend_from_slice(&chunk);
+                        if let Some(ref reporter) = on_progress {
+                            reporter(downloaded, total_bytes);
+                        }
+                    }
+                    Ok(body)
+                });
+            }
+
             let answer = match self.responses.lock().unwrap().get(&url) {
                 Some(Ok(body)) if body.len() as u64 > max_bytes => {
                     Err(anyhow::anyhow!("Download of {url} is over the byte limit"))
                 }
-                Some(Ok(body)) => Ok(body.clone()),
+                Some(Ok(body)) => {
+                    let body_len = body.len() as u64;
+                    if let Some(ref reporter) = on_progress {
+                        reporter(0, Some(body_len));
+                        reporter(body_len, Some(body_len));
+                    }
+                    Ok(body.clone())
+                }
                 Some(Err(error)) => Err(anyhow::anyhow!("{error}")),
                 None => Err(anyhow::anyhow!("No fixture for {url}")),
             };
@@ -542,6 +641,41 @@ mod tests {
         );
         assert!(!error.contains("secret"));
         assert!(!error.contains("token"));
+    }
+
+    #[tokio::test]
+    async fn fixture_fetch_streams_chunks_with_progress_and_enforces_limit() {
+        let chunks = vec![b"chunk1".to_vec(), b"chunk2".to_vec(), b"chunk3".to_vec()];
+        let progress_records = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let records = progress_records.clone();
+        let reporter = Arc::new(move |dl, total| {
+            records.lock().unwrap().push((dl, total));
+        });
+
+        let http = FixtureFetch::new().with_stream("https://example.com/test", chunks, Some(18));
+        let body = http
+            .fetch_with_progress("https://example.com/test".into(), 100, Some(reporter))
+            .await
+            .unwrap();
+        assert_eq!(body, b"chunk1chunk2chunk3");
+
+        let recorded = progress_records.lock().unwrap().clone();
+        assert_eq!(
+            recorded,
+            vec![(0, Some(18)), (6, Some(18)), (12, Some(18)), (18, Some(18))]
+        );
+
+        let chunks_over = vec![vec![0u8; 50], vec![0u8; 60]];
+        let http_over =
+            FixtureFetch::new().with_stream("https://example.com/over", chunks_over, None);
+        let err = http_over
+            .fetch_with_progress("https://example.com/over".into(), 100, None)
+            .await;
+        assert!(err.is_err());
+        assert!(err
+            .unwrap_err()
+            .to_string()
+            .contains("over the 100 byte limit"));
     }
 
     #[test]

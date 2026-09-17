@@ -190,6 +190,11 @@ pub fn router(state: AppState) -> Router {
             get(agents::agents).post(agents::create_agent),
         )
         .route("/api/agents/validate", post(agents::validate_agent))
+        .route("/api/agents/operations", get(agents::list_agent_operations))
+        .route(
+            "/api/agents/operations/:id",
+            get(agents::get_agent_operation),
+        )
         .route("/api/agents/registry", get(agents::registry))
         .route(
             "/api/agents/registry/refresh",

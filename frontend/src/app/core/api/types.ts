@@ -112,6 +112,35 @@ export interface RegistryCatalog {
   agents: RegistryEntry[];
 }
 
+export type AgentOperationKind = 'install' | 'update';
+
+export type AgentOperationState = 'running' | 'succeeded' | 'failed';
+
+export type AgentOperationStage =
+  | 'queued'
+  | 'resolving'
+  | 'downloading'
+  | 'verifying'
+  | 'extracting'
+  | 'preparing'
+  | 'finalizing'
+  | 'completed'
+  | 'failed';
+
+export interface AgentOperation {
+  id: string;
+  kind: AgentOperationKind;
+  agent_id: string;
+  registry_id: string;
+  state: AgentOperationState;
+  stage: AgentOperationStage;
+  bytes_downloaded: number;
+  total_bytes?: number | null;
+  error?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface InstallRegistryAgentInput {
   registry_id: string;
   agent_id?: string;
@@ -125,10 +154,11 @@ export interface InstallRegistryAgentInput {
 
 export interface UpdateOutcome {
   updated: boolean;
-  from_version: string;
-  to_version: string;
-  agent: AgentSummary;
+  from_version?: string;
+  to_version?: string;
+  agent?: AgentSummary | null;
   previous_install_dir?: string | null;
+  operation?: AgentOperation;
 }
 
 export interface AgentEnvPresence { name: string; present: boolean; }

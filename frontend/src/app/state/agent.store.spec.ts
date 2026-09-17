@@ -2,7 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { signal } from '@angular/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiService } from '../core/api/api.service';
-import type { AgentAuthState, AgentSummary, ProtocolAuthElicitation, ProtocolAuthFlow } from '../core/api/types';
+import type { AgentOperation, AgentAuthState, AgentSummary, ProtocolAuthElicitation, ProtocolAuthFlow } from '../core/api/types';
 import { AgentStore } from './agent.store';
 import { ProjectStore } from './project.store';
 
@@ -11,8 +11,32 @@ function makeApi() {
     fetchAgents: vi.fn(async () => [] as AgentSummary[]),
     fetchRegistry: vi.fn(async () => ({ status: 'cached', source_url: 's', host: 'h', rejected: [], agents: [] })),
     refreshRegistry: vi.fn(async () => ({ status: 'fresh', source_url: 's', host: 'h', rejected: [], agents: [] })),
-    installRegistryAgent: vi.fn(async () => ({ id: 'native-agent' } as AgentSummary)),
-    updateRegistryAgent: vi.fn(async () => ({ updated: true, from_version: '1', to_version: '2', agent: { id: 'a' } as AgentSummary })),
+    installRegistryAgent: vi.fn(async () => ({
+      id: 'op-1',
+      kind: 'install',
+      agent_id: 'native-agent',
+      registry_id: 'native-agent',
+      state: 'succeeded',
+      stage: 'completed',
+      bytes_downloaded: 100,
+      total_bytes: 100,
+      created_at: '',
+      updated_at: '',
+    } as AgentOperation)),
+    updateRegistryAgent: vi.fn(async () => ({
+      id: 'op-2',
+      kind: 'update',
+      agent_id: 'native-agent',
+      registry_id: 'native-agent',
+      state: 'succeeded',
+      stage: 'completed',
+      bytes_downloaded: 100,
+      total_bytes: 100,
+      created_at: '',
+      updated_at: '',
+    } as AgentOperation)),
+    fetchAgentOperations: vi.fn(async () => [] as AgentOperation[]),
+    fetchAgentOperation: vi.fn(async (id: string) => ({ id, state: 'succeeded' } as AgentOperation)),
     removeAgent: vi.fn(async () => ({ id: 'a', deleted: true, retained_chats: 0 })),
     fetchAgentDetail: vi.fn(async () => ({ id: 'a', command: 'c', args: [], env: {} })),
     validateCustomAgent: vi.fn(async () => ({ valid: true, issues: [] })),
@@ -270,5 +294,86 @@ describe('AgentStore', () => {
     expect(api.updateAgentEnv).toHaveBeenCalledWith('codex', edits);
     // The stored response is presence only; values never enter frontend state.
     expect(JSON.stringify(store.envByAgent()['codex'])).not.toContain('secret');
+  });
+  it('polls active operations through stages until completion and refreshes installed catalog', async () => {
+    api.installRegistryAgent.mockResolvedValueOnce({
+      id: 'op-123',
+      kind: 'install',
+      agent_id: 'native-agent',
+      registry_id: 'native-agent',
+      state: 'running',
+      stage: 'downloading',
+      bytes_downloaded: 100,
+      total_bytes: 200,
+      error: null,
+      created_at: '',
+      updated_at: '',
+    });
+
+    api.fetchAgentOperation
+      .mockResolvedValueOnce({
+        id: 'op-123',
+        kind: 'install',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        state: 'running',
+        stage: 'extracting',
+        bytes_downloaded: 200,
+        total_bytes: 200,
+        error: null,
+        created_at: '',
+        updated_at: '',
+      })
+      .mockResolvedValueOnce({
+        id: 'op-123',
+        kind: 'install',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        state: 'succeeded',
+        stage: 'completed',
+        bytes_downloaded: 200,
+        total_bytes: 200,
+        error: null,
+        created_at: '',
+        updated_at: '',
+      });
+
+    const op = await store.installRegistryAgent({ registry_id: 'native-agent' });
+    expect(op.state).toBe('succeeded');
+    expect(store.operationsByRegistryId()['native-agent']?.state).toBe('succeeded');
+    expect(api.fetchAgents).toHaveBeenCalled();
+  });
+
+  it('surfaces operation failure and throws on failed operation', async () => {
+    api.installRegistryAgent.mockResolvedValueOnce({
+      id: 'op-fail',
+      kind: 'install',
+      agent_id: 'bad-agent',
+      registry_id: 'bad-agent',
+      state: 'running',
+      stage: 'downloading',
+      bytes_downloaded: 50,
+      total_bytes: 100,
+      error: null,
+      created_at: '',
+      updated_at: '',
+    });
+
+    api.fetchAgentOperation.mockResolvedValueOnce({
+      id: 'op-fail',
+      kind: 'install',
+      agent_id: 'bad-agent',
+      registry_id: 'bad-agent',
+      state: 'failed',
+      stage: 'failed',
+      bytes_downloaded: 50,
+      total_bytes: 100,
+      error: 'Corrupt archive payload',
+      created_at: '',
+      updated_at: '',
+    });
+
+    await expect(store.installRegistryAgent({ registry_id: 'bad-agent' })).rejects.toThrow('Corrupt archive payload');
+    expect(store.operationsByRegistryId()['bad-agent']?.state).toBe('failed');
   });
 });

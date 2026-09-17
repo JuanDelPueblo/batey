@@ -10,6 +10,8 @@
 use super::custom::{CustomAgentInput, ValidationIssue, ValidationReport};
 use super::definition::{AgentDisplay, AgentSource, AgentSummary, DEFAULT_IDLE_TIMEOUT_SECS};
 use super::installed::{InstalledAgent, RegistrySnapshot, RuntimeProbe};
+use super::operations::{AgentOperationKind, AgentOperationStage, AgentOperations};
+use super::registry::client;
 use super::registry::{
     install, manifest::RegistryRejection, DistributionKind, PlatformTarget, RegistryAgent,
     RegistryClient,
@@ -222,6 +224,7 @@ pub struct AgentManager {
     probe: Arc<dyn RuntimeProbe>,
     /// One catalog mutation at a time, so two installs cannot race on an id.
     mutation_lock: tokio::sync::Mutex<()>,
+    operations: Arc<AgentOperations>,
 }
 
 impl std::fmt::Debug for AgentManager {
@@ -248,7 +251,12 @@ impl AgentManager {
             install_root,
             probe,
             mutation_lock: tokio::sync::Mutex::new(()),
+            operations: Arc::new(AgentOperations::new()),
         })
+    }
+
+    pub fn operations(&self) -> &Arc<AgentOperations> {
+        &self.operations
     }
 
     pub fn catalog(&self) -> &Arc<AgentCatalog> {
@@ -433,12 +441,45 @@ impl AgentManager {
 
     /// Installs one registry agent under a Batey catalog id.
     pub async fn install(&self, request: InstallRequest) -> AgentResult<AgentSummary> {
-        let _guard = self.mutation_lock.lock().await;
+        let registry_id = request.registry_id.trim().to_string();
+        let agent_id = request
+            .agent_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or(&registry_id)
+            .to_string();
+        let op = self.operations.start(
+            AgentOperationKind::Install,
+            agent_id.clone(),
+            registry_id.clone(),
+        )?;
+        self.install_with_operation(request, &op.id).await
+    }
+
+    /// Installs one registry agent under a Batey catalog id, reporting
+    /// progress through an active `AgentOperation`.
+    pub async fn install_with_operation(
+        &self,
+        request: InstallRequest,
+        op_id: &str,
+    ) -> AgentResult<AgentSummary> {
+        let _guard = match self.mutation_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.operations
+                    .set_stage(op_id, AgentOperationStage::Queued);
+                self.mutation_lock.lock().await
+            }
+        };
+        self.operations
+            .set_stage(op_id, AgentOperationStage::Resolving);
+
         let registry_id = request.registry_id.trim().to_string();
         if registry_id.is_empty() {
-            return Err(AgentError::Invalid(
-                "An install needs a registry id.".into(),
-            ));
+            let err = AgentError::Invalid("An install needs a registry id.".into());
+            self.operations.fail(op_id, &err.to_string());
+            return Err(err);
         }
         let agent_id = request
             .agent_id
@@ -447,21 +488,64 @@ impl AgentManager {
             .filter(|id| !id.is_empty())
             .unwrap_or(&registry_id)
             .to_string();
-        validate_catalog_id(&agent_id)?;
-        self.ensure_id_is_free(&agent_id)?;
+        if let Err(err) = validate_catalog_id(&agent_id) {
+            self.operations.fail(op_id, &err.to_string());
+            return Err(err);
+        }
+        if let Err(err) = self.ensure_id_is_free(&agent_id) {
+            self.operations.fail(op_id, &err.to_string());
+            return Err(err);
+        }
 
-        let agent = self.resolve_registry_agent(&registry_id).await?;
-        let plan = install::select(&agent, request.distribution, PlatformTarget::host())
-            .map_err(|error| AgentError::Invalid(error.to_string()))?;
-        let prepared = install::prepare(
+        let agent = match self.resolve_registry_agent(&registry_id).await {
+            Ok(agent) => agent,
+            Err(err) => {
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+        let plan = match install::select(&agent, request.distribution, PlatformTarget::host()) {
+            Ok(plan) => plan,
+            Err(error) => {
+                let err = AgentError::Invalid(error.to_string());
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+
+        let ops_stage = self.operations.clone();
+        let op_id_stage = op_id.to_string();
+        let on_stage: Arc<dyn Fn(AgentOperationStage) + Send + Sync> = Arc::new(move |stage| {
+            ops_stage.set_stage(&op_id_stage, stage);
+        });
+
+        let ops_prog = self.operations.clone();
+        let op_id_prog = op_id.to_string();
+        let on_progress: client::ProgressReporter = Arc::new(move |downloaded, total| {
+            ops_prog.update_progress(&op_id_prog, downloaded, total);
+        });
+
+        let prepared = match install::prepare_with_progress(
             &agent,
             plan,
             &*self.registry.http(),
             &self.install_root,
             &agent_id,
+            Some(on_stage),
+            Some(on_progress),
         )
         .await
-        .map_err(|error| AgentError::Invalid(error.to_string()))?;
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let err = AgentError::Invalid(error.to_string());
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+
+        self.operations
+            .set_stage(op_id, AgentOperationStage::Finalizing);
 
         let mut record = InstalledAgent::new(
             agent_id.clone(),
@@ -476,8 +560,6 @@ impl AgentManager {
         record.args = prepared.args;
         record.env = prepared.env;
         record.idle_timeout_secs = request.idle_timeout.unwrap_or(DEFAULT_IDLE_TIMEOUT_SECS);
-        // A registry entry never implies a usage provider. Only an explicit
-        // request attaches one.
         record.usage_provider = request
             .usage_provider
             .map(|provider| provider.trim().to_string())
@@ -496,14 +578,21 @@ impl AgentManager {
             installed_at: chrono::Utc::now().to_rfc3339(),
         });
 
-        self.store.insert_agent(&record)?;
+        if let Err(err) = self.store.insert_agent(&record) {
+            let agent_err = AgentError::from(err);
+            self.operations.fail(op_id, &agent_err.to_string());
+            return Err(agent_err);
+        }
         let definition = record.to_definition(&*self.probe);
         let summary = definition.summary();
         if let Err(collision) = self.catalog.insert(definition) {
-            // The durable row must not outlive a failed catalog insert.
             let _ = self.store.delete_agent(&record.id);
-            return Err(collision.into());
+            let agent_err = AgentError::from(collision);
+            self.operations.fail(op_id, &agent_err.to_string());
+            return Err(agent_err);
         }
+
+        self.operations.succeed_with_summary(op_id, summary.clone());
         Ok(summary)
     }
 
@@ -511,7 +600,6 @@ impl AgentManager {
     /// newer version. The catalog entry changes only after the replacement is
     /// on disk, so a failed update leaves the working install in place.
     pub async fn update(&self, id: &str) -> AgentResult<UpdateOutcome> {
-        let _guard = self.mutation_lock.lock().await;
         let record = self.require_record(id)?;
         if record.source != AgentSource::Registry {
             return Err(AgentError::Conflict(format!(
@@ -522,52 +610,139 @@ impl AgentManager {
         let snapshot = record.registry.clone().ok_or_else(|| {
             AgentError::Conflict(format!("Agent '{id}' has no registry snapshot to compare."))
         })?;
+        let op = self.operations.start(
+            AgentOperationKind::Update,
+            id.to_string(),
+            snapshot.registry_id.clone(),
+        )?;
+        self.update_with_operation(id, &op.id).await
+    }
+
+    /// Updates one registry-installed agent, reporting progress through an
+    /// active `AgentOperation`.
+    pub async fn update_with_operation(&self, id: &str, op_id: &str) -> AgentResult<UpdateOutcome> {
+        let _guard = match self.mutation_lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                self.operations
+                    .set_stage(op_id, AgentOperationStage::Queued);
+                self.mutation_lock.lock().await
+            }
+        };
+        self.operations
+            .set_stage(op_id, AgentOperationStage::Resolving);
+
+        let record = match self.require_record(id) {
+            Ok(record) => record,
+            Err(err) => {
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+        if record.source != AgentSource::Registry {
+            let err = AgentError::Conflict(format!(
+                "Agent '{id}' comes from the {} source, so it has no registry update.",
+                record.source
+            ));
+            self.operations.fail(op_id, &err.to_string());
+            return Err(err);
+        }
+        let snapshot = match record.registry.clone() {
+            Some(snapshot) => snapshot,
+            None => {
+                let err = AgentError::Conflict(format!(
+                    "Agent '{id}' has no registry snapshot to compare."
+                ));
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
 
         // An update is the one operation that should see the newest registry.
         let (cached, error) = self.registry.refresh_or_cached().await;
-        let cached = cached.ok_or_else(|| {
-            AgentError::Unavailable(format!(
-                "The ACP Registry is unavailable: {}",
-                error
-                    .map(|error| error.to_string())
-                    .unwrap_or_else(|| "nothing is cached".into())
-            ))
-        })?;
-        let agent = cached
-            .catalog
-            .agent(&snapshot.registry_id)
-            .cloned()
-            .ok_or_else(|| {
-                AgentError::NotFound(format!(
+        let cached = match cached {
+            Some(cached) => cached,
+            None => {
+                let err = AgentError::Unavailable(format!(
+                    "The ACP Registry is unavailable: {}",
+                    error
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "nothing is cached".into())
+                ));
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+        let agent = match cached.catalog.agent(&snapshot.registry_id).cloned() {
+            Some(agent) => agent,
+            None => {
+                let err = AgentError::NotFound(format!(
                     "'{}' is no longer in the registry",
                     snapshot.registry_id
-                ))
-            })?;
+                ));
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
 
         if agent.version == snapshot.registry_version {
-            return Ok(UpdateOutcome {
+            let outcome = UpdateOutcome {
                 updated: false,
                 from_version: snapshot.registry_version.clone(),
                 to_version: agent.version,
                 agent: record.to_definition(&*self.probe).summary(),
                 previous_install_dir: None,
-            });
+            };
+            self.operations.succeed_with_outcome(op_id, outcome.clone());
+            return Ok(outcome);
         }
 
         // Keep the distribution kind the user installed with.
         let preferred = Some(snapshot.distribution.kind());
-        let plan = install::select(&agent, preferred, PlatformTarget::host())
+        let plan = match install::select(&agent, preferred, PlatformTarget::host())
             .or_else(|_| install::select(&agent, None, PlatformTarget::host()))
-            .map_err(|error| AgentError::Invalid(error.to_string()))?;
-        let prepared = install::prepare(
+        {
+            Ok(plan) => plan,
+            Err(error) => {
+                let err = AgentError::Invalid(error.to_string());
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+
+        let ops_stage = self.operations.clone();
+        let op_id_stage = op_id.to_string();
+        let on_stage: Arc<dyn Fn(AgentOperationStage) + Send + Sync> = Arc::new(move |stage| {
+            ops_stage.set_stage(&op_id_stage, stage);
+        });
+
+        let ops_prog = self.operations.clone();
+        let op_id_prog = op_id.to_string();
+        let on_progress: client::ProgressReporter = Arc::new(move |downloaded, total| {
+            ops_prog.update_progress(&op_id_prog, downloaded, total);
+        });
+
+        let prepared = match install::prepare_with_progress(
             &agent,
             plan,
             &*self.registry.http(),
             &self.install_root,
             &record.id,
+            Some(on_stage),
+            Some(on_progress),
         )
         .await
-        .map_err(|error| AgentError::Invalid(error.to_string()))?;
+        {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let err = AgentError::Invalid(error.to_string());
+                self.operations.fail(op_id, &err.to_string());
+                return Err(err);
+            }
+        };
+
+        self.operations
+            .set_stage(op_id, AgentOperationStage::Finalizing);
 
         let previous_install_dir = snapshot.install_dir.clone();
         let mut updated = record.clone();
@@ -587,19 +762,29 @@ impl AgentManager {
         });
         updated.touch();
 
-        self.store.update_agent(&updated)?;
+        if let Err(err) = self.store.update_agent(&updated) {
+            let agent_err = AgentError::from(err);
+            self.operations.fail(op_id, &agent_err.to_string());
+            return Err(agent_err);
+        }
         let definition = updated.to_definition(&*self.probe);
         let summary = definition.summary();
-        self.catalog.replace(definition)?;
+        if let Err(err) = self.catalog.replace(definition) {
+            let agent_err = AgentError::from(err);
+            self.operations.fail(op_id, &agent_err.to_string());
+            return Err(agent_err);
+        }
 
-        Ok(UpdateOutcome {
+        let outcome = UpdateOutcome {
             updated: true,
             from_version: snapshot.registry_version,
             to_version: agent.version,
             agent: summary,
             previous_install_dir: previous_install_dir
                 .filter(|previous| Some(previous.as_str()) != updated_install_dir(&updated)),
-        })
+        };
+        self.operations.succeed_with_outcome(op_id, outcome.clone());
+        Ok(outcome)
     }
 
     /// Removes one installed agent.
@@ -815,7 +1000,7 @@ impl AgentManager {
         })
     }
 
-    fn require_record(&self, id: &str) -> AgentResult<InstalledAgent> {
+    pub fn require_record(&self, id: &str) -> AgentResult<InstalledAgent> {
         match self.store.installed_agent(id)? {
             Some(record) => Ok(record),
             None => match self.catalog.source_of(id) {
@@ -828,7 +1013,7 @@ impl AgentManager {
         }
     }
 
-    fn ensure_id_is_free(&self, id: &str) -> AgentResult<()> {
+    pub fn ensure_id_is_free(&self, id: &str) -> AgentResult<()> {
         if let Some(existing) = self.catalog.source_of(id) {
             return Err(AgentError::Conflict(
                 CatalogCollision {
@@ -845,6 +1030,10 @@ impl AgentManager {
             )));
         }
         Ok(())
+    }
+
+    pub fn validate_catalog_id(id: &str) -> AgentResult<()> {
+        validate_catalog_id(id)
     }
 }
 
@@ -867,7 +1056,7 @@ fn display_from_registry(agent: &RegistryAgent) -> AgentDisplay {
 
 /// The catalog id rules, shared with the agents file so a definition can move
 /// between the two without a rename.
-fn validate_catalog_id(id: &str) -> AgentResult<()> {
+pub fn validate_catalog_id(id: &str) -> AgentResult<()> {
     if id.is_empty()
         || id.len() > super::custom::MAX_ID_LENGTH
         || !id
@@ -1946,5 +2135,66 @@ mod tests {
                 .registry_version,
             "1.0.0"
         );
+    }
+
+    #[tokio::test]
+    async fn install_with_operation_updates_stages_and_succeeds() {
+        let harness = harness();
+        let op = harness
+            .manager
+            .operations()
+            .start(
+                AgentOperationKind::Install,
+                "example-acp".into(),
+                "example-acp".into(),
+            )
+            .unwrap();
+
+        let summary = harness
+            .manager
+            .install_with_operation(
+                InstallRequest {
+                    registry_id: "example-acp".into(),
+                    ..InstallRequest::default()
+                },
+                &op.id,
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(summary.id, "example-acp");
+        let op_state = harness.manager.operations().get(&op.id).unwrap();
+        assert_eq!(
+            op_state.state,
+            super::super::operations::AgentOperationState::Succeeded
+        );
+        assert_eq!(op_state.stage, AgentOperationStage::Completed);
+        assert!(op_state.downloaded_bytes > 0);
+    }
+
+    #[tokio::test]
+    async fn concurrent_operations_on_same_agent_are_rejected() {
+        let harness = harness();
+        let _op1 = harness
+            .manager
+            .operations()
+            .start(
+                AgentOperationKind::Install,
+                "example-acp".into(),
+                "example-acp".into(),
+            )
+            .unwrap();
+
+        let err = harness
+            .manager
+            .operations()
+            .start(
+                AgentOperationKind::Install,
+                "example-acp".into(),
+                "example-acp".into(),
+            )
+            .unwrap_err();
+
+        assert!(matches!(err, AgentError::Conflict(_)));
     }
 }

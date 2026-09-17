@@ -8,7 +8,7 @@ import { MatInputModule } from '@angular/material/input';
 import { MatProgressBarModule } from '@angular/material/progress-bar';
 import { MatSelectModule } from '@angular/material/select';
 import { MatTooltipModule } from '@angular/material/tooltip';
-import type { DistributionKind, RegistryEntry } from '../../core/api/types';
+import type { AgentOperation, DistributionKind, RegistryEntry } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
 import { ConfirmDialogComponent } from '../confirm-dialog/confirm-dialog';
 
@@ -32,10 +32,17 @@ export class RegistryBrowserComponent {
   private readonly dialog = inject(MatDialog);
 
   readonly query = signal('');
-  readonly busy = signal<string | null>(null);
+  readonly cardErrorsByEntry = signal<Record<string, string>>({});
   readonly actionError = signal('');
   readonly notice = signal('');
   readonly distributionByEntry = signal<Record<string, DistributionKind>>({});
+  readonly operationsByRegistryId = this.state.operationsByRegistryId ?? signal({});
+
+  readonly busy = computed(() => {
+    const ops = this.operationsByRegistryId?.() ?? {};
+    const active = Object.values(ops).find((op) => op.state === 'running');
+    return active ? active.registry_id : null;
+  });
 
   readonly catalog = this.state.registry;
   readonly loading = this.state.registryLoading;
@@ -47,6 +54,79 @@ export class RegistryBrowserComponent {
       [entry.name, entry.id, entry.description].some((value) => value.toLowerCase().includes(query)),
     );
   });
+
+  operationFor(entry: RegistryEntry): AgentOperation | undefined {
+    return this.operationsByRegistryId?.()?.[entry.id];
+  }
+
+  isBusy(entry: RegistryEntry): boolean {
+    const op = this.operationFor(entry);
+    return op?.state === 'running';
+  }
+
+  cardError(entryId: string): string | null {
+    return this.cardErrorsByEntry()[entryId] ?? null;
+  }
+
+  setCardError(entryId: string, message: string): void {
+    this.cardErrorsByEntry.update((current) => ({ ...current, [entryId]: message }));
+    this.actionError.set(message);
+  }
+
+  clearCardError(entryId: string): void {
+    this.cardErrorsByEntry.update((current) => {
+      if (!(entryId in current)) return current;
+      const next = { ...current };
+      delete next[entryId];
+      return next;
+    });
+    this.actionError.set('');
+  }
+
+  stageLabel(op: AgentOperation): string {
+    switch (op.stage) {
+      case 'queued':
+        return 'Queued...';
+      case 'resolving':
+        return 'Resolving...';
+      case 'downloading':
+        if (op.total_bytes && op.total_bytes > 0) {
+          const mbDownloaded = (op.bytes_downloaded / (1024 * 1024)).toFixed(1);
+          const mbTotal = (op.total_bytes / (1024 * 1024)).toFixed(1);
+          return `Downloading (${mbDownloaded} / ${mbTotal} MB)...`;
+        }
+        return 'Downloading...';
+      case 'verifying':
+        return 'Verifying...';
+      case 'extracting':
+        return 'Extracting...';
+      case 'preparing':
+        return 'Preparing...';
+      case 'finalizing':
+        return 'Finalizing...';
+      case 'completed':
+        return 'Completed';
+      case 'failed':
+        return 'Failed';
+      default:
+        return 'Working...';
+    }
+  }
+
+  progressMode(op: AgentOperation): 'determinate' | 'indeterminate' {
+    return op.total_bytes && op.total_bytes > 0 ? 'determinate' : 'indeterminate';
+  }
+
+  progressValue(op: AgentOperation): number {
+    if (op.total_bytes && op.total_bytes > 0) {
+      return Math.min(100, Math.round((op.bytes_downloaded / op.total_bytes) * 100));
+    }
+    return 0;
+  }
+
+  progressPercent(op: AgentOperation): number {
+    return this.progressValue(op);
+  }
 
   async refresh(): Promise<void> {
     this.actionError.set('');
@@ -64,8 +144,7 @@ export class RegistryBrowserComponent {
   async install(entry: RegistryEntry): Promise<void> {
     const distribution = this.distributionFor(entry);
     if (!distribution) return;
-    this.busy.set(entry.id);
-    this.actionError.set('');
+    this.clearCardError(entry.id);
     this.notice.set('');
     try {
       await this.state.installRegistryAgent({
@@ -74,29 +153,30 @@ export class RegistryBrowserComponent {
         display_name: entry.name,
       });
       this.notice.set(`Installed ${entry.name}.`);
+      this.clearCardError(entry.id);
+      setTimeout(() => this.state.clearOperation(entry.id), 2000);
     } catch (error: unknown) {
-      this.actionError.set(this.message(error, `Failed to install ${entry.name}`));
-    } finally {
-      this.busy.set(null);
+      this.state.clearOperation(entry.id);
+      this.setCardError(entry.id, this.message(error, `Failed to install ${entry.name}`));
     }
   }
 
   async update(entry: RegistryEntry): Promise<void> {
     const id = entry.installed_as ?? entry.id;
-    this.busy.set(entry.id);
-    this.actionError.set('');
+    this.clearCardError(entry.id);
     this.notice.set('');
     try {
       const outcome = await this.state.updateAgent(id);
       this.notice.set(
-        outcome.updated
-          ? `Updated ${entry.name} to v${outcome.to_version}.`
+        outcome?.updated
+          ? `Updated ${entry.name}${outcome.to_version ? ` to v${outcome.to_version}` : ''}.`
           : `${entry.name} is already at the newest version.`,
       );
+      this.clearCardError(entry.id);
+      setTimeout(() => this.state.clearOperation(entry.id), 2000);
     } catch (error: unknown) {
-      this.actionError.set(this.message(error, `Failed to update ${entry.name}`));
-    } finally {
-      this.busy.set(null);
+      this.state.clearOperation(entry.id);
+      this.setCardError(entry.id, this.message(error, `Failed to update ${entry.name}`));
     }
   }
 
@@ -108,16 +188,13 @@ export class RegistryBrowserComponent {
       'Uninstall',
     );
     if (!confirmed) return;
-    this.busy.set(entry.id);
-    this.actionError.set('');
+    this.clearCardError(entry.id);
     this.notice.set('');
     try {
       await this.state.removeAgent(id);
       this.notice.set(`Uninstalled ${entry.name}.`);
     } catch (error: unknown) {
-      this.actionError.set(this.message(error, `Failed to uninstall ${entry.name}`));
-    } finally {
-      this.busy.set(null);
+      this.setCardError(entry.id, this.message(error, `Failed to uninstall ${entry.name}`));
     }
   }
 

@@ -75,6 +75,30 @@
               <mat-icon inline>block</mat-icon> {{ entry.unsupported_reason }}
             </p>
           }
+          @if (operationFor(entry); as op) {
+            @if (op.state === 'running' || op.state === 'succeeded') {
+              <div class="entry-progress" role="status">
+                <div class="progress-labels">
+                  <span class="stage-text">{{ stageLabel(op) }}</span>
+                  @if (op.total_bytes && op.total_bytes > 0) {
+                    <span class="percentage-text">{{ progressPercent(op) }}%</span>
+                  }
+                </div>
+                <mat-progress-bar
+                  [mode]="progressMode(op)"
+                  [value]="progressValue(op)"
+                  [attr.aria-label]="stageLabel(op)"
+                />
+              </div>
+            }
+          }
+
+          @if (cardError(entry.id); as cardErr) {
+            <p class="entry-error" role="alert">
+              <mat-icon inline>error</mat-icon> {{ cardErr }}
+            </p>
+          }
+
           <div class="entry-actions">
             @if (entry.installed_as) {
               <span class="installed">
@@ -83,11 +107,11 @@
               </span>
               <span class="spacer"></span>
               @if (entry.update_available) {
-                <button mat-flat-button type="button" (click)="update(entry)" [disabled]="busy() === entry.id">
+                <button mat-flat-button type="button" (click)="update(entry)" [disabled]="isBusy(entry)">
                   Update
                 </button>
               }
-              <button mat-stroked-button type="button" class="destructive-text" (click)="uninstall(entry)" [disabled]="busy() === entry.id">
+              <button mat-stroked-button type="button" class="destructive-text" (click)="uninstall(entry)" [disabled]="isBusy(entry)">
                 Uninstall
               </button>
             } @else if (!entry.unsupported_reason) {
@@ -96,6 +120,7 @@
                   <mat-label>Distribution</mat-label>
                   <mat-select
                     [value]="distributionFor(entry)"
+                    [disabled]="isBusy(entry)"
                     (selectionChange)="setDistribution(entry, $event.value)"
                   >
                     @for (kind of entry.distributions; track kind) {
@@ -111,7 +136,7 @@
                 mat-flat-button
                 type="button"
                 (click)="install(entry)"
-                [disabled]="busy() === entry.id || !distributionFor(entry)"
+                [disabled]="isBusy(entry) || !distributionFor(entry)"
               >
                 Install
               </button>

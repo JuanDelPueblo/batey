@@ -468,6 +468,74 @@ describe('fake backend seed history', () => {
     assert.equal(state.agent(installed.id), undefined);
   });
 
+  it('T145: tracks install and update progress operations with concurrency, failure, and stages', async () => {
+    const state = new FakeState();
+
+    // 1. Determinate download progression for binary agent
+    const op1 = state.startInstallOperation({ registry_id: 'native-agent' }, { autoAdvance: false });
+    assert.equal(op1.kind, 'install');
+    assert.equal(op1.state, 'running');
+    assert.equal(op1.stage, 'resolving');
+    assert.equal(op1.agent_id, 'native-agent');
+
+    // Concurrent operation on same agent is rejected with 409
+    assert.throws(
+      () => state.startInstallOperation({ registry_id: 'native-agent' }, { autoAdvance: false }),
+      (err) => err.status === 409,
+    );
+
+    // Step 1: downloading with byte progress (determinate)
+    const s1 = state.stepOperation(op1.id);
+    assert.equal(s1.stage, 'downloading');
+    assert.equal(s1.bytes_downloaded, 2621440);
+    assert.equal(s1.total_bytes, 10485760);
+
+    // 2. Two independent operations can run concurrently
+    const op2 = state.startInstallOperation(
+      { registry_id: 'example-acp', agent_id: 'second-agent' },
+      { autoAdvance: false },
+    );
+    assert.equal(op2.agent_id, 'second-agent');
+    assert.equal(op2.state, 'running');
+    // Indeterminate stage: total_bytes is null
+    const s2_1 = state.stepOperation(op2.id);
+    assert.equal(s2_1.stage, 'preparing');
+    assert.equal(s2_1.total_bytes, null);
+
+    // Advance op1 to completion
+    const s1_final = state.advanceOperationToCompletion(op1.id);
+    assert.equal(s1_final.state, 'succeeded');
+    assert.equal(s1_final.stage, 'completed');
+    assert.ok(state.agent('native-agent'));
+
+    // Complete op2
+    state.advanceOperationToCompletion(op2.id);
+    assert.ok(state.agent('second-agent'));
+
+    // 3. Failure scenario
+    const failOp = state.startInstallOperation({ registry_id: 'failing-agent' }, { autoAdvance: false });
+    state.stepOperation(failOp.id); // downloading
+    const failedState = state.stepOperation(failOp.id);
+    assert.equal(failedState.state, 'failed');
+    assert.equal(failedState.stage, 'failed');
+    assert.ok(failedState.error.includes('Failed to download binary'));
+    assert.equal(state.agent('failing-agent'), undefined);
+
+    // 4. Update operation
+    const updateOp = state.startUpdateOperation('example-acp', { autoAdvance: false });
+    assert.equal(updateOp.kind, 'update');
+    assert.equal(updateOp.state, 'running');
+    state.advanceOperationToCompletion(updateOp.id);
+    const updatedAgent = state.agent('example-acp');
+    assert.equal(updatedAgent.display.version, '1.2.0');
+
+    // 5. Operations query listing and get
+    const list = state.listAgentOperations();
+    assert.ok(list.length >= 4);
+    assert.ok(list.some((o) => o.id === op1.id));
+    assert.equal(state.getAgentOperation(op1.id).id, op1.id);
+  });
+
   it('exposes authenticated custom detail and edits a Batey-managed agent', () => {
     const state = new FakeState();
     const detail = state.agentDetail('my-custom');

@@ -22,6 +22,7 @@ describe('Batey routes', () => {
       loadAgents: vi.fn(async () => undefined),
       loadRegistry: vi.fn(async () => undefined),
       loadAgentAuth: vi.fn(async () => undefined),
+      operationsByRegistryId: signal({}),
       reducersByChat: signal({}),
       configOptionsByChat: signal({}),
       connectingChats: signal(new Set<string>()),

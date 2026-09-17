@@ -2,6 +2,7 @@ import { computed, inject, Service, signal, WritableSignal } from '@angular/core
 import { ApiService } from '../core/api/api.service';
 import type {
   ActiveAuthFlow,
+  AgentOperation,
   AgentAuthFlow,
   AgentAuthState,
   AgentEnvEdit,
@@ -41,6 +42,10 @@ export class AgentStore {
   readonly registry = signal<RegistryCatalog | null>(null);
   readonly registryLoading = signal(false);
   readonly registryError = signal<string | null>(null);
+
+  readonly operationsByRegistryId = signal<Record<string, AgentOperation>>({});
+  readonly operationsById = signal<Record<string, AgentOperation>>({});
+  private readonly activePolls = new Set<string>();
 
   readonly customDetails = signal<Record<string, AgentManagementDetail>>({});
   readonly envByAgent = signal<Record<string, AgentEnvPresence[]>>({});
@@ -87,18 +92,100 @@ export class AgentStore {
     await this.loadRegistry(true);
   }
 
-  async installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentSummary> {
-    const installed = await this.api.installRegistryAgent(input);
-    await this.loadInstalled();
-    await this.loadRegistry(true);
-    return installed;
+  trackOperation(op: AgentOperation): void {
+    this.operationsByRegistryId.update((current) => ({ ...current, [op.registry_id]: op }));
+    this.operationsById.update((current) => ({ ...current, [op.id]: op }));
+  }
+
+  clearOperation(registryId: string): void {
+    this.operationsByRegistryId.update((current) => {
+      if (!(registryId in current)) return current;
+      const next = { ...current };
+      delete next[registryId];
+      return next;
+    });
+  }
+
+  operationFor(registryId: string): AgentOperation | undefined {
+    return this.operationsByRegistryId()[registryId];
+  }
+
+  async loadOperations(): Promise<void> {
+    try {
+      const ops = await this.api.fetchAgentOperations();
+      for (const op of ops) {
+        this.trackOperation(op);
+        if (op.state === 'running') {
+          void this.pollOperationUntilTerminal(op);
+        }
+      }
+    } catch {
+      // Tolerate background load failure
+    }
+  }
+
+  async pollOperationUntilTerminal(
+    initial: AgentOperation,
+    pollIntervalMs = 250,
+  ): Promise<AgentOperation> {
+    let current = initial;
+    this.trackOperation(current);
+
+    if (current.state !== 'running') {
+      if (current.state === 'succeeded' || !current.state) {
+        await this.loadInstalled();
+        await this.loadRegistry();
+      } else if (current.state === 'failed') {
+        throw new Error(current.error || 'Operation failed');
+      }
+      return current;
+    }
+
+    if (this.activePolls.has(current.id)) {
+      return current;
+    }
+    this.activePolls.add(current.id);
+
+    try {
+      while (current.state === 'running') {
+        await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+        current = await this.api.fetchAgentOperation(current.id);
+        this.trackOperation(current);
+      }
+
+      if (current.state === 'succeeded') {
+        await this.loadInstalled();
+        await this.loadRegistry();
+      } else if (current.state === 'failed') {
+        throw new Error(current.error || 'Operation failed');
+      }
+      return current;
+    } finally {
+      this.activePolls.delete(current.id);
+    }
+  }
+
+  async installRegistryAgent(input: InstallRegistryAgentInput): Promise<AgentOperation> {
+    const op = await this.api.installRegistryAgent(input);
+    this.trackOperation(op);
+    return this.pollOperationUntilTerminal(op);
   }
 
   async updateAgent(id: string): Promise<UpdateOutcome> {
-    const outcome = await this.api.updateRegistryAgent(id);
-    await this.loadInstalled();
-    await this.loadRegistry();
-    return outcome;
+    const existing = this.installed().find((a) => a.id === id);
+    const fromVersion = existing?.display?.version ?? '0.0.0';
+    const op = await this.api.updateRegistryAgent(id);
+    this.trackOperation(op);
+    const terminal = await this.pollOperationUntilTerminal(op);
+    const updatedAgent = this.installed().find((a) => a.id === id);
+    const toVersion = updatedAgent?.display?.version ?? fromVersion;
+    return {
+      updated: fromVersion !== toVersion,
+      from_version: fromVersion,
+      to_version: toVersion,
+      agent: updatedAgent,
+      operation: terminal,
+    };
   }
 
   async removeAgent(id: string): Promise<RemoveOutcome> {

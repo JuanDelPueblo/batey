@@ -3,7 +3,7 @@ import { signal } from '@angular/core';
 import { MatDialog } from '@angular/material/dialog';
 import { of } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { RegistryCatalog } from '../../core/api/types';
+import type { AgentOperation, RegistryCatalog } from '../../core/api/types';
 import { AppStateService } from '../../state/app-state.service';
 import { RegistryBrowserComponent } from './registry-browser';
 
@@ -58,6 +58,8 @@ describe('RegistryBrowserComponent', () => {
     installRegistryAgent: ReturnType<typeof vi.fn>;
     updateAgent: ReturnType<typeof vi.fn>;
     removeAgent: ReturnType<typeof vi.fn>;
+    operationsByRegistryId: ReturnType<typeof signal<Record<string, AgentOperation>>>;
+    clearOperation: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(async () => {
@@ -70,6 +72,8 @@ describe('RegistryBrowserComponent', () => {
       installRegistryAgent: vi.fn(async () => ({ id: 'native-agent' })),
       updateAgent: vi.fn(async () => ({ updated: true, from_version: '1.0.0', to_version: '1.2.0', agent: { id: 'example-acp' } })),
       removeAgent: vi.fn(async () => ({ id: 'example-acp', deleted: true, retained_chats: 0 })),
+      operationsByRegistryId: signal<Record<string, AgentOperation>>({}),
+      clearOperation: vi.fn(),
     };
 
     await TestBed.configureTestingModule({
@@ -219,5 +223,97 @@ describe('RegistryBrowserComponent', () => {
     expect(fixture.nativeElement.textContent).toContain('Example ACP');
     expect(fixture.nativeElement.querySelectorAll('[role="alert"]')).toHaveLength(1);
     expect(fixture.nativeElement.textContent).toContain('Network is unreachable');
+  });
+  it('displays determinate progress bar, stage text, and byte count for an active download', () => {
+    state.operationsByRegistryId.set({
+      'native-agent': {
+        id: 'op-1',
+        kind: 'install',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        state: 'running',
+        stage: 'downloading',
+        bytes_downloaded: 2621440,
+        total_bytes: 5242880,
+        error: null,
+        created_at: '',
+        updated_at: '',
+      },
+    });
+    fixture.detectChanges();
+
+    const progress = fixture.nativeElement.querySelector('.entry-progress');
+    expect(progress).not.toBeNull();
+    expect(progress.textContent).toContain('Downloading (2.5 / 5.0 MB)...');
+    expect(progress.textContent).toContain('50%');
+
+    const progressBar = progress.querySelector('mat-progress-bar');
+    expect(progressBar?.getAttribute('mode')).toBe('determinate');
+  });
+
+  it('displays indeterminate progress bar for stages without known total bytes', () => {
+    state.operationsByRegistryId.set({
+      'native-agent': {
+        id: 'op-1',
+        kind: 'install',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        state: 'running',
+        stage: 'extracting',
+        bytes_downloaded: 5242880,
+        total_bytes: null,
+        error: null,
+        created_at: '',
+        updated_at: '',
+      },
+    });
+    fixture.detectChanges();
+
+    const progress = fixture.nativeElement.querySelector('.entry-progress');
+    expect(progress).not.toBeNull();
+    expect(progress.textContent).toContain('Extracting...');
+
+    const progressBar = progress.querySelector('mat-progress-bar');
+    expect(progressBar?.getAttribute('mode')).toBe('indeterminate');
+  });
+
+  it('disables actions only on the affected card while unrelated entries remain usable', () => {
+    state.operationsByRegistryId.set({
+      'native-agent': {
+        id: 'op-1',
+        kind: 'install',
+        agent_id: 'native-agent',
+        registry_id: 'native-agent',
+        state: 'running',
+        stage: 'downloading',
+        bytes_downloaded: 100,
+        total_bytes: 500,
+        error: null,
+        created_at: '',
+        updated_at: '',
+      },
+    });
+    fixture.detectChanges();
+
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
+    const installBtn = buttons.find((b) => b.textContent?.trim() === 'Install');
+    const updateBtn = buttons.find((b) => b.textContent?.trim() === 'Update');
+    const uninstallBtn = buttons.find((b) => b.textContent?.trim() === 'Uninstall');
+
+    expect(installBtn?.disabled).toBe(true);
+    expect(updateBtn?.disabled).toBe(false);
+    expect(uninstallBtn?.disabled).toBe(false);
+  });
+
+  it('displays entry error on failure and keeps the card usable', () => {
+    fixture.componentInstance.setCardError('native-agent', 'Integrity verification failed');
+    fixture.detectChanges();
+
+    const errorEl = fixture.nativeElement.querySelector('.entry-error');
+    expect(errorEl?.textContent).toContain('Integrity verification failed');
+
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll('button')) as HTMLButtonElement[];
+    const installBtn = buttons.find((b) => b.textContent?.trim() === 'Install');
+    expect(installBtn?.disabled).toBe(false);
   });
 });

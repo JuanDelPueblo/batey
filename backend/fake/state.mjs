@@ -92,6 +92,16 @@ export const REGISTRY_ENTRIES = [
     selected_distribution: null,
     unsupported_reason: 'No binary distribution covers this platform.',
   },
+  {
+    id: 'failing-agent',
+    name: 'Failing Agent',
+    version: '1.0.0',
+    description: 'A binary ACP agent whose installation fails for testing error handling.',
+    distributions: ['binary'],
+    platforms: ['linux-x86_64'],
+    selected_distribution: 'binary',
+    fail_operation: 'Failed to download binary: connection closed by peer',
+  },
 ];
 
 /** Provider-neutral authentication state, keyed by agent id. */
@@ -303,6 +313,7 @@ export class FakeState {
     // after their durable event history has been written.
     this.seededTurns = new Map();
 
+    this.operations = new Map();
     this.events = [];
     this.nextSeq = 1;
     this.listeners = new Set();
@@ -818,7 +829,67 @@ export class FakeState {
     };
   }
 
-  installRegistryAgent(body) {
+  operationView(op) {
+    const { _steps, _stepIdx, _timer, ...view } = op;
+    return { ...view };
+  }
+
+  listAgentOperations() {
+    return [...this.operations.values()]
+      .map((op) => this.operationView(op))
+      .sort((a, b) => b.created_at.localeCompare(a.created_at));
+  }
+
+  getAgentOperation(id) {
+    const op = this.operations.get(id);
+    return op ? this.operationView(op) : null;
+  }
+
+  _scheduleNextOperationStep(op, stepDurationMs) {
+    if (op.state !== 'running' || op._stepIdx >= op._steps.length) return;
+    op._timer = setTimeout(() => {
+      this.stepOperation(op.id, stepDurationMs);
+    }, stepDurationMs);
+  }
+
+  stepOperation(opId, stepDurationMs = 25) {
+    const op = this.operations.get(opId);
+    if (!op || op.state !== 'running' || op._stepIdx >= op._steps.length) {
+      return op ? this.operationView(op) : null;
+    }
+    const step = op._steps[op._stepIdx++];
+    if (step.stage) op.stage = step.stage;
+    if (step.state) op.state = step.state;
+    if (step.bytes_downloaded !== undefined) op.bytes_downloaded = step.bytes_downloaded;
+    if (step.total_bytes !== undefined) op.total_bytes = step.total_bytes;
+    if (step.error !== undefined) op.error = step.error;
+    op.updated_at = now();
+
+    if (step.apply) {
+      step.apply();
+    }
+    this.metadataChanged();
+
+    if (op.state === 'running' && op._stepIdx < op._steps.length) {
+      this._scheduleNextOperationStep(op, stepDurationMs);
+    }
+    return this.operationView(op);
+  }
+
+  advanceOperationToCompletion(opId) {
+    const op = this.operations.get(opId);
+    if (!op) return null;
+    if (op._timer) {
+      clearTimeout(op._timer);
+      op._timer = null;
+    }
+    while (op.state === 'running' && op._stepIdx < op._steps.length) {
+      this.stepOperation(opId, 0);
+    }
+    return this.operationView(op);
+  }
+
+  startInstallOperation(body, { autoAdvance = true, stepDurationMs = 25 } = {}) {
     const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === body.registry_id);
     if (!entry) throw Object.assign(new Error('Registry agent not found'), { status: 404 });
     if (entry.unsupported_reason) {
@@ -826,6 +897,66 @@ export class FakeState {
     }
     const id = (body.agent_id ?? '').trim() || entry.id;
     if (this.agent(id)) throw Object.assign(new Error('An agent already uses that id'), { status: 409 });
+
+    const conflict = [...this.operations.values()].find(
+      (op) => op.state === 'running' && (op.agent_id === id || op.registry_id === entry.id),
+    );
+    if (conflict) {
+      throw Object.assign(new Error(`An operation is already in progress for agent '${id}'`), { status: 409 });
+    }
+
+    const op = {
+      id: randomUUID(),
+      kind: 'install',
+      agent_id: id,
+      registry_id: entry.id,
+      state: 'running',
+      stage: 'resolving',
+      bytes_downloaded: 0,
+      total_bytes: null,
+      error: null,
+      created_at: now(),
+      updated_at: now(),
+      _steps: [],
+      _stepIdx: 0,
+      _timer: null,
+    };
+
+    if (entry.fail_operation) {
+      op._steps = [
+        { stage: 'downloading', bytes_downloaded: 2048, total_bytes: 10485760 },
+        { state: 'failed', stage: 'failed', error: entry.fail_operation },
+      ];
+    } else if (entry.selected_distribution === 'binary') {
+      const total = 10485760;
+      op._steps = [
+        { stage: 'downloading', bytes_downloaded: 2621440, total_bytes: total },
+        { stage: 'downloading', bytes_downloaded: 6291456, total_bytes: total },
+        { stage: 'downloading', bytes_downloaded: total, total_bytes: total },
+        { stage: 'verifying' },
+        { stage: 'extracting' },
+        { stage: 'finalizing' },
+        { state: 'succeeded', stage: 'completed', apply: () => this.applyInstall(body, entry) },
+      ];
+    } else {
+      op._steps = [
+        { stage: 'preparing' },
+        { stage: 'finalizing' },
+        { state: 'succeeded', stage: 'completed', apply: () => this.applyInstall(body, entry) },
+      ];
+    }
+
+    this.operations.set(op.id, op);
+    if (autoAdvance) {
+      this._scheduleNextOperationStep(op, stepDurationMs);
+    }
+    return this.operationView(op);
+  }
+
+  applyInstall(body, entry) {
+    const id = (body.agent_id ?? '').trim() || entry.id;
+    let existing = this.agent(id);
+    if (existing) return existing;
     const agent = {
       id,
       display_name: body.display_name?.trim() || entry.name,
@@ -842,21 +973,105 @@ export class FakeState {
     return agent;
   }
 
+  installRegistryAgent(body) {
+    const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === body.registry_id);
+    if (!entry) throw Object.assign(new Error('Registry agent not found'), { status: 404 });
+    if (entry.unsupported_reason) {
+      throw Object.assign(new Error(entry.unsupported_reason), { status: 422 });
+    }
+    return this.applyInstall(body, entry);
+  }
+
+  startUpdateOperation(id, { autoAdvance = true, stepDurationMs = 25 } = {}) {
+    const agent = this.agent(id);
+    if (!agent) throw Object.assign(new Error('Agent not found'), { status: 404 });
+    if (agent.source !== 'registry') throw Object.assign(new Error('Only registry agents can update'), { status: 409 });
+    const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === agent.registry_id);
+    if (!entry) throw Object.assign(new Error('The registry entry is gone'), { status: 404 });
+    if (entry.unsupported_reason) {
+      throw Object.assign(new Error(entry.unsupported_reason), { status: 422 });
+    }
+
+    const conflict = [...this.operations.values()].find(
+      (op) => op.state === 'running' && (op.agent_id === id || op.registry_id === entry.id),
+    );
+    if (conflict) {
+      throw Object.assign(new Error(`An operation is already in progress for agent '${id}'`), { status: 409 });
+    }
+
+    const op = {
+      id: randomUUID(),
+      kind: 'update',
+      agent_id: id,
+      registry_id: entry.id,
+      state: 'running',
+      stage: 'resolving',
+      bytes_downloaded: 0,
+      total_bytes: null,
+      error: null,
+      created_at: now(),
+      updated_at: now(),
+      _steps: [],
+      _stepIdx: 0,
+      _timer: null,
+    };
+
+    const from = agent.display.version ?? '0.0.0';
+    if (from === entry.version) {
+      op._steps = [
+        { state: 'succeeded', stage: 'completed' },
+      ];
+    } else if (entry.fail_operation) {
+      op._steps = [
+        { stage: 'downloading', bytes_downloaded: 2048, total_bytes: 10485760 },
+        { state: 'failed', stage: 'failed', error: entry.fail_operation },
+      ];
+    } else if (entry.selected_distribution === 'binary') {
+      const total = 12582912;
+      op._steps = [
+        { stage: 'downloading', bytes_downloaded: 4194304, total_bytes: total },
+        { stage: 'downloading', bytes_downloaded: 8388608, total_bytes: total },
+        { stage: 'downloading', bytes_downloaded: total, total_bytes: total },
+        { stage: 'verifying' },
+        { stage: 'extracting' },
+        { stage: 'finalizing' },
+        { state: 'succeeded', stage: 'completed', apply: () => this.applyUpdate(id, entry) },
+      ];
+    } else {
+      op._steps = [
+        { stage: 'preparing' },
+        { stage: 'finalizing' },
+        { state: 'succeeded', stage: 'completed', apply: () => this.applyUpdate(id, entry) },
+      ];
+    }
+
+    this.operations.set(op.id, op);
+    if (autoAdvance) {
+      this._scheduleNextOperationStep(op, stepDurationMs);
+    }
+    return this.operationView(op);
+  }
+
+  applyUpdate(id, entry) {
+    const agent = this.agent(id);
+    if (!agent) return null;
+    const from = agent.display.version ?? '0.0.0';
+    if (from === entry.version) {
+      return { updated: false, from_version: from, to_version: entry.version, agent };
+    }
+    agent.display = { ...agent.display, version: entry.version };
+    this.markAuthStale(id);
+    this.metadataChanged();
+    return { updated: true, from_version: from, to_version: entry.version, agent };
+  }
+
   updateRegistryAgent(id) {
     const agent = this.agent(id);
     if (!agent) throw Object.assign(new Error('Agent not found'), { status: 404 });
     if (agent.source !== 'registry') throw Object.assign(new Error('Only registry agents can update'), { status: 409 });
     const entry = REGISTRY_ENTRIES.find((candidate) => candidate.id === agent.registry_id);
     if (!entry) throw Object.assign(new Error('The registry entry is gone'), { status: 404 });
-    const from = agent.display.version ?? '0.0.0';
-    if (from === entry.version) {
-      return { updated: false, from_version: from, to_version: entry.version, agent };
-    }
-    agent.display = { ...agent.display, version: entry.version };
-    // A new version may change initialization or authentication methods.
-    this.markAuthStale(id);
-    this.metadataChanged();
-    return { updated: true, from_version: from, to_version: entry.version, agent };
+    return this.applyUpdate(id, entry);
   }
 
   // ------------------------------------------------------- authentication

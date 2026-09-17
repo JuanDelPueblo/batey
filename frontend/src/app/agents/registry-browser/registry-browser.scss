@@ -25,3 +25,24 @@
   .search-row { flex-direction: column; align-items: stretch; }
   .distribution { width: 100%; }
 }
+
+.entry-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.progress-labels {
+  display: flex;
+  justify-content: space-between;
+  font: var(--mat-sys-body-small);
+  color: var(--mat-sys-on-surface-variant);
+}
+.entry-error {
+  margin: 0;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  color: var(--mat-sys-error);
+  font: var(--mat-sys-body-small);
+}

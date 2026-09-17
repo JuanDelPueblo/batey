@@ -6,12 +6,14 @@
 //! registry integrity metadata when the manifest supplies it, and extracts
 //! through the strict archive rules.
 use super::archive::{self, ArchiveKind};
-use super::client::{HttpFetch, MAX_DOWNLOAD_BYTES};
+use super::client::{HttpFetch, ProgressReporter, MAX_DOWNLOAD_BYTES};
 use super::manifest::{DistributionKind, RegistryAgent};
 use super::platform::PlatformTarget;
 use crate::agents::installed::InstalledDistribution;
+use crate::agents::operations::AgentOperationStage;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// Which distribution an install will use.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -156,6 +158,20 @@ pub async fn prepare(
     install_root: &Path,
     agent_id: &str,
 ) -> anyhow::Result<PreparedInstall> {
+    prepare_with_progress(agent, plan, http, install_root, agent_id, None, None).await
+}
+
+/// Downloads and installs the selected distribution, emitting progress and
+/// lifecycle stage transitions.
+pub async fn prepare_with_progress(
+    agent: &RegistryAgent,
+    plan: InstallPlan,
+    http: &dyn HttpFetch,
+    install_root: &Path,
+    agent_id: &str,
+    on_stage: Option<Arc<dyn Fn(AgentOperationStage) + Send + Sync>>,
+    on_progress: Option<ProgressReporter>,
+) -> anyhow::Result<PreparedInstall> {
     match plan.kind {
         DistributionKind::Binary => {
             let target = plan
@@ -167,7 +183,15 @@ pub async fn prepare(
                 .get(&target)
                 .ok_or_else(|| anyhow::anyhow!("{} publishes no binary for {target}", agent.id))?
                 .clone();
-            let body = http.fetch(spec.archive.clone(), MAX_DOWNLOAD_BYTES).await?;
+            if let Some(ref stage_cb) = on_stage {
+                stage_cb(AgentOperationStage::Downloading);
+            }
+            let body = http
+                .fetch_with_progress(spec.archive.clone(), MAX_DOWNLOAD_BYTES, on_progress)
+                .await?;
+            if let Some(ref stage_cb) = on_stage {
+                stage_cb(AgentOperationStage::Verifying);
+            }
             let integrity_verified = match &spec.sha256 {
                 Some(expected) => {
                     archive::verify_sha256(&body, expected)?;
@@ -182,6 +206,9 @@ pub async fn prepare(
                     false
                 }
             };
+            if let Some(ref stage_cb) = on_stage {
+                stage_cb(AgentOperationStage::Extracting);
+            }
             let kind = archive::detect(&spec.archive, &body)?;
             let raw_name = archive::file_name_from_url(&spec.archive);
             let install_dir = install_directory(install_root, agent_id, &agent.version)?;
@@ -203,6 +230,9 @@ pub async fn prepare(
             })
         }
         DistributionKind::Npx => {
+            if let Some(ref stage_cb) = on_stage {
+                stage_cb(AgentOperationStage::Preparing);
+            }
             let spec = agent
                 .distribution
                 .npx
@@ -224,6 +254,9 @@ pub async fn prepare(
             })
         }
         DistributionKind::Uvx => {
+            if let Some(ref stage_cb) = on_stage {
+                stage_cb(AgentOperationStage::Preparing);
+            }
             let spec = agent
                 .distribution
                 .uvx
@@ -884,6 +917,99 @@ mod tests {
         assert_eq!(
             install_directory(root, "example", "1.2.3").unwrap(),
             PathBuf::from("/data/agents/example/1.2.3")
+        );
+    }
+
+    #[tokio::test]
+    async fn binary_install_reports_stages_and_byte_progress() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive_bytes = tar_gz(&[("prog", b"#!/bin/sh\nexit 0\n", 0o755)]);
+        let digest = archive::sha256_hex(&archive_bytes);
+        let json = format!(
+            "{{\"version\":\"1.0.0\",\"agents\":[{{\"id\":\"prog\",\"name\":\"P\",\"version\":\"1.0.0\",\"description\":\"d\",\"distribution\":{{\"binary\":{{\"linux-x86_64\":{{\"archive\":\"https://e.invalid/prog.tar.gz\",\"sha256\":\"{}\",\"cmd\":\"./prog\"}}}}}}}}]}}",
+            digest
+        );
+        let catalog = catalog(&json);
+        let agent = catalog.agent("prog").unwrap();
+
+        let stages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stages_rec = stages.clone();
+        let stage_cb = Arc::new(move |stage| {
+            stages_rec.lock().unwrap().push(stage);
+        });
+
+        let progresses = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let progresses_rec = progresses.clone();
+        let progress_cb = Arc::new(move |dl, total| {
+            progresses_rec.lock().unwrap().push((dl, total));
+        });
+
+        let http = FixtureFetch::new().with("https://e.invalid/prog.tar.gz", archive_bytes);
+        let plan = InstallPlan {
+            kind: DistributionKind::Binary,
+            target: Some(PlatformTarget::LinuxX86_64),
+        };
+
+        prepare_with_progress(
+            agent,
+            plan,
+            &http,
+            tmp.path(),
+            "prog",
+            Some(stage_cb),
+            Some(progress_cb),
+        )
+        .await
+        .unwrap();
+
+        let recorded_stages = stages.lock().unwrap().clone();
+        assert_eq!(
+            recorded_stages,
+            vec![
+                AgentOperationStage::Downloading,
+                AgentOperationStage::Verifying,
+                AgentOperationStage::Extracting,
+            ]
+        );
+
+        let recorded_progress = progresses.lock().unwrap().clone();
+        assert!(!recorded_progress.is_empty());
+    }
+
+    #[tokio::test]
+    async fn npx_install_reports_preparing_stage() {
+        let catalog = catalog(
+            r#"{"version":"1.0.0","agents":[{"id":"n","name":"N","version":"1.0.0",
+                "description":"d","distribution":{"npx":{"package":"@test/pkg@1.0.0"}}}]}"#,
+        );
+        let agent = catalog.agent("n").unwrap();
+        let stages = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let stages_rec = stages.clone();
+        let stage_cb = Arc::new(move |stage| {
+            stages_rec.lock().unwrap().push(stage);
+        });
+
+        let http = FixtureFetch::new();
+        let plan = InstallPlan {
+            kind: DistributionKind::Npx,
+            target: None,
+        };
+
+        prepare_with_progress(
+            agent,
+            plan,
+            &http,
+            Path::new("/tmp"),
+            "n",
+            Some(stage_cb),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            stages.lock().unwrap().clone(),
+            vec![AgentOperationStage::Preparing]
         );
     }
 }

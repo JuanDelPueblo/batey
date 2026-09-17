@@ -50,6 +50,10 @@ impl FixtureRegistry {
     fn fail(&self, message: &str) {
         *self.response.lock().unwrap() = Err(message.into());
     }
+
+    fn set_document(&self, document: Vec<u8>) {
+        *self.response.lock().unwrap() = Ok(document);
+    }
 }
 
 impl HttpFetch for FixtureRegistry {
@@ -199,6 +203,236 @@ async fn registry_api_fetches_on_first_browse_and_keeps_cache_on_refresh_failure
         .as_str()
         .unwrap()
         .contains("container DNS lookup failed"));
+    sessions.shutdown_all().await;
+}
+
+#[tokio::test]
+async fn registry_install_starts_operation_and_reports_progress() {
+    let tmp = tempfile::tempdir().unwrap();
+    let document = serde_json::to_string(&serde_json::json!({
+        "version": "1.0.0",
+        "agents": [{
+            "id": "fixture-acp",
+            "name": "Fixture ACP",
+            "version": "1.0.0",
+            "description": "A package agent for testing.",
+            "distribution": {"npx": {"package": "fixture-acp@1.0.0"}}
+        }]
+    }))
+    .unwrap();
+    let fixture = Arc::new(FixtureRegistry::new(document.into_bytes()));
+    let (app, sessions, _, _) = managed_app_with_registry(tmp.path(), fixture.clone());
+
+    // First browse populates cache
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/registry")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    // POST /api/agents/registry/install returns operation immediately
+    let install_body = serde_json::to_vec(&serde_json::json!({
+        "registry_id": "fixture-acp"
+    }))
+    .unwrap();
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/registry/install")
+                .header("host", "127.0.0.1:8765")
+                .header("content-type", "application/json")
+                .body(Body::from(install_body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let op: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert_eq!(op["agent_id"], "fixture-acp");
+    assert_eq!(op["registry_id"], "fixture-acp");
+    assert_eq!(op["kind"], "install");
+    let op_id = op["id"].as_str().unwrap().to_string();
+
+    // GET /api/agents/operations lists active operations
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents/operations")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let list: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert!(list
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["id"] == op_id));
+
+    // Poll GET /api/agents/operations/:id until terminal
+    let mut finished = false;
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/agents/operations/{op_id}"))
+                    .header("host", "127.0.0.1:8765")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let status: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
+                .unwrap();
+        if status["state"] == "succeeded" {
+            finished = true;
+            assert_eq!(status["stage"], "completed");
+            break;
+        }
+    }
+    assert!(finished, "Operation did not finish with succeeded");
+
+    // Agent is now installed in /api/agents
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let agents: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert!(agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["id"] == "fixture-acp"));
+
+    // Now test update operation
+    let v2_doc = serde_json::to_string(&serde_json::json!({
+        "version": "1.0.0",
+        "agents": [{
+            "id": "fixture-acp",
+            "name": "Fixture ACP",
+            "version": "2.0.0",
+            "description": "A package agent for testing v2.",
+            "distribution": {"npx": {"package": "fixture-acp@2.0.0"}}
+        }]
+    }))
+    .unwrap();
+    fixture.set_document(v2_doc.into_bytes());
+
+    // Refresh registry
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/registry/refresh")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+
+    // POST /api/agents/fixture-acp/update returns operation immediately
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/fixture-acp/update")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let op: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    assert_eq!(op["agent_id"], "fixture-acp");
+    assert_eq!(op["kind"], "update");
+    let update_op_id = op["id"].as_str().unwrap().to_string();
+
+    // Poll GET /api/agents/operations/:id until terminal
+    let mut update_finished = false;
+    for _ in 0..50 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/agents/operations/{update_op_id}"))
+                    .header("host", "127.0.0.1:8765")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        let status: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
+                .unwrap();
+        if status["state"] == "succeeded" {
+            update_finished = true;
+            assert_eq!(status["stage"], "completed");
+            break;
+        }
+    }
+    assert!(
+        update_finished,
+        "Update operation did not finish with succeeded"
+    );
+
+    // Agent in /api/agents is now version 2.0.0
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/agents")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let agents: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    let updated_agent = agents
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "fixture-acp")
+        .expect("updated agent present");
+    assert_eq!(updated_agent["display"]["version"], "2.0.0");
+
     sessions.shutdown_all().await;
 }
 

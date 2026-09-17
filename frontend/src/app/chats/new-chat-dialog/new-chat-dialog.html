@@ -39,20 +39,15 @@
     <button
       mat-stroked-button
       type="button"
+      class="sync-button"
       (click)="updateFromRemote()"
       [disabled]="syncing() || creating()"
     >
       @if (syncing()) {
-      <ng-container>
-        <mat-spinner diameter="18" />
-        Updating…
-      </ng-container>
+      <mat-spinner diameter="18" matButtonIcon />
       } @else {
-      <ng-container>
-        <mat-icon>sync</mat-icon>
-        Update from remote
-      </ng-container>
-      }
+      <mat-icon>sync</mat-icon>
+      } {{ syncing() ? 'Updating…' : 'Update from remote' }}
     </button>
     @if (syncMessage()) { <span class="sync-status" role="status">{{ syncMessage() }}</span> }
   </div>

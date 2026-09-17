@@ -453,11 +453,12 @@ export class FakeState {
     if (!options?.is_git) throw stateError(400, 'Project is not a Git repository');
 
     const branch = options.current_branch;
-    if (options.dirty) {
-      throw stateError(409, 'Cannot update checkout with uncommitted changes');
-    }
-
     const scenario = this.syncScenarioByProject.get(projectId) ?? 'behind';
+    // Fetch failure, missing upstream, divergence, and "already up to date"
+    // are all decided before touching the checkout, exactly like the real
+    // backend: an up-to-date or already-blocked branch never depends on
+    // whether the checkout happens to be dirty. Only an actual fast-forward
+    // would touch the checkout, so only that path checks `dirty`.
     if (scenario === 'no_upstream') {
       throw stateError(409, `no upstream configured for ${branch}`);
     }
@@ -469,6 +470,10 @@ export class FakeState {
     }
     if (scenario === 'up_to_date') {
       return { branch, remote: 'origin', updated: false, head_sha: options.head_sha };
+    }
+
+    if (options.dirty) {
+      throw stateError(409, 'Cannot update checkout with uncommitted changes');
     }
 
     // 'behind': simulate a fast-forward, then settle on up-to-date so a

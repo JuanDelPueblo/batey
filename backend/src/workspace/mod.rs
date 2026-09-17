@@ -3,6 +3,11 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(not(unix))]
+use process_wrap::std::StdCommandWrap;
+#[cfg(unix)]
+use process_wrap::std::{ProcessGroup, StdCommandWrap};
+
 /// Default bound for every `git` invocation.
 pub const GIT_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -80,24 +85,45 @@ struct GitOutput {
     stdout: String,
 }
 
+/// Joins both reader threads and discards their results. Used on every exit
+/// path so a killed or errored child never leaves its reader threads running
+/// past this function's return.
+fn join_readers(
+    stdout_reader: thread::JoinHandle<std::io::Result<String>>,
+    stderr_reader: thread::JoinHandle<std::io::Result<String>>,
+) {
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
+}
+
 /// Run `git` with captured output, `GIT_TERMINAL_PROMPT=0`, no network, bounded time.
+///
+/// On Unix, `git` runs as the leader of a new process group, so a timeout
+/// kill (`killpg`) reaches any SSH, credential-helper, or remote-helper
+/// descendant `git fetch` spawns, not only the `git` process itself. Killing
+/// only the direct child would leave those descendants running past the
+/// timeout.
 fn run_git_output(
     dir: &Path,
     args: &[&str],
     timeout: Duration,
 ) -> Result<GitOutput, WorkspaceError> {
-    let mut child = Command::new("git")
-        .args(args)
+    let mut cmd = Command::new("git");
+    cmd.args(args)
         .current_dir(dir)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_OPTIONAL_LOCKS", "0")
         .stdin(Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut wrap = StdCommandWrap::from(cmd);
+    #[cfg(unix)]
+    wrap.wrap(ProcessGroup::leader());
+    let mut child = wrap
         .spawn()
         .map_err(|e| WorkspaceError::Failed(format!("cannot run git: {e}")))?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
+    let stdout = child.stdout().take().expect("piped stdout");
+    let stderr = child.stderr().take().expect("piped stderr");
     let stdout_reader = thread::spawn(move || {
         let mut output = String::new();
         std::io::Read::read_to_string(&mut std::io::BufReader::new(stdout), &mut output)
@@ -135,8 +161,11 @@ fn run_git_output(
             }
             Ok(None) => {
                 if start.elapsed() > timeout {
+                    // `kill()` sends the group-wide (Unix) or direct kill and
+                    // then reaps the child; the pipes' write ends close with
+                    // it, so the reader threads see EOF and join promptly.
                     let _ = child.kill();
-                    let _ = child.wait();
+                    join_readers(stdout_reader, stderr_reader);
                     return Err(WorkspaceError::Failed(format!(
                         "git {} timed out",
                         args.join(" ")
@@ -146,7 +175,7 @@ fn run_git_output(
             }
             Err(e) => {
                 let _ = child.kill();
-                let _ = child.wait();
+                join_readers(stdout_reader, stderr_reader);
                 return Err(WorkspaceError::Failed(format!("git wait failed: {e}")));
             }
         }

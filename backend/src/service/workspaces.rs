@@ -132,6 +132,16 @@ impl HubService {
         // process in a direct chat bound to this checkout must finish first.
         self.ensure_primary_checkout_available(&root).await?;
 
+        // `ensure_primary_checkout_available` is only a snapshot: nothing
+        // stops a new turn from starting immediately after it returns. Hold
+        // the same checkout mutex a turn's admission and a branch switch
+        // take, for as long as the fetch and fast-forward run, so a turn
+        // cannot start and touch the checkout while Git is mutating it.
+        let _checkout_guard = self
+            .sessions
+            .try_acquire_checkout_guard(&root)
+            .map_err(|error| ServiceError::Conflict(error.to_string()))?;
+
         let outcome = tokio::task::spawn_blocking({
             let root = root.clone();
             move || workspace::fetch_and_fast_forward(&root)

@@ -318,14 +318,32 @@ describe('AgentCardComponent', () => {
     expect(text).not.toContain('reports no authentication methods');
   });
 
-  it('offers a check action when sign-in state is not loaded', () => {
-    const retryAuth = vi.fn();
-    fixture.componentInstance.retryAuth.subscribe(retryAuth);
+  it('renders neutral loading state with no check action while saved sign-in status is loading', () => {
     render(summary('builtin'), null);
     const text = fixture.nativeElement.textContent as string;
-    expect(text).toContain('Sign-in status is not loaded.');
+    expect(text).toContain('Loading saved sign-in status…');
     const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
-      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check')) as HTMLButtonElement;
+      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check'));
+    expect(button).toBeUndefined();
+  });
+
+  it('offers a check action when discovery freshness is stale and methods are empty', () => {
+    const retryAuth = vi.fn();
+    fixture.componentInstance.retryAuth.subscribe(retryAuth);
+    render(summary('builtin'), {
+      agent_id: 'x',
+      logout_supported: false,
+      terminal_supported: false,
+      observed_state: 'unknown',
+      freshness: 'stale',
+      observed_freshness: 'stale',
+      methods: [],
+    });
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain('Saved sign-in options may be out of date.');
+    expect(text).not.toContain('No sign-in options available.');
+    const button = Array.from(fixture.nativeElement.querySelectorAll('button'))
+      .find((item) => (item as HTMLButtonElement).textContent?.includes('Check sign-in options')) as HTMLButtonElement;
     expect(button).toBeDefined();
     button.click();
     expect(retryAuth).toHaveBeenCalled();
@@ -568,5 +586,115 @@ describe('AgentCardComponent', () => {
     fixture.detectChanges();
     await fixture.whenStable();
     expect(fixture.componentInstance.callbackDraft()).toBe('');
+  });
+
+  it("preserves cached methods and shows honest refresh-failed indicator when refresh fails", async () => {
+    render(summary("builtin"), {
+      agent_id: "legacy-file",
+      logout_supported: false,
+      terminal_supported: true,
+      observed_state: "unknown",
+      freshness: "stale",
+      observed_freshness: "cached",
+      methods: [{ id: "file-token", name: "File Token", type: "agent", supported: true }],
+    });
+    fixture.componentRef.setInput("authError", "Agent 'legacy-file' did not start in time");
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const text = fixture.nativeElement.textContent as string;
+    expect(text).toContain("Agent 'legacy-file' did not start in time");
+    expect(text).toContain("File Token");
+    const signInButton = Array.from(fixture.nativeElement.querySelectorAll("button"))
+      .find((button) => (button as HTMLButtonElement).textContent?.includes("Sign in")) as HTMLButtonElement;
+    expect(signInButton).toBeDefined();
+
+    const retryButton = Array.from(fixture.nativeElement.querySelectorAll("button"))
+      .find((button) => (button as HTMLButtonElement).textContent?.includes("Retry")) as HTMLButtonElement;
+    expect(retryButton).toBeDefined();
+  });
+
+  it("presents Open sign-in page cleanly and localhost callback as fallback only when manual_callback is true", async () => {
+    render(summary("builtin"), {
+      agent_id: "claude",
+      methods: [{ id: "claude-oauth", name: "Claude OAuth", type: "agent", supported: true }],
+      logout_supported: false,
+      terminal_supported: false,
+      observed_state: "unknown",
+      freshness: "cached",
+      observed_freshness: "cached",
+    });
+    fixture.componentRef.setInput("protocolFlow", {
+      flow_id: "flow-oauth",
+      agent_id: "claude",
+      method_id: "claude-oauth",
+      state: "waiting_for_user",
+      reason: null,
+    });
+    fixture.componentRef.setInput("protocolInteraction", {
+      type: "browser",
+      url: "https://accounts.anthropic.com/oauth/authorize?client_id=fake",
+      manual_callback: true,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    const openLink = fixture.nativeElement.querySelector("a[href^='https://accounts.anthropic.com']") as HTMLAnchorElement;
+    expect(openLink).not.toBeNull();
+    expect(openLink.textContent).toContain("Open sign-in page");
+
+    expect(fixture.nativeElement.textContent).toContain("Final callback address");
+    const sendButton = Array.from(fixture.nativeElement.querySelectorAll("button"))
+      .find((button) => (button as HTMLButtonElement).textContent?.includes("Send callback")) as HTMLButtonElement;
+    expect(sendButton).toBeDefined();
+
+    fixture.componentRef.setInput("protocolInteraction", {
+      type: "browser",
+      url: "https://accounts.anthropic.com/oauth/authorize?client_id=fake",
+      manual_callback: false,
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(fixture.nativeElement.textContent).not.toContain("Final callback address");
+  });
+
+  it("provides both Retry and Dismiss actions on failed protocol flow", async () => {
+    const authenticate = vi.fn();
+    const dismiss = vi.fn();
+    fixture.componentInstance.authenticate.subscribe(authenticate);
+    fixture.componentInstance.dismissProtocol.subscribe(dismiss);
+
+    render(summary("builtin"), {
+      agent_id: "codex",
+      methods: [{ id: "openai-oauth", name: "OpenAI OAuth", type: "agent", supported: true }],
+      logout_supported: false,
+      terminal_supported: false,
+      observed_state: "unknown",
+      freshness: "cached",
+      observed_freshness: "cached",
+    });
+    fixture.componentRef.setInput("protocolFlow", {
+      flow_id: "flow-fail",
+      agent_id: "codex",
+      method_id: "openai-oauth",
+      state: "failed",
+      reason: "Sign-in was declined",
+    });
+    fixture.detectChanges();
+    await fixture.whenStable();
+
+    expect(fixture.nativeElement.textContent).toContain("Sign-in was declined");
+    const buttons = Array.from(fixture.nativeElement.querySelectorAll("button")) as HTMLButtonElement[];
+    const retryBtn = buttons.find((b) => b.textContent?.trim() === "Retry");
+    const dismissBtn = buttons.find((b) => b.textContent?.trim() === "Dismiss");
+    expect(retryBtn).toBeDefined();
+    expect(dismissBtn).toBeDefined();
+
+    retryBtn?.click();
+    expect(authenticate).toHaveBeenCalledWith("openai-oauth");
+
+    dismissBtn?.click();
+    expect(dismiss).toHaveBeenCalled();
   });
 });

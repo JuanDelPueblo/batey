@@ -79,7 +79,7 @@
           mat-icon-button
           type="button"
           (click)="retryAuth.emit()"
-          [matTooltip]="isStale() ? 'This may be out of date. Check again.' : 'Check again'"
+          [matTooltip]="refreshTooltip()"
           aria-label="Check sign-in status again"
         >
           <mat-icon>refresh</mat-icon>
@@ -89,12 +89,14 @@
 
     @if ((authLoading() || protocolLoading()) && !protocolFlow()) {
       <div class="auth-row loading"><mat-spinner diameter="18" /> <span>Checking sign-in…</span></div>
-    } @else if (authError()) {
-      <div class="auth-row error" role="alert">
-        <span>{{ authError() }}</span>
-        <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
-      </div>
     } @else if (auth(); as state) {
+      @if (authError(); as error) {
+        <div class="auth-row error" role="alert">
+          <mat-icon inline>error_outline</mat-icon>
+          <span>{{ error }}</span>
+          <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
+        </div>
+      }
       @if (protocolFlow(); as flow) {
         <div class="protocol-flow" role="status">
           @switch (flow.state) {
@@ -114,7 +116,10 @@
               </div>
             }
             @case ('failed') {
-              <div class="auth-row error" role="alert"><span>{{ flow.reason || 'Authentication failed.' }}</span>
+              <div class="auth-row error" role="alert">
+                <mat-icon inline>error_outline</mat-icon>
+                <span>{{ flow.reason || 'Authentication failed.' }}</span>
+                <button mat-button type="button" (click)="authenticate.emit(flow.method_id)">Retry</button>
                 <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
               </div>
             }
@@ -124,29 +129,44 @@
               </div>
             }
             @case ('timed_out') {
-              <div class="auth-row error" role="alert"><span>{{ flow.reason || 'Authentication timed out.' }}</span>
+              <div class="auth-row error" role="alert">
+                <mat-icon inline>error_outline</mat-icon>
+                <span>{{ flow.reason || 'Authentication timed out.' }}</span>
+                <button mat-button type="button" (click)="authenticate.emit(flow.method_id)">Retry</button>
                 <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
               </div>
             }
           }
           @if (protocolInteraction(); as interaction) {
             <div class="browser-interaction" role="group" aria-label="Browser sign-in">
-              <p class="auth-hint">Complete sign-in in your browser. If it ends at an unreachable localhost callback, paste the final address here.</p>
-              <p><a [href]="interaction.url" target="_blank" rel="noopener noreferrer">Open sign-in page</a></p>
-              <label class="callback-label">
-                Final callback address
-                <input
-                  type="url"
-                  autocomplete="off"
-                  spellcheck="false"
-                  placeholder="http://localhost:…"
-                  [value]="callbackDraft()"
-                  (input)="callbackDraft.set($any($event.target).value)"
-                />
-              </label>
-              <button mat-flat-button type="button" (click)="submitCallback()" [disabled]="!callbackDraft().trim()">
-                Send callback
-              </button>
+              <p class="auth-hint">Complete sign-in in your browser.</p>
+              <div class="browser-primary-action">
+                <a mat-flat-button [href]="interaction.url" target="_blank" rel="noopener noreferrer">
+                  <mat-icon>open_in_new</mat-icon>
+                  <span>Open sign-in page</span>
+                </a>
+              </div>
+              @if (interaction.manual_callback) {
+                <div class="callback-fallback">
+                  <span class="auth-hint">If browser redirection does not complete, paste the localhost callback address:</span>
+                  <div class="callback-row">
+                    <label class="callback-label">
+                      Final callback address
+                      <input
+                        type="url"
+                        autocomplete="off"
+                        spellcheck="false"
+                        placeholder="http://localhost:…"
+                        [value]="callbackDraft()"
+                        (input)="callbackDraft.set($any($event.target).value)"
+                      />
+                    </label>
+                    <button mat-stroked-button type="button" (click)="submitCallback()" [disabled]="!callbackDraft().trim()">
+                      Send callback
+                    </button>
+                  </div>
+                </div>
+              }
             </div>
           }
           @if (protocolElicitations().length > 0) {
@@ -237,7 +257,10 @@
           } @empty {
             @if (neverChecked()) {
               <p class="auth-hint">Sign-in status has not been checked yet.</p>
-              <button mat-button type="button" (click)="retryAuth.emit()">Check</button>
+              <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
+            } @else if (isDiscoveryStale()) {
+              <p class="auth-hint">Saved sign-in options may be out of date.</p>
+              <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
             } @else if (!logoutSupported()) {
               <p class="auth-hint">No sign-in options available.</p>
             }
@@ -261,10 +284,15 @@
           </div>
         </div>
       }
+    } @else if (authError(); as error) {
+      <div class="auth-row error" role="alert">
+        <mat-icon inline>error_outline</mat-icon>
+        <span>{{ error }}</span>
+        <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
+      </div>
     } @else {
       <div class="auth-row loading">
-        <span class="auth-hint">Sign-in status is not loaded.</span>
-        <button mat-button type="button" (click)="retryAuth.emit()">Check</button>
+        <span class="auth-hint">Loading saved sign-in status…</span>
       </div>
     }
   </section>

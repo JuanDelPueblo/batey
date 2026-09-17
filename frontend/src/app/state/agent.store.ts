@@ -184,7 +184,6 @@ export class AgentStore {
 
   /** A plain cache-only read. Never starts an agent process. */
   async loadAuth(id: string): Promise<AgentAuthState> {
-    this.setLoading(id, true);
     try {
       const state = await this.api.fetchAgentAuth(id);
       this.authByAgent.update((current) => ({ ...current, [id]: state }));
@@ -193,8 +192,6 @@ export class AgentStore {
     } catch (error) {
       this.setAuthError(id, this.message(error, 'Failed to load authentication state'));
       throw error;
-    } finally {
-      this.setLoading(id, false);
     }
   }
 
@@ -206,6 +203,7 @@ export class AgentStore {
    */
   async refreshAuth(id: string): Promise<AgentAuthState> {
     this.setLoading(id, true);
+    this.clearAuthError(id);
     try {
       const result = await this.api.refreshAgentAuth(id);
       const { refresh_error, ...state } = result;
@@ -318,6 +316,7 @@ export class AgentStore {
     }
     if (flow.state === 'succeeded' || flow.state === 'failed' || flow.state === 'cancelled' || flow.state === 'timed_out') {
       this.protocolInteractionsByFlow.update((current) => ({ ...current, [flowId]: null }));
+      this.protocolElicitationsByFlow.update((current) => ({ ...current, [flowId]: [] }));
       await this.loadAuth(agentId).catch(() => undefined);
     }
     return flow;
@@ -327,6 +326,7 @@ export class AgentStore {
     const flow = await this.api.cancelProtocolAuthFlow(flowId);
     this.protocolFlowsByAgent.update((current) => ({ ...current, [agentId]: flow }));
     this.protocolInteractionsByFlow.update((current) => ({ ...current, [flowId]: null }));
+    this.protocolElicitationsByFlow.update((current) => ({ ...current, [flowId]: [] }));
     return flow;
   }
 

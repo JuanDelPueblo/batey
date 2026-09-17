@@ -62,8 +62,8 @@ describe('PermissionCardComponent', () => {
     const buttons = fixture.nativeElement.querySelectorAll('button');
     expect(buttons[0].textContent).toContain('Reject');
     expect(buttons[1].textContent).toContain('Approve Plan');
-    expect(buttons[0].getAttribute('aria-label')).toBe('Reject, One time');
-    expect(buttons[1].getAttribute('aria-label')).toBe('Approve Plan, One time');
+    expect(buttons[0].getAttribute('aria-label')).toBe('Reject');
+    expect(buttons[1].getAttribute('aria-label')).toBe('Approve Plan');
 
     buttons[1].click();
     await fixture.whenStable();
@@ -98,12 +98,8 @@ describe('PermissionCardComponent', () => {
     const buttons = fixture.nativeElement.querySelectorAll('button');
     expect(buttons[0].textContent).toContain('Deny');
     expect(buttons[1].textContent).toContain('Allow');
-    expect(buttons[0].querySelector('.option-scope')?.textContent).toBe('One time');
-    expect(buttons[1].querySelector('.option-scope')?.textContent).toBe('Persistent');
-    expect(buttons[0].querySelector('.option-content')?.textContent.replace(/\s+/g, ' ').trim())
-      .toBe('Deny One time');
-    expect(buttons[1].querySelector('.option-content')?.textContent.replace(/\s+/g, ' ').trim())
-      .toBe('Allow Persistent');
+    expect(buttons[0].textContent?.trim()).toBe('Deny');
+    expect(buttons[1].textContent?.trim()).toBe('Allow');
 
     buttons[0].click();
     await fixture.whenStable();

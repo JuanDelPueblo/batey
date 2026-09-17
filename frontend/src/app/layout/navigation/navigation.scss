@@ -32,8 +32,8 @@
 
 mat-nav-list { padding: 0; }
 mat-list-item { margin-bottom: 2px; border-radius: var(--mat-sys-corner-full); }
-.chat-actions-button { margin-right: 4px; color: var(--mat-sys-on-surface-variant); }
-.chat-actions-button mat-icon { width: 20px; height: 20px; font-size: 20px; }
+.chat-actions-button { align-self: center; margin: 0 4px 0 0; color: var(--mat-sys-on-surface-variant); }
+.chat-actions-button mat-icon { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; font-size: 20px; line-height: 1; }
 mat-list-item:not(:hover):not(:focus-within) .chat-actions-button { opacity: 0; }
 mat-list-item:focus-within .chat-actions-button, mat-list-item:hover .chat-actions-button { opacity: 1; }
 mat-list-item.selected { background: var(--mat-sys-secondary-container); color: var(--mat-sys-on-secondary-container); }

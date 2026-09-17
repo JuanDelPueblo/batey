@@ -620,22 +620,25 @@ export class FakeState {
   stopTask(chatId, taskId) {
     const tasks = this.tasksByChat.get(chatId) ?? [];
     const task = tasks.find((t) => t.id === taskId);
-    if (!task) return false;
+    if (!task) return 'not_found';
+    // Agent-owned observational tasks have no subprocess to kill, matching
+    // the real backend's 409 for unsupported stops.
+    if (task.managed === false) return 'unsupported';
     if (task.state === 'running') {
       task.state = 'stopped';
       task.completed_at = now();
       this.metadataChanged();
     }
-    return true;
+    return 'ok';
   }
 
-  createTask(chatId, command, cwd, initialOutput = '', startedAt = now()) {
+  createTask(chatId, command, cwd, initialOutput = '', startedAt = now(), options = {}) {
     if (!this.tasksByChat.has(chatId)) {
       this.tasksByChat.set(chatId, []);
     }
     const tasks = this.tasksByChat.get(chatId);
     const task = {
-      id: randomUUID(),
+      id: options.id ?? randomUUID(),
       chat_id: chatId,
       command,
       cwd: cwd ?? `${PROJECT_ROOT}/batey`,
@@ -645,8 +648,18 @@ export class FakeState {
       completed_at: null,
       output: initialOutput,
       truncated: false,
+      // True for native terminal/create tasks Batey spawns; false for
+      // observational agent-owned executions. Defaults to true so older
+      // fixtures stay stoppable.
+      managed: options.managed ?? true,
     };
+    // Enforce the same bounded history as the real tracker: keep at most 50
+    // tasks per chat, pruning oldest completed first.
     tasks.push(task);
+    if (tasks.length > 50) {
+      const idx = tasks.findIndex((t) => t.state !== 'running');
+      if (idx >= 0) tasks.splice(idx, 1);
+    }
     this.metadataChanged(startedAt);
     return task;
   }

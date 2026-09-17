@@ -88,6 +88,11 @@ export class TerminalTaskDialogComponent implements OnInit {
     }
   }
 
+  /** Agent-owned observational tasks report managed:false and cannot be stopped. */
+  isTaskStoppable(task: TerminalTaskSummary | TerminalTaskDetails | null | undefined): boolean {
+    return !!task && task.state === 'running' && task.managed !== false;
+  }
+
   taskDuration(task: TerminalTaskSummary): string {
     const start = Date.parse(task.started_at);
     if (!Number.isFinite(start)) return '';

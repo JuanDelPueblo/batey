@@ -266,22 +266,30 @@ async function runTurn(state, chat, text, latency, turn, richContent = undefined
   }
 
   if (scenario === 'terminal') {
+    const toolId = randomUUID();
+    const command = 'npm test -- --watch=false';
+    const cwd = `${PROJECT_ROOT}/batey/frontend`;
+    // Agent-owned observational execution, mirroring the real backend's
+    // tool-call ingestion: the task id equals the tool call id so updates
+    // merge into one record, and stopping is unsupported.
     const task = state.createTask(
       chat.id,
-      'npm test -- --watch=false',
-      `${PROJECT_ROOT}/batey/frontend`,
+      command,
+      cwd,
       'starting frontend tests…',
+      new Date().toISOString(),
+      { managed: false, id: toolId },
     );
-    const toolId = randomUUID();
     emit({
       type: 'tool_call',
       id: toolId,
-      title: 'Run frontend test suite',
+      title: `Terminal: ${command}`,
       kind: 'execute',
       status: 'in_progress',
     });
     await pause(350);
     if (turn.cancelled) return finishCancelled(emit);
+    task.output += '\nfrontend tests are still running…';
     emit({
       type: 'tool_call_update',
       id: toolId,

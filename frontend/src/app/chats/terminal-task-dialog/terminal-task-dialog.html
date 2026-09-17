@@ -70,7 +70,7 @@
                 <span class="task-state-badge" [class]="details.state">{{ details.state }}</span>
                 <span class="details-duration">{{ taskDuration(details) }}</span>
               </div>
-              @if (details.state === 'running') {
+              @if (isTaskStoppable(details)) {
                 <button
                   mat-button
                   class="stop-task"
@@ -82,6 +82,8 @@
                   <mat-icon>stop</mat-icon>
                   <span>{{ stopping() ? 'Stopping…' : 'Stop task' }}</span>
                 </button>
+              } @else if (details.state === 'running') {
+                <span class="agent-managed-note" matTooltip="This command runs inside the agent and cannot be stopped from here">Agent-managed</span>
               }
             </div>
           </div>

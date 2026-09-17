@@ -129,4 +129,30 @@ describe('TerminalTaskDialogComponent', () => {
   it('keeps the dialog close affordance accessible', () => {
     expect(fixture.nativeElement.querySelector('[aria-label="Close terminal tasks dialog"]')).toBeTruthy();
   });
+
+  it('hides Stop for running observational tasks and shows the agent-managed note', () => {
+    const observed: TerminalTaskDetails = {
+      ...task1Details,
+      id: 'task-obs',
+      state: 'running',
+      managed: false,
+    };
+    fixture.componentInstance.selectedTaskDetails.set(observed);
+    fixture.detectChanges();
+    expect(fixture.nativeElement.querySelector('.stop-task')).toBeNull();
+    const note = fixture.nativeElement.querySelector('.agent-managed-note');
+    expect(note).toBeTruthy();
+    expect(note.textContent).toContain('Agent-managed');
+    expect(fixture.componentInstance.isTaskStoppable(observed)).toBe(false);
+  });
+
+  it('treats tasks without a managed flag as stoppable for backwards compatibility', () => {
+    const legacy = { ...task1Details, state: 'running' as const };
+    delete (legacy as Partial<TerminalTaskDetails>).managed;
+    expect(fixture.componentInstance.isTaskStoppable(legacy)).toBe(true);
+    expect(fixture.componentInstance.isTaskStoppable({ ...legacy, managed: true })).toBe(true);
+    expect(fixture.componentInstance.isTaskStoppable({ ...legacy, managed: false })).toBe(false);
+    expect(fixture.componentInstance.isTaskStoppable({ ...legacy, state: 'completed' as const, managed: false })).toBe(false);
+    expect(fixture.componentInstance.isTaskStoppable(null)).toBe(false);
+  });
 });

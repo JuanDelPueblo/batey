@@ -857,6 +857,11 @@ impl HubService {
                 "Task {task_id} does not belong to chat {chat_id}"
             )));
         }
+        if !task.managed {
+            return Err(ServiceError::Conflict(
+                "This task is reported by the agent and does not support stopping".into(),
+            ));
+        }
         task.stop();
         Ok(task.summary().await)
     }

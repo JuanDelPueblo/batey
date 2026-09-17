@@ -128,7 +128,7 @@ impl HubService {
                             .await;
                         hub.notify_metadata_changed();
                     }
-                    tracker.succeed(Some(outcome.to_version));
+                    tracker.succeed(outcome.updated.then_some(outcome.to_version));
                 }
                 Err(error) => {
                     tracker.fail(error.to_string());

@@ -57,6 +57,8 @@ export class AgentStore {
   readonly terminalFlowsByAgent = signal<Record<string, AgentAuthFlow>>({});
   readonly operationsByAgent = signal<Record<string, AgentOperation>>({});
 
+  private readonly operationPolls = new Map<string, Promise<AgentOperation>>();
+
   readonly available = computed(() =>
     this.installed().filter((agent) => agent.availability === 'available'),
   );
@@ -70,6 +72,26 @@ export class AgentStore {
       this.error.set(this.message(error, 'Failed to load the agent catalog'));
     } finally {
       this.loading.set(false);
+    }
+    await this.loadOperations();
+  }
+
+  /** Loads operations that may have started before this browser instance. */
+  async loadOperations(): Promise<void> {
+    let operations: AgentOperation[];
+    try {
+      operations = await this.api.listAgentOperations();
+    } catch {
+      // The agent catalog remains useful when the optional progress read is
+      // temporarily unavailable. A later catalog load can retry it.
+      return;
+    }
+
+    const active = operations.filter((operation) => operation.state === 'running');
+    this.operationsByAgent.set({});
+    for (const operation of active) this.recordOperation(operation);
+    for (const operation of active) {
+      void this.waitForOperation(operation.id).catch(() => undefined);
     }
   }
 
@@ -119,6 +141,19 @@ export class AgentStore {
   }
 
   async waitForOperation(id: string): Promise<AgentOperation> {
+    const existing = this.operationPolls.get(id);
+    if (existing) return existing;
+
+    const polling = this.pollOperation(id);
+    this.operationPolls.set(id, polling);
+    try {
+      return await polling;
+    } finally {
+      if (this.operationPolls.get(id) === polling) this.operationPolls.delete(id);
+    }
+  }
+
+  private async pollOperation(id: string): Promise<AgentOperation> {
     const pollInterval = 100;
     while (true) {
       const op = await this.api.getAgentOperation(id);

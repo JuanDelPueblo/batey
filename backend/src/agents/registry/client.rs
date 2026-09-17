@@ -744,4 +744,51 @@ mod tests {
             "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json"
         );
     }
+
+    #[tokio::test]
+    async fn a_refresh_replaces_the_cached_catalog_on_success() {
+        let tmp = tempfile::tempdir().unwrap();
+        let http = Arc::new(FixtureFetch::new().with(URL, document("1.0.0", "example")));
+        let client = client(&tmp, http.clone());
+        client.refresh().await.unwrap();
+
+        http.set(URL, document("3.0.0", "example"));
+        let refreshed = client.refresh().await.unwrap();
+        assert_eq!(refreshed.catalog.agent("example").unwrap().version, "3.0.0");
+        assert_eq!(
+            client
+                .cached()
+                .unwrap()
+                .catalog
+                .agent("example")
+                .unwrap()
+                .version,
+            "3.0.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_cache_file_is_reported_not_served() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_dir = tmp.path().join("registry-cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        std::fs::write(cache_dir.join("registry.json"), "{ broken").unwrap();
+        let http = Arc::new(FixtureFetch::new());
+        let client = RegistryClient::new(URL, cache_dir, http);
+        assert!(client.cached().is_none());
+    }
+
+    #[tokio::test]
+    async fn an_oversized_document_is_refused() {
+        let tmp = tempfile::tempdir().unwrap();
+        let huge = vec![b'x'; (MAX_REGISTRY_BYTES + 1) as usize];
+        let http = Arc::new(FixtureFetch::new().with(URL, huge));
+        let client = client(&tmp, http);
+        assert!(client
+            .refresh()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("limit"));
+    }
 }

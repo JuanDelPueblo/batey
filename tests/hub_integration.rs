@@ -324,6 +324,50 @@ async fn agent_operation_install_and_update_lifecycle() {
     }
     assert!(completed);
 
+    // An update against the current registry version still succeeds, but it
+    // must not report a version change to the browser.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/agents/fixture-acp/update")
+                .header("host", "127.0.0.1:8765")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
+    let update_view: Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap()).unwrap();
+    let update_id = update_view["id"].as_str().unwrap().to_string();
+    let mut update_result = None;
+    for _ in 0..50 {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/agent-operations/{update_id}"))
+                    .header("host", "127.0.0.1:8765")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let current: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), 1_000_000).await.unwrap())
+                .unwrap();
+        if current["state"] == "succeeded" || current["state"] == "failed" {
+            update_result = Some(current);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let update_result = update_result.expect("no-op update did not finish");
+    assert_eq!(update_result["state"], "succeeded");
+    assert!(update_result["to_version"].is_null());
+
     sessions.shutdown_all().await;
 }
 

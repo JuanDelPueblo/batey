@@ -161,6 +161,36 @@ describe('AgentStore', () => {
     expect(store.error()).toBe('catalog down');
   });
 
+  it('hydrates active operations and resumes polling after initialization', async () => {
+    const active: AgentOperation = {
+      id: 'op-reload-1',
+      agent_id: 'native-agent',
+      registry_id: 'native-agent',
+      kind: 'install',
+      state: 'running',
+      stage: 'downloading',
+      downloaded_bytes: 50,
+      total_bytes: 100,
+      error: null,
+      started_at: '2026-01-01T00:00:00Z',
+      completed_at: null,
+    };
+    api.listAgentOperations.mockResolvedValueOnce([active]);
+    api.getAgentOperation.mockResolvedValueOnce({
+      ...active,
+      state: 'succeeded',
+      stage: 'completed',
+      downloaded_bytes: 100,
+      completed_at: '2026-01-01T00:00:01Z',
+    });
+
+    await store.loadInstalled();
+    expect(api.listAgentOperations).toHaveBeenCalled();
+    expect(api.getAgentOperation).toHaveBeenCalledWith('op-reload-1');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(store.isAgentBusy('native-agent')).toBe(false);
+  });
+
   it('loads and refreshes the registry catalog', async () => {
     await store.loadRegistry();
     expect(api.fetchRegistry).toHaveBeenCalledWith();

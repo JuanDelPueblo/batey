@@ -98,6 +98,7 @@ export class AppStateService {
   setShowArchived(show: boolean): void { this.uiStore.setShowArchived(show); }
   loadProjects(): Promise<void> { return this.projectStore.loadProjects(); }
   loadAgents(): Promise<void> { return this.agentStore.loadInstalled(); }
+  loadAgentOperations(): Promise<void> { return this.agentStore.loadOperations(); }
   loadRegistry(): Promise<void> { return this.agentStore.loadRegistry(); }
   refreshRegistry(): Promise<void> { return this.agentStore.refreshRegistry(); }
   operationForAgent(key: string) { return this.agentStore.operationForAgent(key); }

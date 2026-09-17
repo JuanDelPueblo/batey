@@ -50,6 +50,68 @@ describe('parseTerminalPayload', () => {
     expect(parsed?.unrecognizedFields).toBeUndefined();
   });
 
+  it('preserves conflicting output alias values in unrecognizedFields', () => {
+    const raw = JSON.stringify({
+      commandLine: 'git diff',
+      exitCode: 0,
+      combinedOutput: 'stdout',
+      formatted_output: 'formatted diagnostics',
+    });
+
+    const parsed = parseTerminalPayload(raw, {
+      toolStatus: 'completed',
+      toolTitle: 'git diff',
+      toolKind: 'execute',
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.output).toBe('stdout');
+    expect(parsed?.unrecognizedFields).toEqual({
+      formatted_output: 'formatted diagnostics',
+    });
+  });
+
+  it('preserves conflicting exit-code alias values in unrecognizedFields', () => {
+    const raw = JSON.stringify({
+      commandLine: 'cargo test',
+      exitCode: 0,
+      exit_code: 1,
+      output: 'done',
+    });
+
+    const parsed = parseTerminalPayload(raw, {
+      toolStatus: 'completed',
+      toolTitle: 'cargo test',
+      toolKind: 'execute',
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.exitCode).toBe(0);
+    expect(parsed?.unrecognizedFields).toEqual({
+      exit_code: 1,
+    });
+  });
+
+  it('preserves conflicting command alias values in unrecognizedFields', () => {
+    const raw = JSON.stringify({
+      commandLine: 'npm test',
+      cmd: 'npm run test:ci',
+      exitCode: 0,
+    });
+
+    const parsed = parseTerminalPayload(raw, {
+      toolStatus: 'completed',
+      toolTitle: 'npm test',
+      toolKind: 'execute',
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.command).toBe('npm test');
+    expect(parsed?.unrecognizedFields).toEqual({
+      cmd: 'npm run test:ci',
+    });
+  });
+
   it('normalizes failed execution with non-zero exit code', () => {
     const raw = JSON.stringify({
       commandLine: 'cargo check',

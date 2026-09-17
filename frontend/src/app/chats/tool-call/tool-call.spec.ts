@@ -320,4 +320,60 @@ describe('ToolCallComponent', () => {
     expect(outEl).not.toBeNull();
     expect(outEl.textContent).toBe(longOutput);
   });
+
+  it('preserves conflicting output alias values in expandable additional details', () => {
+    const conflictingOutputTool: TurnEntryTool = {
+      id: 11,
+      type: 'tool_call',
+      toolCallId: 't-11',
+      title: 'Terminal: git diff',
+      kind: 'execute',
+      status: 'completed',
+      output: JSON.stringify({
+        commandLine: 'git diff',
+        exitCode: 0,
+        combinedOutput: 'stdout diff',
+        formatted_output: 'formatted diagnostics',
+      }),
+    };
+
+    fixture.componentRef.setInput('tool', conflictingOutputTool);
+    fixture.detectChanges();
+
+    const outputEl = fixture.nativeElement.querySelector('.terminal-output');
+    expect(outputEl.textContent).toBe('stdout diff');
+
+    const extraDetails = fixture.nativeElement.querySelector('.terminal-extra-details');
+    expect(extraDetails).not.toBeNull();
+    expect(extraDetails.textContent).toContain('formatted_output');
+    expect(extraDetails.textContent).toContain('formatted diagnostics');
+  });
+
+  it('preserves conflicting exit-code alias values in expandable additional details', () => {
+    const conflictingExitTool: TurnEntryTool = {
+      id: 12,
+      type: 'tool_call',
+      toolCallId: 't-12',
+      title: 'Terminal: cargo test',
+      kind: 'execute',
+      status: 'completed',
+      output: JSON.stringify({
+        commandLine: 'cargo test',
+        exitCode: 0,
+        exit_code: 1,
+        output: 'test ran',
+      }),
+    };
+
+    fixture.componentRef.setInput('tool', conflictingExitTool);
+    fixture.detectChanges();
+
+    const badgeEl = fixture.nativeElement.querySelector('.terminal-status-badge');
+    expect(badgeEl.textContent).toContain('exit 0');
+
+    const extraDetails = fixture.nativeElement.querySelector('.terminal-extra-details');
+    expect(extraDetails).not.toBeNull();
+    expect(extraDetails.textContent).toContain('exit_code');
+    expect(extraDetails.textContent).toContain('1');
+  });
 });

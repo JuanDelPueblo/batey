@@ -78,6 +78,18 @@ function cleanTitle(title?: string | null): string | undefined {
   return stripped;
 }
 
+function normalizeOutputValue(val: unknown): string {
+  if (typeof val === 'string') return val;
+  if (typeof val === 'object' && val !== null) return JSON.stringify(val, null, 2);
+  return String(val);
+}
+
+function normalizeExitCodeValue(val: unknown): number | null {
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (typeof val === 'string' && /^-?\d+$/.test(val.trim())) return parseInt(val.trim(), 10);
+  return null;
+}
+
 export function parseTerminalPayload(
   raw: unknown,
   options?: ParseTerminalOptions,
@@ -111,12 +123,7 @@ export function parseTerminalPayload(
   // Check if obj contains recognized terminal keys
   const hasCommandKey = COMMAND_KEYS.some((k) => typeof obj![k] === 'string' && (obj![k] as string).trim().length > 0);
   const hasWorkdirKey = WORKDIR_KEYS.some((k) => typeof obj![k] === 'string' && (obj![k] as string).trim().length > 0);
-  const hasExitCodeKey = EXIT_CODE_KEYS.some((k) => {
-    const val = obj![k];
-    if (typeof val === 'number') return true;
-    if (typeof val === 'string' && /^-?\d+$/.test(val.trim())) return true;
-    return false;
-  });
+  const hasExitCodeKey = EXIT_CODE_KEYS.some((k) => normalizeExitCodeValue(obj![k]) !== null);
   const hasSpecificOutputKey = ['combinedOutput', 'combined_output', 'formatted_output', 'formattedOutput'].some(
     (k) => obj![k] !== undefined && obj![k] !== null,
   );
@@ -134,17 +141,31 @@ export function parseTerminalPayload(
     return null;
   }
 
+  const consumedKeys = new Set<string>();
+
   // 1. Extract command
   let command: string | undefined;
   for (const k of COMMAND_KEYS) {
     const val = obj[k];
     if (typeof val === 'string' && val.trim().length > 0) {
       command = val.trim();
+      consumedKeys.add(k);
       break;
     }
   }
   if (!command) {
     command = cleanTitle(options?.toolTitle);
+  } else {
+    // Check other command keys: deduplicate only if normalized value equals primary command
+    for (const k of COMMAND_KEYS) {
+      if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
+      if (typeof obj[k] === 'string') {
+        const trimmed = (obj[k] as string).trim();
+        if (trimmed.length === 0 || trimmed === command) {
+          consumedKeys.add(k);
+        }
+      }
+    }
   }
 
   // 2. Extract working directory
@@ -153,21 +174,41 @@ export function parseTerminalPayload(
     const val = obj[k];
     if (typeof val === 'string' && val.trim().length > 0) {
       workingDir = val.trim();
+      consumedKeys.add(k);
       break;
+    }
+  }
+  if (workingDir) {
+    // Check other working dir keys: deduplicate only if normalized value equals primary workingDir
+    for (const k of WORKDIR_KEYS) {
+      if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
+      if (typeof obj[k] === 'string') {
+        const trimmed = (obj[k] as string).trim();
+        if (trimmed.length === 0 || trimmed === workingDir) {
+          consumedKeys.add(k);
+        }
+      }
     }
   }
 
   // 3. Extract exit code
   let exitCode: number | null = null;
   for (const k of EXIT_CODE_KEYS) {
-    const val = obj[k];
-    if (typeof val === 'number' && Number.isFinite(val)) {
-      exitCode = val;
+    const norm = normalizeExitCodeValue(obj[k]);
+    if (norm !== null) {
+      exitCode = norm;
+      consumedKeys.add(k);
       break;
     }
-    if (typeof val === 'string' && /^-?\d+$/.test(val.trim())) {
-      exitCode = parseInt(val.trim(), 10);
-      break;
+  }
+  if (exitCode !== null) {
+    // Check other exit code keys: deduplicate only if normalized integer equals primary exitCode
+    for (const k of EXIT_CODE_KEYS) {
+      if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
+      const norm = normalizeExitCodeValue(obj[k]);
+      if (norm !== null && norm === exitCode) {
+        consumedKeys.add(k);
+      }
     }
   }
 
@@ -176,24 +217,35 @@ export function parseTerminalPayload(
   for (const k of OUTPUT_KEYS) {
     const val = obj[k];
     if (val !== undefined && val !== null) {
-      if (typeof val === 'string') {
-        output = val;
-      } else if (typeof val === 'object') {
-        output = JSON.stringify(val, null, 2);
-      } else {
-        output = String(val);
-      }
+      output = normalizeOutputValue(val);
+      consumedKeys.add(k);
       break;
     }
   }
-  // Check stderr if stdout was used and stderr has additional content
-  if (output !== undefined && obj['stderr'] && typeof obj['stderr'] === 'string' && obj['stderr'].trim().length > 0) {
-    const stderrStr = obj['stderr'] as string;
-    if (!output.includes(stderrStr)) {
-      output = output ? `${output}\n${stderrStr}` : stderrStr;
+  if (output !== undefined) {
+    // Check other output keys: deduplicate only if normalized string equals primary output
+    for (const k of OUTPUT_KEYS) {
+      if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
+      const norm = normalizeOutputValue(obj[k]);
+      if (norm === output) {
+        consumedKeys.add(k);
+      }
     }
-  } else if (output === undefined && obj['stderr'] && typeof obj['stderr'] === 'string') {
-    output = obj['stderr'] as string;
+  }
+  // Check stderr if stdout was used and stderr has additional content
+  if (obj['stderr'] !== undefined && obj['stderr'] !== null) {
+    if (typeof obj['stderr'] === 'string') {
+      const stderrStr = obj['stderr'];
+      if (output !== undefined) {
+        if (!output.includes(stderrStr)) {
+          output = output ? `${output}\n${stderrStr}` : stderrStr;
+        }
+        consumedKeys.add('stderr');
+      } else {
+        output = stderrStr;
+        consumedKeys.add('stderr');
+      }
+    }
   }
 
   // 5. Determine execution state and label
@@ -213,9 +265,18 @@ export function parseTerminalPayload(
     let payloadStatus: string | undefined;
     for (const k of STATUS_KEYS) {
       const val = obj[k];
-      if (typeof val === 'string') {
-        payloadStatus = val.toLowerCase();
+      if (typeof val === 'string' && val.trim().length > 0) {
+        payloadStatus = val.toLowerCase().trim();
+        consumedKeys.add(k);
         break;
+      }
+    }
+    if (payloadStatus) {
+      for (const k of STATUS_KEYS) {
+        if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
+        if (typeof obj[k] === 'string' && (obj[k] as string).toLowerCase().trim() === payloadStatus) {
+          consumedKeys.add(k);
+        }
       }
     }
 
@@ -232,19 +293,25 @@ export function parseTerminalPayload(
     }
   }
 
-  // 6. Handle redundant aliases vs unrecognized fields
-  const recognizedKeys = new Set<string>([
-    ...COMMAND_KEYS,
-    ...WORKDIR_KEYS,
-    ...EXIT_CODE_KEYS,
-    ...OUTPUT_KEYS,
-    ...STATUS_KEYS,
-    'stderr',
-  ]);
+  // Check any remaining status keys to see if they're redundant with the resolved state
+  for (const k of STATUS_KEYS) {
+    if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
+    if (typeof obj[k] === 'string') {
+      const val = (obj[k] as string).toLowerCase().trim();
+      const isRedundant =
+        (state === 'completed' && (val === 'completed' || val === 'success')) ||
+        (state === 'failed' && (val === 'failed' || val === 'error')) ||
+        (state === 'running' && (val === 'running' || val === 'in_progress'));
+      if (isRedundant) {
+        consumedKeys.add(k);
+      }
+    }
+  }
 
+  // 6. Preserve all unconsumed keys (conflicting aliases or unrecognized properties)
   const unrecognizedFields: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {
-    if (!recognizedKeys.has(k)) {
+    if (!consumedKeys.has(k)) {
       unrecognizedFields[k] = v;
     }
   }

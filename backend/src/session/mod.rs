@@ -365,7 +365,7 @@ impl AcpSession {
                 tracing::warn!(
                     agent_id = %self.key.agent,
                     chat_id = %self.id,
-                    error = %e,
+                    error_category = %crate::acp::spawn_failure_category(&e),
                     "ACP session process is unavailable"
                 );
                 if let Err(state_error) = self.set_states(ProcessState::Dead, TurnState::Idle).await
@@ -401,7 +401,7 @@ impl AcpSession {
                 agent_id = %self.key.agent,
                 chat_id = %self.id,
                 pid = ?client.root_pid(),
-                error = %e,
+                error_category = %crate::acp::failure_category(&e),
                 "ACP initialization failed"
             );
             client.shutdown().await;
@@ -488,7 +488,7 @@ impl AcpSession {
                     agent_id = %self.key.agent,
                     chat_id = %self.id,
                     resumed,
-                    error = %e,
+                    error_category = %crate::acp::failure_category(&e),
                     "ACP session create/resume failed"
                 );
                 client.shutdown().await;
@@ -887,7 +887,7 @@ impl AcpSession {
                     chat_id = %self.id,
                     session_id = %sid,
                     task_id = %user_message_id,
-                    error = %err,
+                    error_category = %crate::acp::failure_category(&err),
                     "prompt failed"
                 );
                 if self.client_disconnected().await {
@@ -1143,7 +1143,7 @@ impl AcpSession {
                 agent_id = %self.key.agent,
                 chat_id = %self.id,
                 session_id = %sid,
-                %error,
+                error_category = %crate::acp::failure_category(error),
                 "prompt cancellation failed"
             );
         }

@@ -138,6 +138,52 @@ pub fn map_auth_required(agent: &str, error: anyhow::Error) -> anyhow::Error {
     }
 }
 
+/// Returns a stable category for ACP failures without exposing agent-controlled
+/// error text in operational logs.
+pub fn failure_category(error: &anyhow::Error) -> &'static str {
+    if error.is::<RequestTimedOut>() || error.to_string().contains("timed out") {
+        "timeout"
+    } else if error.is::<AuthRequired>() {
+        "authentication_required"
+    } else if error.is::<AcpRpcError>() {
+        "agent_rpc_error"
+    } else {
+        "acp_failure"
+    }
+}
+
+/// Returns a stable category for process-start failures without logging the
+/// command or the operating system's raw error text.
+pub fn spawn_failure_category(error: &anyhow::Error) -> &'static str {
+    let message = error.to_string();
+    if message.ends_with("executable not found") {
+        "executable_not_found"
+    } else if message.contains("executable exists but the process could not start") {
+        "executable_start_failed"
+    } else {
+        "process_spawn_failed"
+    }
+}
+
+fn sanitized_executable_identifier(command: &str) -> String {
+    let basename = Path::new(command)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("unknown");
+    let identifier: String = basename
+        .chars()
+        .filter(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-')
+        })
+        .take(128)
+        .collect();
+    if identifier.is_empty() {
+        "unknown".to_owned()
+    } else {
+        identifier
+    }
+}
+
 enum WriterMsg {
     Line(String),
     Shutdown,
@@ -190,10 +236,11 @@ impl AcpClient {
         effective_roots: Vec<std::path::PathBuf>,
         stderr_policy: StderrPolicy,
     ) -> anyhow::Result<Self> {
+        let executable_identifier = sanitized_executable_identifier(command);
         tracing::info!(
             agent_id = %agent_name,
             chat_id = %session_id,
-            command,
+            executable = %executable_identifier,
             "ACP process spawn attempt"
         );
         let proc = match AcpProcess::spawn(command, args, env_vars, cwd) {
@@ -202,8 +249,8 @@ impl AcpClient {
                 tracing::error!(
                     agent_id = %agent_name,
                     chat_id = %session_id,
-                    command,
-                    %error,
+                    executable = %executable_identifier,
+                    error_category = %spawn_failure_category(&error),
                     "ACP process spawn failed"
                 );
                 return Err(error);
@@ -2423,5 +2470,29 @@ mod tests {
         assert!(supports_additional_directories(
             &serde_json::json!({"sessionCapabilities": {"additionalDirectories": {}}})
         ));
+    }
+
+    #[test]
+    fn operational_error_categories_do_not_expose_error_text() {
+        let error = anyhow::anyhow!("agent returned a private prompt and timed out");
+        assert_eq!(failure_category(&error), "timeout");
+        assert_eq!(
+            spawn_failure_category(&anyhow::anyhow!(
+                "Failed to spawn ACP agent '/private/agent': executable not found"
+            )),
+            "executable_not_found"
+        );
+    }
+
+    #[test]
+    fn executable_identifier_keeps_only_a_safe_basename() {
+        assert_eq!(
+            sanitized_executable_identifier("/private/path/agent-with_args"),
+            "agent-with_args"
+        );
+        assert_eq!(
+            sanitized_executable_identifier("/private/path/agent secret"),
+            "agentsecret"
+        );
     }
 }

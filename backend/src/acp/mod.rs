@@ -3204,6 +3204,75 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_guardian_review_prose_never_becomes_a_task() {
+        // A security/permission review tool call is not `execute`/`terminal`
+        // kind and its title, content, and structured fields never carry a
+        // recognized command key, even though its prose body embeds a full
+        // shell command and its own status/output-shaped fields. Reproduces
+        // the reported case: Guardian Review output must never surface as an
+        // agent-managed Terminal Task, classification must not name Guardian
+        // specifically, and it must generalize to any review/permission-shaped
+        // content with an embedded shell command.
+        use super::agent_client_protocol_schema::{
+            ToolCall, ToolCallContent, ToolCallUpdateFields,
+        };
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+
+        let review_body = "Action: exec rm -rf /important\n\n\
+            Guardian Review: this command was flagged as high risk and blocked.";
+        let tc = ToolCall::new("guardian-1", "Guardian Review")
+            .kind(super::agent_client_protocol_schema::ToolKind::Other)
+            .content(vec![ToolCallContent::Content(
+                agent_client_protocol_schema::Content::new(ContentBlock::Text(TextContent::new(
+                    review_body,
+                ))),
+            )])
+            .raw_output(serde_json::json!({
+                "verdict": "blocked",
+                "risk": "high",
+                "status": "blocked",
+                "reviewedCommand": "rm -rf /important",
+            }));
+        let update = SessionUpdate::ToolCall(tc);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        assert!(tracker
+            .get_observed_task("s1", "guardian-1")
+            .await
+            .is_none());
+        assert_eq!(tracker.list_chat_tasks("s1").await.len(), 0);
+
+        // A follow-up update to the same tool call, still prose-shaped and
+        // never naming a recognized command field, must also stay rejected.
+        let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
+            "guardian-1",
+            ToolCallUpdateFields::new()
+                .status(super::agent_client_protocol_schema::ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({
+                    "verdict": "blocked",
+                    "output": "Action: exec rm -rf /important\nBlocked by policy.",
+                })),
+        );
+        let update = SessionUpdate::ToolCallUpdate(tcu);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        assert!(tracker
+            .get_observed_task("s1", "guardian-1")
+            .await
+            .is_none());
+        assert_eq!(tracker.list_chat_tasks("s1").await.len(), 0);
+    }
+
+    #[tokio::test]
     async fn test_same_tool_id_in_two_chats_yields_two_tasks() {
         use super::agent_client_protocol_schema::ToolCall;
         let log = test_log();

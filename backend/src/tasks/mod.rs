@@ -600,6 +600,42 @@ impl TerminalTaskTracker {
         count
     }
 
+    /// Resolves observational tasks left running when their originating turn
+    /// completes. An agent that stops reporting tool-call lifecycle updates
+    /// once a command finishes must never leave it shown as RUNNING forever
+    /// (for example after the dialog is reopened once the turn is over).
+    /// Only the sticky `Completed` state is inferred here: a real failure or
+    /// cancellation must already have arrived through an explicit update and
+    /// is left untouched, and no exit code is invented. Managed (Batey-spawned)
+    /// tasks are never touched; their own process exit drives their state.
+    /// Returns the tasks that newly became terminal so the caller can emit
+    /// one metadata-changed event.
+    pub async fn reconcile_turn_end(&self, chat_id: &str) -> Vec<Arc<ManagedTask>> {
+        let tasks = {
+            let inner = self.inner.read().await;
+            inner.tasks_by_chat.get(chat_id).cloned()
+        };
+        let Some(tasks) = tasks else {
+            return Vec::new();
+        };
+        let mut changed = Vec::new();
+        for task in tasks.iter() {
+            if task.managed {
+                continue;
+            }
+            if *task.state.read().await != TaskState::Running {
+                continue;
+            }
+            if task.record_observed_state(TaskState::Completed, None).await {
+                changed.push(task.clone());
+            }
+        }
+        if !changed.is_empty() {
+            self.prune_chat_tasks(chat_id).await;
+        }
+        changed
+    }
+
     pub async fn stop_chat_tasks(&self, chat_id: &str) {
         let tasks = {
             let inner = self.inner.read().await;
@@ -1085,6 +1121,87 @@ mod tests {
             None,
         ));
         assert!(managed.stoppable());
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_turn_end_completes_stale_running_observed_tasks() {
+        // An agent whose final tool-call update for a finished command never
+        // arrives must not leave the task stuck RUNNING once its turn ends.
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-stale",
+                Some("cargo build"),
+                Some(&cwd),
+                Some("Compiling..."),
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+
+        let changed = tracker.reconcile_turn_end("c1").await;
+        assert_eq!(changed.len(), 1);
+        let details = tracker
+            .get_observed_task("c1", "tool-stale")
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_eq!(details.state, TaskState::Completed);
+        // No exit code is invented for an unreported completion.
+        assert!(details.exit_code.is_none());
+        assert!(details.completed_at.is_some());
+
+        // A second reconciliation call is a no-op: nothing changed, and the
+        // sticky terminal state is preserved.
+        let changed_again = tracker.reconcile_turn_end("c1").await;
+        assert!(changed_again.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_turn_end_leaves_failed_and_managed_tasks_alone() {
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        // A task that already received an explicit failure must be left as is.
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-failed",
+                Some("cargo check"),
+                Some(&cwd),
+                Some("error"),
+                Some(1),
+                TaskState::Failed,
+            )
+            .await
+            .unwrap();
+        // A Batey-managed (native) terminal task must never be touched by
+        // observational reconciliation; its own process exit drives it.
+        let managed = Arc::new(ManagedTask::new(
+            "managed-running".into(),
+            "c1".into(),
+            "sleep 30".into(),
+            cwd.clone(),
+            None,
+        ));
+        tracker.register_task(managed.clone()).await;
+
+        let changed = tracker.reconcile_turn_end("c1").await;
+        assert!(changed.is_empty());
+        assert_eq!(
+            tracker
+                .get_observed_task("c1", "tool-failed")
+                .await
+                .unwrap()
+                .details()
+                .await
+                .state,
+            TaskState::Failed
+        );
+        assert_eq!(*managed.state.read().await, TaskState::Running);
     }
 
     #[tokio::test]

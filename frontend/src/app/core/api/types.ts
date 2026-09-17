@@ -396,6 +396,8 @@ export interface TerminalTaskSummary {
   exit_code?: number | null;
   started_at: string;
   completed_at?: string | null;
+  /** False for agent-owned observational tasks that do not support stopping. Defaults to true. */
+  managed?: boolean;
 }
 
 export interface TerminalTaskDetails extends TerminalTaskSummary {

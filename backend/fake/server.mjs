@@ -1043,6 +1043,9 @@ function getTask({ params }) {
 function stopTask({ params }) {
   const chat = requireChat(params[0]);
   const stopped = state.stopTask(chat.id, params[1]);
-  if (!stopped) throw httpError(404, 'Task not found');
+  if (stopped === 'not_found') throw httpError(404, 'Task not found');
+  if (stopped === 'unsupported') {
+    throw httpError(409, 'This task is reported by the agent and does not support stopping');
+  }
   return json({ success: true });
 }

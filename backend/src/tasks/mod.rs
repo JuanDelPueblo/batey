@@ -1,3 +1,6 @@
+pub mod observed;
+pub use observed::{parse_observed_update, tool_kind_str, ObservedUpdate};
+
 use agent_client_protocol_schema::v1::TerminalExitStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -26,6 +29,11 @@ pub struct TerminalTaskSummary {
     pub exit_code: Option<i32>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
+    /// False for agent-owned observational tasks that Batey did not spawn.
+    /// The frontend must not offer a Stop action when this is false.
+    /// Defaults to true so older payloads stay stoppable.
+    #[serde(default = "default_managed_true")]
+    pub managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +48,13 @@ pub struct TerminalTaskDetails {
     pub completed_at: Option<DateTime<Utc>>,
     pub output: String,
     pub truncated: bool,
+    /// False for agent-owned observational tasks that Batey did not spawn.
+    #[serde(default = "default_managed_true")]
+    pub managed: bool,
+}
+
+fn default_managed_true() -> bool {
+    true
 }
 
 pub struct TerminalBuffer {
@@ -52,8 +67,11 @@ pub const DEFAULT_MAX_OUTPUT_BYTES: usize = 1024 * 1024;
 pub struct ManagedTask {
     pub id: String,
     pub chat_id: String,
-    pub command: String,
-    pub cwd: PathBuf,
+    pub command: RwLock<String>,
+    pub cwd: RwLock<PathBuf>,
+    /// True for native ACP terminal/create tasks Batey spawns.
+    /// False for observational agent-owned command executions.
+    pub managed: bool,
     pub started_at: DateTime<Utc>,
     pub completed_at: RwLock<Option<DateTime<Utc>>>,
     pub state: RwLock<TaskState>,
@@ -77,8 +95,9 @@ impl ManagedTask {
         Self {
             id,
             chat_id,
-            command,
-            cwd,
+            command: RwLock::new(command),
+            cwd: RwLock::new(cwd),
+            managed: true,
             started_at: Utc::now(),
             completed_at: RwLock::new(None),
             state: RwLock::new(TaskState::Running),
@@ -96,6 +115,48 @@ impl ManagedTask {
             killed_by_user: AtomicBool::new(false),
             exit_status: RwLock::new(None),
         }
+    }
+
+    /// Creates an observational record for an agent-owned command execution.
+    /// Batey never spawns a subprocess for these; the agent runs the command
+    /// itself and reports structured lifecycle data through tool calls.
+    pub fn new_observed(id: String, chat_id: String, command: String, cwd: PathBuf) -> Self {
+        Self {
+            id,
+            chat_id,
+            command: RwLock::new(command),
+            cwd: RwLock::new(cwd),
+            managed: false,
+            started_at: Utc::now(),
+            completed_at: RwLock::new(None),
+            state: RwLock::new(TaskState::Running),
+            exit_code: RwLock::new(None),
+            buffer: RwLock::new(TerminalBuffer {
+                output: String::new(),
+                truncated: false,
+            }),
+            output_limit: DEFAULT_MAX_OUTPUT_BYTES,
+            exit_notify: Arc::new(Notify::new()),
+            kill_tx: std::sync::Mutex::new(None),
+            killed_by_user: AtomicBool::new(false),
+            exit_status: RwLock::new(None),
+        }
+    }
+
+    pub fn is_managed(&self) -> bool {
+        self.managed
+    }
+
+    pub fn stoppable(&self) -> bool {
+        self.managed
+    }
+
+    pub async fn task_command(&self) -> String {
+        self.command.read().await.clone()
+    }
+
+    pub async fn task_cwd(&self) -> PathBuf {
+        self.cwd.read().await.clone()
     }
 
     pub async fn append_output(&self, chunk: &str) {
@@ -159,6 +220,12 @@ impl ManagedTask {
     }
 
     pub fn stop(&self) -> bool {
+        // Observational tasks have no subprocess to kill. Never mark them
+        // as user-stopped here; a misleading stop would corrupt the final
+        // state mapping when the agent later reports completion.
+        if !self.managed {
+            return false;
+        }
         self.killed_by_user.store(true, Ordering::SeqCst);
         if let Some(tx) = self.kill_tx.lock().unwrap().take() {
             let _ = tx.send(());
@@ -168,16 +235,145 @@ impl ManagedTask {
         }
     }
 
+    /// Updates metadata for an observational task. Late-arriving command or
+    /// working directory fills the record; empty values never clear it.
+    pub async fn update_observed_metadata(&self, command: Option<&str>, cwd: Option<&PathBuf>) {
+        if self.managed {
+            return;
+        }
+        if let Some(cmd) = command {
+            let trimmed = cmd.trim();
+            if !trimmed.is_empty() {
+                let mut guard = self.command.write().await;
+                if guard.trim().is_empty() || *guard != trimmed {
+                    // Prefer the first non-empty command, but accept a later
+                    // fuller value when the initial record used a placeholder.
+                    if guard.trim().is_empty() || trimmed.len() >= guard.len() {
+                        *guard = trimmed.to_string();
+                    }
+                }
+            }
+        }
+        if let Some(dir) = cwd {
+            let mut guard = self.cwd.write().await;
+            if guard.as_os_str().is_empty() {
+                *guard = dir.clone();
+            }
+        }
+    }
+
+    /// Merges new observational output without duplicating repeated snapshots.
+    /// Snapshot growth replaces, out-of-order older snapshots are kept, and
+    /// disjoint deltas accumulate with a newline separator.
+    pub async fn merge_observed_output(&self, new_output: Option<&str>) {
+        if self.managed {
+            return;
+        }
+        let Some(new_raw) = new_output else { return };
+        // Preserve trailing content but ignore pure whitespace updates.
+        if new_raw.trim().is_empty() {
+            return;
+        }
+        let limit = self.output_limit;
+        let mut buffer = self.buffer.write().await;
+        if buffer.output.is_empty() {
+            buffer.output.push_str(new_raw);
+        } else if buffer.output == new_raw {
+            return;
+        } else if new_raw.starts_with(buffer.output.as_str()) {
+            buffer.output.clear();
+            buffer.output.push_str(new_raw);
+        } else if buffer.output.starts_with(new_raw) || buffer.output.contains(new_raw) {
+            return;
+        } else {
+            if !buffer.output.ends_with('\n') {
+                buffer.output.push('\n');
+            }
+            buffer.output.push_str(new_raw);
+        }
+        if buffer.output.len() > limit {
+            let mut trim_at = buffer.output.len() - limit;
+            while trim_at < buffer.output.len() && !buffer.output.is_char_boundary(trim_at) {
+                trim_at += 1;
+            }
+            buffer.output.drain(..trim_at);
+            buffer.truncated = true;
+        }
+    }
+
+    /// Records an observational state transition. Terminal states are sticky:
+    /// a late running update never reopens a completed task. The completion
+    /// timestamp is set once on the first terminal transition.
+    pub async fn record_observed_state(&self, state: TaskState, exit_code: Option<i32>) -> bool {
+        if self.managed {
+            return false;
+        }
+        if let Some(code) = exit_code {
+            *self.exit_code.write().await = Some(code);
+        }
+        let mut state_guard = self.state.write().await;
+        let current = *state_guard;
+        let is_terminal = matches!(
+            current,
+            TaskState::Completed | TaskState::Failed | TaskState::Stopped
+        );
+        if is_terminal && state == TaskState::Running {
+            return false;
+        }
+        if current == state && exit_code.is_none() {
+            return false;
+        }
+        let became_terminal = !is_terminal
+            && matches!(
+                state,
+                TaskState::Completed | TaskState::Failed | TaskState::Stopped
+            );
+        *state_guard = state;
+        drop(state_guard);
+        if became_terminal {
+            let mut completed = self.completed_at.write().await;
+            if completed.is_none() {
+                *completed = Some(Utc::now());
+            }
+            self.exit_notify.notify_waiters();
+        }
+        // Update the ACP exit status mirror for observational tasks so
+        // terminal/output queries stay consistent when they race updates.
+        if let Some(code) = exit_code {
+            let acp_status = TerminalExitStatus::new()
+                .exit_code(u32::try_from(code).ok())
+                .signal(None::<String>);
+            *self.exit_status.write().await = Some(acp_status);
+        }
+        became_terminal
+    }
+
+    /// Applies one observational lifecycle update. Returns true when the task
+    /// newly reached a terminal state (the caller emits a metadata change).
+    pub async fn apply_observed_update(
+        &self,
+        command: Option<&str>,
+        cwd: Option<&PathBuf>,
+        output: Option<&str>,
+        exit_code: Option<i32>,
+        state: TaskState,
+    ) -> bool {
+        self.update_observed_metadata(command, cwd).await;
+        self.merge_observed_output(output).await;
+        self.record_observed_state(state, exit_code).await
+    }
+
     pub async fn summary(&self) -> TerminalTaskSummary {
         TerminalTaskSummary {
             id: self.id.clone(),
             chat_id: self.chat_id.clone(),
-            command: self.command.clone(),
-            cwd: self.cwd.to_string_lossy().to_string(),
+            command: self.command.read().await.clone(),
+            cwd: self.cwd.read().await.to_string_lossy().to_string(),
             state: *self.state.read().await,
             exit_code: *self.exit_code.read().await,
             started_at: self.started_at,
             completed_at: *self.completed_at.read().await,
+            managed: self.managed,
         }
     }
 
@@ -186,14 +382,15 @@ impl ManagedTask {
         TerminalTaskDetails {
             id: self.id.clone(),
             chat_id: self.chat_id.clone(),
-            command: self.command.clone(),
-            cwd: self.cwd.to_string_lossy().to_string(),
+            command: self.command.read().await.clone(),
+            cwd: self.cwd.read().await.to_string_lossy().to_string(),
             state: *self.state.read().await,
             exit_code: *self.exit_code.read().await,
             started_at: self.started_at,
             completed_at: *self.completed_at.read().await,
             output: buffer.output.clone(),
             truncated: buffer.truncated,
+            managed: self.managed,
         }
     }
 }
@@ -281,6 +478,85 @@ impl TerminalTaskTracker {
 
     pub async fn get_task(&self, task_id: &str) -> Option<Arc<ManagedTask>> {
         self.inner.read().await.tasks_by_id.get(task_id).cloned()
+    }
+
+    /// Creates or updates an observational task for an agent-owned command.
+    /// Returns the task and whether it newly reached a terminal state.
+    /// A managed task with the same id always wins: the native terminal path
+    /// stays authoritative and the observational update is ignored.
+    /// A missing command means there is not enough structured information;
+    /// the update is ignored unless the task already exists.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn upsert_observed(
+        &self,
+        chat_id: &str,
+        task_id: &str,
+        command: Option<&str>,
+        cwd: Option<&PathBuf>,
+        output: Option<&str>,
+        exit_code: Option<i32>,
+        state: TaskState,
+    ) -> Option<(Arc<ManagedTask>, bool)> {
+        let existing = self.get_task(task_id).await;
+        if let Some(task) = existing {
+            if task.chat_id != chat_id {
+                return None;
+            }
+            if task.managed {
+                return Some((task, false));
+            }
+            let became_terminal = task
+                .apply_observed_update(command, cwd, output, exit_code, state)
+                .await;
+            if became_terminal {
+                self.prune_chat_tasks(chat_id).await;
+            }
+            return Some((task, became_terminal));
+        }
+        let cmd = command.map(str::trim).filter(|s| !s.is_empty())?;
+        if cmd.is_empty() {
+            return None;
+        }
+        let cwd_value = cwd.cloned().unwrap_or_else(|| PathBuf::from(""));
+        let task = Arc::new(ManagedTask::new_observed(
+            task_id.to_string(),
+            chat_id.to_string(),
+            cmd.to_string(),
+            cwd_value,
+        ));
+        // Apply the initial output/exit/state without overwriting the command
+        // that was just set. Metadata was already provided above.
+        task.merge_observed_output(output).await;
+        let became_terminal = task.record_observed_state(state, exit_code).await;
+        // Insert directly so a concurrent native registration with the same id
+        // cannot produce a duplicate queue entry.
+        {
+            let mut inner = self.inner.write().await;
+            if let Some(managed) = inner.tasks_by_id.get(task_id) {
+                if managed.managed {
+                    return Some((managed.clone(), false));
+                }
+            }
+            inner.tasks_by_id.insert(task.id.clone(), task.clone());
+            inner
+                .tasks_by_chat
+                .entry(chat_id.to_string())
+                .or_default()
+                .push_back(task.clone());
+        }
+        self.prune_chat_tasks(chat_id).await;
+        Some((task, became_terminal))
+    }
+
+    /// Whether the id names a managed terminal Batey spawned. Used to
+    /// deduplicate tool-call content that merely embeds a native terminal.
+    pub async fn is_managed_task(&self, task_id: &str) -> bool {
+        self.inner
+            .read()
+            .await
+            .tasks_by_id
+            .get(task_id)
+            .is_some_and(|t| t.managed)
     }
 
     pub async fn list_chat_tasks(&self, chat_id: &str) -> Vec<TerminalTaskSummary> {
@@ -483,5 +759,273 @@ mod tests {
         });
 
         tokio::try_join!(h1, h2).unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_observed_lifecycle_running_to_completed_with_output() {
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        // Initial tool call before output creates a running task.
+        let (task, became_terminal) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-1",
+                Some("cargo test"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .expect("observed creation needs a command");
+        assert!(!became_terminal);
+        assert!(!task.managed);
+        assert_eq!(task.task_command().await, "cargo test");
+        let summary = task.summary().await;
+        assert!(!summary.managed);
+        assert_eq!(summary.state, TaskState::Running);
+
+        // Updates before full metadata and repeated updates accumulate without
+        // duplication.
+        let (_, became_terminal) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-1",
+                None,
+                None,
+                Some("running tests..."),
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        assert!(!became_terminal);
+        let (_, became_terminal) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-1",
+                None,
+                None,
+                Some("running tests..."),
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        assert!(!became_terminal);
+        let details = tracker.get_task("tool-1").await.unwrap().details().await;
+        assert_eq!(details.output, "running tests...");
+
+        // Completion with exit code and final output.
+        let (_, became_terminal) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-1",
+                None,
+                None,
+                Some("test result: ok"),
+                Some(0),
+                TaskState::Completed,
+            )
+            .await
+            .unwrap();
+        assert!(became_terminal);
+        let details = tracker.get_task("tool-1").await.unwrap().details().await;
+        assert_eq!(details.state, TaskState::Completed);
+        assert_eq!(details.exit_code, Some(0));
+        assert!(details.completed_at.is_some());
+        assert!(details.output.contains("test result: ok"));
+        // Sticky terminal: a late running update never reopens it.
+        let (_, became_terminal) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-1",
+                None,
+                None,
+                Some("stale running"),
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        assert!(!became_terminal);
+        let details = tracker.get_task("tool-1").await.unwrap().details().await;
+        assert_eq!(details.state, TaskState::Completed);
+    }
+
+    #[tokio::test]
+    async fn test_observed_completion_without_exit_code_and_failed_state() {
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/tmp");
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-fail",
+                Some("cargo check"),
+                Some(&cwd),
+                Some("error: failed"),
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        let (_, became_terminal) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-fail",
+                None,
+                None,
+                None,
+                Some(1),
+                TaskState::Failed,
+            )
+            .await
+            .unwrap();
+        assert!(became_terminal);
+        let details = tracker.get_task("tool-fail").await.unwrap().details().await;
+        assert_eq!(details.state, TaskState::Failed);
+        assert_eq!(details.exit_code, Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_observed_requires_command_and_ignores_wrong_chat() {
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/tmp");
+        assert!(tracker
+            .upsert_observed(
+                "c1",
+                "tool-nocmd",
+                None,
+                Some(&cwd),
+                Some("hi"),
+                None,
+                TaskState::Running
+            )
+            .await
+            .is_none());
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-chat",
+                Some("echo hi"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        // Same id in another chat never merges.
+        assert!(tracker
+            .upsert_observed(
+                "c2",
+                "tool-chat",
+                Some("echo hi"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running
+            )
+            .await
+            .is_none());
+        assert_eq!(tracker.list_chat_tasks("c1").await.len(), 1);
+        assert_eq!(tracker.list_chat_tasks("c2").await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_managed_stays_authoritative_over_observed_id() {
+        let tracker = TerminalTaskTracker::new(10);
+        let managed = Arc::new(ManagedTask::new(
+            "shared-id".into(),
+            "c1".into(),
+            "sleep 30".into(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+        tracker.register_task(managed.clone()).await;
+        let cwd = PathBuf::from("/tmp");
+        let (task, _) = tracker
+            .upsert_observed(
+                "c1",
+                "shared-id",
+                Some("sleep 30"),
+                Some(&cwd),
+                Some("agent output"),
+                Some(0),
+                TaskState::Completed,
+            )
+            .await
+            .unwrap();
+        assert!(task.managed);
+        // Managed output is never overwritten by observational data.
+        assert!(task.details().await.output.is_empty());
+        assert_eq!(tracker.list_chat_tasks("c1").await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_observed_stop_is_unsupported_and_managed_stop_works() {
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/tmp");
+        let (observed, _) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-obs",
+                Some("npm run dev"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        assert!(!observed.stoppable());
+        assert!(!observed.stop());
+        assert_eq!(observed.details().await.state, TaskState::Running);
+        let managed = Arc::new(ManagedTask::new(
+            "managed-1".into(),
+            "c1".into(),
+            "sleep 30".into(),
+            PathBuf::from("/tmp"),
+            None,
+        ));
+        assert!(managed.stoppable());
+    }
+
+    #[tokio::test]
+    async fn test_observed_history_stays_bounded() {
+        let tracker = TerminalTaskTracker::new(2);
+        let cwd = PathBuf::from("/tmp");
+        for i in 0..4 {
+            let id = format!("tool-{i}");
+            tracker
+                .upsert_observed(
+                    "c1",
+                    &id,
+                    Some(&format!("cmd {i}")),
+                    Some(&cwd),
+                    None,
+                    Some(0),
+                    TaskState::Completed,
+                )
+                .await
+                .unwrap();
+        }
+        // Retention keeps at most max completed tasks; running tasks are never
+        // pruned.
+        assert!(tracker.list_chat_tasks("c1").await.len() <= 4);
+        let running = tracker
+            .upsert_observed(
+                "c1",
+                "tool-running",
+                Some("sleep 30"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap()
+            .0;
+        assert_eq!(running.details().await.state, TaskState::Running);
     }
 }

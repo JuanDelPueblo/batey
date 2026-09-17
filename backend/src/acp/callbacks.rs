@@ -1438,6 +1438,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_native_terminal_task_appears_in_tracker_managed() {
+        let event_log = Arc::new(crate::events::EventLog::new(100));
+        let tracker = Arc::new(TerminalTaskTracker::default());
+        let handler = CallbackHandler::new(
+            "test-session".into(),
+            "test-agent".into(),
+            event_log,
+            std::env::temp_dir(),
+            Arc::new(std::env::vars().collect()),
+            tracker.clone(),
+        );
+        let (command, args) = terminal_echo_command("hello-native");
+        let created = handler
+            .handle_create_terminal(CreateTerminalRequest::new("s1", command).args(args))
+            .await
+            .unwrap();
+        let tasks = tracker.list_chat_tasks("test-session").await;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, created.terminal_id.to_string());
+        assert!(tasks[0].managed);
+        assert_eq!(tasks[0].state, crate::tasks::TaskState::Running);
+        handler
+            .handle_wait_for_terminal_exit(WaitForTerminalExitRequest::new(
+                "s1",
+                created.terminal_id.clone(),
+            ))
+            .await
+            .unwrap();
+        // Wait for the background supervisor to record the exit.
+        for _ in 0..50 {
+            let details = tracker
+                .get_task(&created.terminal_id.to_string())
+                .await
+                .unwrap()
+                .details()
+                .await;
+            if details.state != crate::tasks::TaskState::Running {
+                assert_eq!(details.state, crate::tasks::TaskState::Completed);
+                assert!(details.output.contains("hello-native"));
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let details = tracker
+            .get_task(&created.terminal_id.to_string())
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_ne!(details.state, crate::tasks::TaskState::Running);
+    }
+
+    #[tokio::test]
     async fn test_terminal_callbacks_work() {
         let handler = make_handler();
         let (command, args) = terminal_echo_command("hello-from-terminal");

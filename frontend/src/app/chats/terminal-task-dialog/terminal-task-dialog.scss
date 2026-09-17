@@ -256,6 +256,13 @@
   flex: 0 0 auto;
 }
 
+.agent-managed-note {
+  flex: 0 0 auto;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-label-small);
+  letter-spacing: var(--mat-sys-label-small-tracking);
+}
+
 .details-meta {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

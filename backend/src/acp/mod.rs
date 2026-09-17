@@ -16,7 +16,7 @@ use agent_client_protocol_schema::{
     WaitForTerminalExitRequest, WriteTextFileRequest, CLIENT_METHOD_NAMES,
 };
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
@@ -195,14 +195,18 @@ impl AcpClient {
             Arc::new(Mutex::new(HashMap::new()));
         let connected = Arc::new(AtomicBool::new(true));
 
+        let task_tracker_for_handler = task_tracker.clone();
+        let task_tracker_for_reader = task_tracker.clone();
+        let cwd_for_handler = cwd.to_path_buf();
+        let cwd_for_reader = cwd.to_path_buf();
         let callback_handler = Arc::new(CallbackHandler::new_with_roots(
             session_id.clone(),
             agent_name.clone(),
             event_log.clone(),
-            cwd.to_path_buf(),
+            cwd_for_handler,
             effective_roots,
             Arc::new(env_vars.clone()),
-            task_tracker,
+            task_tracker_for_handler,
         ));
 
         let child_root_pid = proc.root_pid;
@@ -247,6 +251,8 @@ impl AcpClient {
             replaying.clone(),
             store,
             stderr_tail.clone(),
+            task_tracker_for_reader,
+            cwd_for_reader,
         ));
 
         let wait_handle = tokio::spawn(wait_task(child.clone(), child_root_pid, connected.clone()));
@@ -1115,6 +1121,8 @@ async fn reader_task(
     replaying: Arc<AtomicBool>,
     store: Option<Arc<crate::store::Store>>,
     stderr_tail: StderrTail,
+    task_tracker: Arc<crate::tasks::TerminalTaskTracker>,
+    session_cwd: PathBuf,
 ) {
     let request_semaphore = Arc::new(tokio::sync::Semaphore::new(16));
     let mut line = String::new();
@@ -1312,6 +1320,8 @@ async fn reader_task(
                                     &available_commands,
                                     &session_modes,
                                     &last_usage,
+                                    &task_tracker,
+                                    &session_cwd,
                                 )
                                 .await
                                 {
@@ -1540,6 +1550,290 @@ async fn handle_agent_request(
     }
 }
 
+/// Ingests one initial tool call into observational Terminal Tasks.
+/// Native terminals stay authoritative: content that embeds a managed
+/// terminal id is ignored. Failures here never fail the turn; the tool-call
+/// event itself is still recorded.
+async fn ingest_tool_call_task(
+    tracker: &Arc<crate::tasks::TerminalTaskTracker>,
+    event_log: &EventLog,
+    session_id: &str,
+    agent_name: &str,
+    tc: &agent_client_protocol_schema::ToolCall,
+    content_override: Option<&[ToolCallContent]>,
+    default_cwd: &std::path::Path,
+) -> anyhow::Result<()> {
+    use crate::tasks::observed::{
+        parse_observed_update, terminal_ids_in_content, terminal_ids_in_raw, tool_kind_str,
+    };
+    let kind_str = tool_kind_str(tc.kind);
+    if crate::tasks::observed::is_non_terminal_kind(&kind_str) {
+        return Ok(());
+    }
+    let content: &[ToolCallContent] = content_override.unwrap_or(tc.content.as_slice());
+    for term_id in terminal_ids_in_content(content) {
+        if tracker.is_managed_task(&term_id).await {
+            return Ok(());
+        }
+    }
+    for raw in [&tc.raw_input, &tc.raw_output] {
+        for term_id in terminal_ids_in_raw(raw.as_ref()) {
+            if tracker.is_managed_task(&term_id).await {
+                return Ok(());
+            }
+        }
+    }
+    let content_text = tool_content_text(content);
+    let typed_status = serde_json::to_value(tc.status)
+        .ok()
+        .and_then(|v| v.as_str().map(|s| s.to_owned()));
+    let Some(update) = parse_observed_update(
+        &kind_str,
+        Some(&tc.title),
+        tc.raw_input.as_ref(),
+        tc.raw_output.as_ref(),
+        content_text.as_deref(),
+        typed_status.as_deref(),
+    ) else {
+        return Ok(());
+    };
+    let tool_id = tc.tool_call_id.to_string();
+    let existed = tracker
+        .get_task(&tool_id)
+        .await
+        .is_some_and(|t| t.chat_id == session_id);
+    let cwd = update
+        .cwd
+        .clone()
+        .unwrap_or_else(|| default_cwd.to_path_buf());
+    // An empty fallback cwd means the session directory was unavailable;
+    // keep the record but leave the display empty rather than failing.
+    let cwd_opt = Some(&cwd);
+    let result = tracker
+        .upsert_observed(
+            session_id,
+            &tool_id,
+            update.command.as_deref(),
+            cwd_opt,
+            update.output.as_deref(),
+            update.exit_code,
+            update.state,
+        )
+        .await;
+    if let Some((_, became_terminal)) = result {
+        if !existed || became_terminal {
+            let _ = event_log.append(session_id, agent_name, EventPayload::MetadataChanged {});
+        }
+    }
+    Ok(())
+}
+
+async fn ingest_tool_call_update_task(
+    tracker: &Arc<crate::tasks::TerminalTaskTracker>,
+    event_log: &EventLog,
+    session_id: &str,
+    agent_name: &str,
+    tcu: &agent_client_protocol_schema::ToolCallUpdate,
+    default_cwd: &std::path::Path,
+) -> anyhow::Result<()> {
+    use crate::tasks::observed::{
+        parse_observed_update, terminal_ids_in_content, terminal_ids_in_raw, tool_kind_str,
+    };
+    let kind_str = tcu
+        .fields
+        .kind
+        .map(tool_kind_str)
+        .unwrap_or_else(|| "other".to_string());
+    if crate::tasks::observed::is_non_terminal_kind(&kind_str) {
+        // An existing observational task may still receive output without a
+        // kind on the update. Only skip creation here; updates to an existing
+        // task are handled below via the same path (the kind check above
+        // would incorrectly drop them when the update omits kind). To keep
+        // the rule simple and safe, still attempt ingestion: parse will
+        // require terminal evidence, and non-terminal existing tasks never
+        // exist because creation was already gated.
+        //
+        // Actually creation is gated by parse (which rejects non-terminal),
+        // so reaching upsert with a non-terminal kind can only update an
+        // existing observational task when the update omits kind. When the
+        // update explicitly names a non-terminal kind, skip entirely.
+        if tcu.fields.kind.is_some() {
+            return Ok(());
+        }
+    }
+    if let Some(items) = tcu.fields.content.as_ref() {
+        for term_id in terminal_ids_in_content(items) {
+            if tracker.is_managed_task(&term_id).await {
+                return Ok(());
+            }
+        }
+    }
+    for raw in [&tcu.fields.raw_input, &tcu.fields.raw_output] {
+        for term_id in terminal_ids_in_raw(raw.as_ref()) {
+            if tracker.is_managed_task(&term_id).await {
+                return Ok(());
+            }
+        }
+    }
+    let content_text: Option<String> = tcu
+        .fields
+        .content
+        .as_ref()
+        .and_then(|items| tool_content_text(items));
+    let typed_status = tcu.fields.status.map(|s| {
+        serde_json::to_value(s)
+            .ok()
+            .and_then(|v| v.as_str().map(|str| str.to_owned()))
+            .unwrap_or_else(|| format!("{s:?}").to_lowercase())
+    });
+    // Title for command fallback: explicit update title, else raw_input-derived
+    // title via the same shaping the event uses (without requiring an event).
+    let title_fallback = tcu.fields.title.clone().or_else(|| {
+        tcu.fields
+            .raw_input
+            .as_ref()
+            .map(|i| extract_tool_call_title(None, Some(i)))
+    });
+    let Some(update) = parse_observed_update(
+        &kind_str,
+        title_fallback.as_deref(),
+        tcu.fields.raw_input.as_ref(),
+        tcu.fields.raw_output.as_ref(),
+        content_text.as_deref(),
+        typed_status.as_deref(),
+    ) else {
+        // No terminal evidence yet. If the task already exists (for example an
+        // initial ToolCall created it), still merge output/exit/state when the
+        // update carries them without a command. Re-parse with a permissive
+        // command so existing tasks can advance.
+        let tool_id = tcu.tool_call_id.to_string();
+        if tracker.get_task(&tool_id).await.is_none() {
+            return Ok(());
+        }
+        // Fall through to a direct merge below.
+        return merge_update_into_existing(
+            tracker,
+            event_log,
+            session_id,
+            agent_name,
+            tcu,
+            content_text.as_deref(),
+            typed_status.as_deref(),
+        )
+        .await;
+    };
+    let tool_id = tcu.tool_call_id.to_string();
+    let existed = tracker
+        .get_task(&tool_id)
+        .await
+        .is_some_and(|t| t.chat_id == session_id);
+    let cwd = update
+        .cwd
+        .clone()
+        .unwrap_or_else(|| default_cwd.to_path_buf());
+    let result = tracker
+        .upsert_observed(
+            session_id,
+            &tool_id,
+            update.command.as_deref(),
+            Some(&cwd),
+            update.output.as_deref(),
+            update.exit_code,
+            update.state,
+        )
+        .await;
+    if let Some((_, became_terminal)) = result {
+        if !existed || became_terminal {
+            let _ = event_log.append(session_id, agent_name, EventPayload::MetadataChanged {});
+        }
+    }
+    Ok(())
+}
+
+/// Merges output/exit/state into an existing observational task when the
+/// update carries no command (for example incremental output after the
+/// initial ToolCall). Never creates a new task.
+async fn merge_update_into_existing(
+    tracker: &Arc<crate::tasks::TerminalTaskTracker>,
+    event_log: &EventLog,
+    session_id: &str,
+    agent_name: &str,
+    tcu: &agent_client_protocol_schema::ToolCallUpdate,
+    content_text: Option<&str>,
+    typed_status: Option<&str>,
+) -> anyhow::Result<()> {
+    let tool_id = tcu.tool_call_id.to_string();
+    let Some(task) = tracker.get_task(&tool_id).await else {
+        return Ok(());
+    };
+    if task.chat_id != session_id || task.managed {
+        return Ok(());
+    }
+    // Reuse the full provider-neutral parse with the existing command as a
+    // fallback title so nested shapes (for example `metadata.exit`) share one
+    // extraction path. Never creates a new task; the caller already verified
+    // existence.
+    let existing_command = task.task_command().await;
+    if existing_command.trim().is_empty() {
+        return Ok(());
+    }
+    let kind_str = tcu
+        .fields
+        .kind
+        .map(crate::tasks::observed::tool_kind_str)
+        .unwrap_or_else(|| "execute".to_string());
+    let Some(update) = crate::tasks::observed::parse_observed_update(
+        &kind_str,
+        Some(&existing_command),
+        tcu.fields.raw_input.as_ref(),
+        tcu.fields.raw_output.as_ref(),
+        content_text,
+        typed_status,
+    ) else {
+        return Ok(());
+    };
+    let became_terminal = task
+        .apply_observed_update(
+            None,
+            None,
+            update.output.as_deref(),
+            update.exit_code,
+            update.state,
+        )
+        .await;
+    if became_terminal {
+        let _ = event_log.append(session_id, agent_name, EventPayload::MetadataChanged {});
+    }
+    Ok(())
+}
+
+fn tool_content_text(items: &[ToolCallContent]) -> Option<String> {
+    let parts: Vec<String> = items
+        .iter()
+        .filter_map(|item| match item {
+            ToolCallContent::Content(c) => match &c.content {
+                ContentBlock::Text(t) => {
+                    if t.text.trim().is_empty() {
+                        None
+                    } else {
+                        Some(t.text.clone())
+                    }
+                }
+                other => serde_json::to_string(other).ok(),
+            },
+            ToolCallContent::Diff(d) => serde_json::to_string(d).ok(),
+            ToolCallContent::Terminal(t) => Some(format!("terminal: {}", t.terminal_id)),
+            _ => None,
+        })
+        .filter(|p| !p.is_empty())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("\n"))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_session_update(
     event_log: &EventLog,
@@ -1550,7 +1844,38 @@ async fn handle_session_update(
     available_commands: &Arc<tokio::sync::RwLock<serde_json::Value>>,
     session_modes: &Arc<tokio::sync::RwLock<serde_json::Value>>,
     last_usage: &Arc<tokio::sync::RwLock<serde_json::Value>>,
+    task_tracker: &Arc<crate::tasks::TerminalTaskTracker>,
+    default_cwd: &std::path::Path,
 ) -> anyhow::Result<()> {
+    // Observational Terminal Tasks ingestion runs before the durable event so
+    // a REST fetch after the event always sees the task. Native terminal/create
+    // stays authoritative; duplicates are ignored.
+    match update {
+        SessionUpdate::ToolCall(tc) => {
+            let _ = ingest_tool_call_task(
+                task_tracker,
+                event_log,
+                session_id,
+                agent_name,
+                tc,
+                None,
+                default_cwd,
+            )
+            .await;
+        }
+        SessionUpdate::ToolCallUpdate(tcu) => {
+            let _ = ingest_tool_call_update_task(
+                task_tracker,
+                event_log,
+                session_id,
+                agent_name,
+                tcu,
+                default_cwd,
+            )
+            .await;
+        }
+        _ => {}
+    }
     let payload = match update {
         SessionUpdate::SessionInfoUpdate(info) => {
             // Preserve title for the chat row plus generic updated_at.
@@ -2044,9 +2369,20 @@ mod tests {
                 "image/png",
             )))),
         ]));
-        handle_session_update(&log, &None, "s1", "codex", &update, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         let events = match log.replay_from(1) {
             crate::events::ReplayResult::Complete(events) => events,
             _ => panic!("expected complete replay"),
@@ -2064,7 +2400,7 @@ mod tests {
 
     #[test]
     fn test_serialize_optional_enum_uses_wire_name() {
-        let status = Some(agent_client_protocol_schema::ToolCallStatus::Completed);
+        let status = Some(super::agent_client_protocol_schema::ToolCallStatus::Completed);
 
         assert_eq!(serialize_optional_enum(&status), "completed");
     }
@@ -2107,6 +2443,14 @@ mod tests {
         Arc::new(EventLog::new(100))
     }
 
+    fn test_tracker() -> Arc<crate::tasks::TerminalTaskTracker> {
+        Arc::new(crate::tasks::TerminalTaskTracker::default())
+    }
+
+    fn test_cwd() -> std::path::PathBuf {
+        std::env::temp_dir()
+    }
+
     type SharedJson = Arc<tokio::sync::RwLock<serde_json::Value>>;
 
     #[allow(clippy::type_complexity)]
@@ -2132,9 +2476,20 @@ mod tests {
                 agent_client_protocol_schema::AvailableCommand::new("review", "Review changes"),
             ]),
         );
-        handle_session_update(&log, &None, "s1", "codex", &update, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         assert_eq!(cmds.read().await.as_array().unwrap().len(), 2);
         let events = match log.replay_from(1) {
             crate::events::ReplayResult::Complete(e) => e,
@@ -2154,9 +2509,20 @@ mod tests {
         let update = SessionUpdate::CurrentModeUpdate(
             agent_client_protocol_schema::CurrentModeUpdate::new("act"),
         );
-        handle_session_update(&log, &None, "s1", "codex", &update, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         assert_eq!(modes.read().await["current_mode_id"], "act");
     }
 
@@ -2168,9 +2534,20 @@ mod tests {
             TextContent::new("hello"),
         ));
         let update = SessionUpdate::UserMessageChunk(chunk);
-        handle_session_update(&log, &None, "s1", "codex", &update, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         let events = match log.replay_from(1) {
             crate::events::ReplayResult::Complete(e) => e,
             _ => panic!("expected complete"),
@@ -2188,9 +2565,20 @@ mod tests {
             )))
             .message_id("msg-1"),
         );
-        handle_session_update(&log, &None, "s1", "codex", &with_id, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &with_id,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         let without_id =
             SessionUpdate::AgentMessageChunk(agent_client_protocol_schema::ContentChunk::new(
                 ContentBlock::Text(TextContent::new("old")),
@@ -2204,6 +2592,8 @@ mod tests {
             &cmds,
             &modes,
             &usage,
+            &test_tracker(),
+            &test_cwd(),
         )
         .await
         .unwrap();
@@ -2233,9 +2623,20 @@ mod tests {
             agent_client_protocol_schema::UsageUpdate::new(100, 2000)
                 .cost(agent_client_protocol_schema::Cost::new(0.5, "USD")),
         );
-        handle_session_update(&log, &None, "s1", "codex", &update, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         assert_eq!(usage.read().await["used"], 100);
         let events = match log.replay_from(1) {
             crate::events::ReplayResult::Complete(e) => e,
@@ -2261,9 +2662,20 @@ mod tests {
             agent_client_protocol_schema::ToolCallLocation::new("/a/b.rs").line(3_u32),
         ]);
         let update = SessionUpdate::ToolCall(tc);
-        handle_session_update(&log, &None, "s1", "codex", &update, &cmds, &modes, &usage)
-            .await
-            .unwrap();
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "codex",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &test_tracker(),
+            &test_cwd(),
+        )
+        .await
+        .unwrap();
         let events = match log.replay_from(1) {
             crate::events::ReplayResult::Complete(e) => e,
             _ => panic!("expected complete"),
@@ -2317,5 +2729,264 @@ mod tests {
         assert!(supports_additional_directories(
             &serde_json::json!({"sessionCapabilities": {"additionalDirectories": {}}})
         ));
+    }
+
+    #[tokio::test]
+    async fn test_observed_task_created_from_codex_style_tool_calls() {
+        use super::agent_client_protocol_schema::{ToolCall, ToolCallUpdateFields};
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        // Codex-style: command from title, exit/output from raw_output.
+        let tc = ToolCall::new("codex-tool-1", "Terminal: cargo test")
+            .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+            .raw_input(serde_json::json!({"command": "cargo test"}));
+        let update = SessionUpdate::ToolCall(tc);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        let task = tracker
+            .get_task("codex-tool-1")
+            .await
+            .expect("task created while running");
+        assert!(!task.managed);
+        assert_eq!(task.task_command().await, "cargo test");
+
+        let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
+            "codex-tool-1",
+            ToolCallUpdateFields::new()
+                .status(super::agent_client_protocol_schema::ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({
+                    "formatted_output": "All tests passed",
+                    "exit_code": 0,
+                })),
+        );
+        let update = SessionUpdate::ToolCallUpdate(tcu);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        let details = tracker
+            .get_task("codex-tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_eq!(details.command, "cargo test");
+        assert_eq!(details.exit_code, Some(0));
+        assert!(details.output.contains("All tests passed"));
+        assert!(matches!(details.state, crate::tasks::TaskState::Completed));
+        // Scoped to the chat.
+        assert_eq!(tracker.list_chat_tasks("s1").await.len(), 1);
+        assert_eq!(tracker.list_chat_tasks("other").await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_observed_task_created_from_antigravity_style_tool_calls() {
+        use super::agent_client_protocol_schema::{ToolCall, ToolCallUpdateFields};
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        let tc = ToolCall::new("agy-tool-1", "Terminal: npm test")
+            .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+            .raw_input(serde_json::json!({
+                "commandLine": "npm test -- --watch=false",
+                "workingDir": "/repo/frontend",
+            }));
+        let update = SessionUpdate::ToolCall(tc);
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "antigravity",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &tracker,
+            &cwd,
+        )
+        .await
+        .unwrap();
+        let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
+            "agy-tool-1",
+            ToolCallUpdateFields::new()
+                .status(super::agent_client_protocol_schema::ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({
+                    "commandLine": "npm test -- --watch=false",
+                    "workingDir": "/repo/frontend",
+                    "exitCode": 0,
+                    "combinedOutput": "PASS all tests",
+                })),
+        );
+        let update = SessionUpdate::ToolCallUpdate(tcu);
+        handle_session_update(
+            &log,
+            &None,
+            "s1",
+            "antigravity",
+            &update,
+            &cmds,
+            &modes,
+            &usage,
+            &tracker,
+            &cwd,
+        )
+        .await
+        .unwrap();
+        let details = tracker
+            .get_task("agy-tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_eq!(details.command, "npm test -- --watch=false");
+        assert!(details.cwd.contains("/repo/frontend"));
+        assert_eq!(details.exit_code, Some(0));
+        assert!(details.output.contains("PASS all tests"));
+    }
+
+    #[tokio::test]
+    async fn test_observed_task_captures_opencode_nested_exit() {
+        use super::agent_client_protocol_schema::{ToolCall, ToolCallUpdateFields};
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        let tc = ToolCall::new("opencode-tool-1", "bash")
+            .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+            .raw_input(serde_json::json!({"cwd": "/tmp/work"}));
+        let update = SessionUpdate::ToolCall(tc);
+        handle_session_update(
+            &log, &None, "s1", "opencode", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        // Generic "bash" title alone creates no task.
+        assert!(tracker.get_task("opencode-tool-1").await.is_none());
+        let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
+            "opencode-tool-1",
+            ToolCallUpdateFields::new()
+                .status(super::agent_client_protocol_schema::ToolCallStatus::InProgress)
+                .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+                .title("echo hello-from-smoke".to_string())
+                .raw_input(
+                    serde_json::json!({"command": "echo hello-from-smoke", "cwd": "/tmp/work"}),
+                ),
+        );
+        let update = SessionUpdate::ToolCallUpdate(tcu);
+        handle_session_update(
+            &log, &None, "s1", "opencode", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        assert!(tracker.get_task("opencode-tool-1").await.is_some());
+        let tcu = super::agent_client_protocol_schema::ToolCallUpdate::new(
+            "opencode-tool-1",
+            ToolCallUpdateFields::new()
+                .status(super::agent_client_protocol_schema::ToolCallStatus::Completed)
+                .raw_output(serde_json::json!({
+                    "output": "hello-from-smoke\n",
+                    "metadata": {"output": "hello-from-smoke\n", "exit": 0},
+                })),
+        );
+        let update = SessionUpdate::ToolCallUpdate(tcu);
+        handle_session_update(
+            &log, &None, "s1", "opencode", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        let details = tracker
+            .get_task("opencode-tool-1")
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_eq!(details.exit_code, Some(0));
+        assert!(details.output.contains("hello-from-smoke"));
+        assert!(matches!(details.state, crate::tasks::TaskState::Completed));
+    }
+
+    #[tokio::test]
+    async fn test_terminal_content_dedup_keeps_single_task() {
+        use super::agent_client_protocol_schema::{Terminal, ToolCall, ToolCallContent};
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        let managed = std::sync::Arc::new(crate::tasks::ManagedTask::new(
+            "term-1".into(),
+            "s1".into(),
+            "sleep 30".into(),
+            cwd.clone(),
+            None,
+        ));
+        tracker.register_task(managed).await;
+        // Same execution exposed as a tool call embedding the native terminal.
+        let tc = ToolCall::new("tool-dedup", "Run sleep")
+            .kind(super::agent_client_protocol_schema::ToolKind::Execute)
+            .content(vec![ToolCallContent::Terminal(Terminal::new("term-1"))]);
+        let update = SessionUpdate::ToolCall(tc);
+        handle_session_update(
+            &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+        )
+        .await
+        .unwrap();
+        assert_eq!(tracker.list_chat_tasks("s1").await.len(), 1);
+        assert!(tracker.get_task("tool-dedup").await.is_none());
+        assert!(tracker.get_task("term-1").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_non_terminal_tool_calls_never_become_tasks() {
+        use super::agent_client_protocol_schema::ToolCall;
+        let log = test_log();
+        let (cmds, modes, usage) = test_arcs();
+        let tracker = test_tracker();
+        let cwd = test_cwd();
+        for (id, kind, title) in [
+            (
+                "t-read",
+                super::agent_client_protocol_schema::ToolKind::Read,
+                "Read src/main.rs",
+            ),
+            (
+                "t-edit",
+                super::agent_client_protocol_schema::ToolKind::Edit,
+                "Edit src/main.rs",
+            ),
+            (
+                "t-search",
+                super::agent_client_protocol_schema::ToolKind::Search,
+                "Search files",
+            ),
+            (
+                "t-think",
+                super::agent_client_protocol_schema::ToolKind::Think,
+                "Think",
+            ),
+            (
+                "t-fetch",
+                super::agent_client_protocol_schema::ToolKind::Fetch,
+                "Fetch url",
+            ),
+        ] {
+            let tc = ToolCall::new(id, title)
+                .kind(kind)
+                .raw_input(serde_json::json!({"command": "echo hi", "path": "src/main.rs"}))
+                .raw_output(serde_json::json!({"output": "hi", "exit_code": 0}));
+            let update = SessionUpdate::ToolCall(tc);
+            handle_session_update(
+                &log, &None, "s1", "codex", &update, &cmds, &modes, &usage, &tracker, &cwd,
+            )
+            .await
+            .unwrap();
+        }
+        assert_eq!(tracker.list_chat_tasks("s1").await.len(), 0);
     }
 }

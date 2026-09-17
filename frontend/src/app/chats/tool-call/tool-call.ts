@@ -244,10 +244,11 @@ export class ToolCallComponent {
     if (!output) return content;
 
     const text = content.filter((block): block is Extract<RichContentBlock, { type: 'text' }> => block.type === 'text');
-    if (!text.length || !this.equivalentTerminalText(text.map((block) => block.text).join(''), output)) {
-      return content;
+    if (!text.length) return content;
+    if (this.equivalentTerminalText(text.map((block) => block.text).join(''), output)) {
+      return content.filter((block) => block.type !== 'text');
     }
-    return content.filter((block) => block.type !== 'text');
+    return content.filter((block) => block.type !== 'text' || !this.equivalentTerminalText(block.text, output));
   });
 
   readonly hasDetails = computed(() => {

@@ -432,7 +432,10 @@ describe('ToolCallComponent', () => {
       kind: 'execute',
       status: 'completed',
       output: JSON.stringify({ commandLine: 'git status', exit_code: 0, formatted_output: 'clean' }),
-      content: [{ type: 'content', content: { type: 'text', text: 'Agent note: repository was checked.' } }],
+      content: [
+        { type: 'content', content: { type: 'text', text: 'clean' } },
+        { type: 'content', content: { type: 'text', text: 'Agent note: repository was checked.' } },
+      ],
     };
     fixture.componentRef.setInput('tool', tool);
     fixture.detectChanges();
@@ -440,7 +443,9 @@ describe('ToolCallComponent', () => {
     fixture.detectChanges();
 
     expect(fixture.nativeElement.querySelector('.terminal-output').textContent).toBe('clean');
-    expect(fixture.nativeElement.querySelector('.tool-rich-content').textContent).toContain('Agent note');
+    const richContent = fixture.nativeElement.querySelector('.tool-rich-content');
+    expect(richContent.textContent).toContain('Agent note');
+    expect(richContent.textContent).not.toContain('clean');
   });
 
   it('distinguishes running, successful, and failed commands without relying on color alone', () => {

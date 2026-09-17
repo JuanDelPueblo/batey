@@ -1,27 +1,38 @@
 <h2 mat-dialog-title>Delete chat</h2>
 <mat-dialog-content>
-  @if (error()) { <div class="error" role="alert">{{ error() }}</div> }
-  <p>Are you sure you want to delete “{{ chat.title || 'this chat' }}”?</p>
-  @switch (workspace()?.mode) {
-    @case ('managed_worktree') {
-      <p class="note">
-        The Hub-managed worktree will be removed only if it is safe and clean. Deletion is refused if
-        uncommitted files would be lost. The Git branch is preserved{{ workspace()?.branch ?
-        ', including “' + workspace()?.branch + '”.' : '.' }}
-      </p>
-      <p class="note">Chat history deletion is irreversible; the preserved Git branch is not deleted.</p>
-    }
-    @case ('project_checkout') {
-      <p class="note">Deleting this chat does not delete or clean the project checkout. Its branch and working files are left unchanged.</p>
-    }
-    @default {
-      <p class="note">This action cannot be undone.</p>
-    }
+  @if (error()) {
+  <div class="error" role="alert">{{ error() }}</div>
   }
+  <p>Are you sure you want to delete “{{ chat.title || 'this chat' }}”?</p>
+  @switch (workspace()?.mode) { @case ('managed_worktree') {
+  <p class="note">
+    The Hub-managed worktree will be removed only if it is safe and clean. Deletion is refused if
+    uncommitted files would be lost. The Git branch is preserved{{ workspace()?.branch ? ',
+    including “' + workspace()?.branch + '”.' : '.' }}
+  </p>
+  <p class="note">
+    Chat history deletion is irreversible; the preserved Git branch is not deleted.
+  </p>
+  } @case ('project_checkout') {
+  <p class="note">
+    Deleting this chat does not delete or clean the project checkout. Its branch and working files
+    are left unchanged.
+  </p>
+  } @default {
+  <p class="note">This action cannot be undone.</p>
+  } }
 </mat-dialog-content>
 <mat-dialog-actions align="end">
-  <button mat-button type="button" (click)="dialogRef.close()" [disabled]="deleting()">Cancel</button>
-  <button mat-flat-button class="destructive" type="button" (click)="remove()" [disabled]="deleting()">
+  <button mat-button type="button" (click)="dialogRef.close()" [disabled]="deleting()">
+    Cancel
+  </button>
+  <button
+    mat-flat-button
+    class="destructive"
+    type="button"
+    (click)="remove()"
+    [disabled]="deleting()"
+  >
     @if (deleting()) { <mat-spinner diameter="18" /> } @else { Delete chat }
   </button>
 </mat-dialog-actions>

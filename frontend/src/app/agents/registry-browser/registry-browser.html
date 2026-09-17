@@ -9,9 +9,15 @@
         aria-label="Search the registry"
       />
       @if (query()) {
-        <button mat-icon-button matSuffix type="button" aria-label="Clear search" (click)="query.set('')">
-          <mat-icon>close</mat-icon>
-        </button>
+      <button
+        mat-icon-button
+        matSuffix
+        type="button"
+        aria-label="Clear search"
+        (click)="query.set('')"
+      >
+        <mat-icon>close</mat-icon>
+      </button>
       }
     </mat-form-field>
     <button mat-button type="button" (click)="refresh()" [disabled]="loading()">
@@ -19,130 +25,137 @@
     </button>
   </div>
 
-  @if (error()) { <div class="error" role="alert">{{ error() }}</div> }
-  @if (notice()) { <div class="notice-banner" role="status">{{ notice() }}</div> }
-  @if (loading()) { <mat-progress-bar mode="indeterminate" aria-label="Loading the registry" /> }
-
+  @if (error()) {
+  <div class="error" role="alert">{{ error() }}</div>
+  } @if (notice()) {
+  <div class="notice-banner" role="status">{{ notice() }}</div>
+  } @if (loading()) { <mat-progress-bar mode="indeterminate" aria-label="Loading the registry" /> }
   @if (catalog(); as cat) {
-    <div class="status" role="status">
-      <span>{{ statusLabel(cat.status) }}</span>
-      <span class="dot">•</span>
-      <span>{{ cat.host }}</span>
-      @if (cat.registry_version) { <span class="dot">•</span><span>registry v{{ cat.registry_version }}</span> }
-      @if (cat.fetched_at) {
-        <span class="dot">•</span>
-        <span>Last fetched <time [attr.datetime]="cat.fetched_at">{{ cat.fetched_at | date:'medium' }}</time></span>
+  <div class="status" role="status">
+    <span>{{ statusLabel(cat.status) }}</span>
+    <span class="dot">•</span>
+    <span>{{ cat.host }}</span>
+    @if (cat.registry_version) { <span class="dot">•</span
+    ><span>registry v{{ cat.registry_version }}</span> } @if (cat.fetched_at) {
+    <span class="dot">•</span>
+    <span
+      >Last fetched
+      <time [attr.datetime]="cat.fetched_at">{{ cat.fetched_at | date:'medium' }}</time></span
+    >
+    }
+  </div>
+  @if (cat.rejected?.length) {
+  <details class="notice">
+    <summary>Batey rejected {{ cat.rejected.length }} registry entries.</summary>
+    <ul>
+      @for (entry of cat.rejected; track $index) {
+      <li>{{ entry.id ?? 'Unknown entry' }}: {{ entry.reason }}</li>
       }
-    </div>
-    @if (cat.rejected?.length) {
-      <details class="notice">
-        <summary>Batey rejected {{ cat.rejected.length }} registry entries.</summary>
-        <ul>
-          @for (entry of cat.rejected; track $index) {
-            <li>{{ entry.id ?? 'Unknown entry' }}: {{ entry.reason }}</li>
-          }
-        </ul>
-      </details>
-    }
-
-    @if (cat.status === 'unavailable') {
-      <p class="empty">No usable catalog is available. Select Retry to fetch the Registry again.</p>
-    } @else {
-      <ul class="entries">
-        @for (entry of entries(); track entry.id) {
-          <li class="entry">
-          <div class="entry-head">
-            <div class="entry-title">
-              <span class="entry-name">{{ entry.name }}</span>
-              <span class="entry-id">{{ entry.id }}</span>
-            </div>
-            <span class="spacer"></span>
-            <span class="version">v{{ entry.version }}</span>
-          </div>
-          <p class="entry-description">{{ entry.description }}</p>
-          <div class="entry-meta">
-            @if (entry.authors?.length) { <span>By {{ entry.authors.join(', ') }}</span> }
-            @if (entry.license) { <span>{{ entry.license }}</span> }
-            @if (entry.repository) {
-              <a [href]="entry.repository" target="_blank" rel="noopener noreferrer">Repository</a>
-            }
-            @if (entry.website) {
-              <a [href]="entry.website" target="_blank" rel="noopener noreferrer">Website</a>
-            }
-          </div>
-          @if (entry.unsupported_reason) {
-            <p class="unsupported" role="note">
-              <mat-icon inline>block</mat-icon> {{ entry.unsupported_reason }}
-            </p>
-          }
-          @if (operationFor(entry); as op) {
-            <div class="entry-progress" role="status">
-              <div class="progress-info">
-                <span class="progress-stage">{{ stageLabel(op) }}</span>
-                @if (isDeterminate(op)) {
-                  <span class="progress-percent">{{ downloadPercent(op) }}%</span>
-                }
-              </div>
-              <mat-progress-bar
-                [mode]="isDeterminate(op) ? 'determinate' : 'indeterminate'"
-                [value]="downloadPercent(op)"
-                [attr.aria-label]="stageLabel(op)"
-              />
-            </div>
-          }
-          @if (errorFor(entry); as entryErr) {
-            <p class="entry-error" role="alert">
-              <mat-icon inline>error_outline</mat-icon> {{ entryErr }}
-            </p>
-          }
-          <div class="entry-actions">
-            @if (entry.installed_as) {
-              <span class="installed">
-                Installed as {{ entry.installed_as }}
-                @if (entry.installed_version) { (v{{ entry.installed_version }}) }
-              </span>
-              <span class="spacer"></span>
-              @if (entry.update_available) {
-                <button mat-flat-button type="button" (click)="update(entry)" [disabled]="isEntryBusy(entry)">
-                  Update
-                </button>
-              }
-              <button mat-stroked-button type="button" class="destructive-text" (click)="uninstall(entry)" [disabled]="isEntryBusy(entry)">
-                Uninstall
-              </button>
-            } @else if (!entry.unsupported_reason) {
-              @if (entry.distributions.length > 1) {
-                <mat-form-field appearance="outline" class="distribution">
-                  <mat-label>Distribution</mat-label>
-                  <mat-select
-                    [value]="distributionFor(entry)"
-                    (selectionChange)="setDistribution(entry, $event.value)"
-                    [disabled]="isEntryBusy(entry)"
-                  >
-                    @for (kind of entry.distributions; track kind) {
-                      <mat-option [value]="kind">{{ kind }}</mat-option>
-                    }
-                  </mat-select>
-                </mat-form-field>
-              } @else {
-                <span class="distribution-label">{{ entry.distributions[0] }}</span>
-              }
-              <span class="spacer"></span>
-              <button
-                mat-flat-button
-                type="button"
-                (click)="install(entry)"
-                [disabled]="isEntryBusy(entry) || !distributionFor(entry)"
-              >
-                Install
-              </button>
-            }
-          </div>
-          </li>
-        } @empty {
-          <li class="empty">No registry agents match this search.</li>
+    </ul>
+  </details>
+  } @if (cat.status === 'unavailable') {
+  <p class="empty">No usable catalog is available. Select Retry to fetch the Registry again.</p>
+  } @else {
+  <ul class="entries">
+    @for (entry of entries(); track entry.id) {
+    <li class="entry">
+      <div class="entry-head">
+        <div class="entry-title">
+          <span class="entry-name">{{ entry.name }}</span>
+          <span class="entry-id">{{ entry.id }}</span>
+        </div>
+        <span class="spacer"></span>
+        <span class="version">v{{ entry.version }}</span>
+      </div>
+      <p class="entry-description">{{ entry.description }}</p>
+      <div class="entry-meta">
+        @if (entry.authors?.length) { <span>By {{ entry.authors.join(', ') }}</span> } @if
+        (entry.license) { <span>{{ entry.license }}</span> } @if (entry.repository) {
+        <a [href]="entry.repository" target="_blank" rel="noopener noreferrer">Repository</a>
+        } @if (entry.website) {
+        <a [href]="entry.website" target="_blank" rel="noopener noreferrer">Website</a>
         }
-      </ul>
+      </div>
+      @if (entry.unsupported_reason) {
+      <p class="unsupported" role="note">
+        <mat-icon inline>block</mat-icon> {{ entry.unsupported_reason }}
+      </p>
+      } @if (operationFor(entry); as op) {
+      <div class="entry-progress" role="status">
+        <div class="progress-info">
+          <span class="progress-stage">{{ stageLabel(op) }}</span>
+          @if (isDeterminate(op)) {
+          <span class="progress-percent">{{ downloadPercent(op) }}%</span>
+          }
+        </div>
+        <mat-progress-bar
+          [mode]="isDeterminate(op) ? 'determinate' : 'indeterminate'"
+          [value]="downloadPercent(op)"
+          [attr.aria-label]="stageLabel(op)"
+        />
+      </div>
+      } @if (errorFor(entry); as entryErr) {
+      <p class="entry-error" role="alert">
+        <mat-icon inline>error_outline</mat-icon> {{ entryErr }}
+      </p>
+      }
+      <div class="entry-actions">
+        @if (entry.installed_as) {
+        <span class="installed">
+          Installed as {{ entry.installed_as }} @if (entry.installed_version) { (v{{
+          entry.installed_version }}) }
+        </span>
+        <span class="spacer"></span>
+        @if (entry.update_available) {
+        <button
+          mat-flat-button
+          type="button"
+          (click)="update(entry)"
+          [disabled]="isEntryBusy(entry)"
+        >
+          Update
+        </button>
+        }
+        <button
+          mat-stroked-button
+          type="button"
+          class="destructive-text"
+          (click)="uninstall(entry)"
+          [disabled]="isEntryBusy(entry)"
+        >
+          Uninstall
+        </button>
+        } @else if (!entry.unsupported_reason) { @if (entry.distributions.length > 1) {
+        <mat-form-field appearance="outline" class="distribution">
+          <mat-label>Distribution</mat-label>
+          <mat-select
+            [value]="distributionFor(entry)"
+            (selectionChange)="setDistribution(entry, $event.value)"
+            [disabled]="isEntryBusy(entry)"
+          >
+            @for (kind of entry.distributions; track kind) {
+            <mat-option [value]="kind">{{ kind }}</mat-option>
+            }
+          </mat-select>
+        </mat-form-field>
+        } @else {
+        <span class="distribution-label">{{ entry.distributions[0] }}</span>
+        }
+        <span class="spacer"></span>
+        <button
+          mat-flat-button
+          type="button"
+          (click)="install(entry)"
+          [disabled]="isEntryBusy(entry) || !distributionFor(entry)"
+        >
+          Install
+        </button>
+        }
+      </div>
+    </li>
+    } @empty {
+    <li class="empty">No registry agents match this search.</li>
     }
-  }
+  </ul>
+  } }
 </section>

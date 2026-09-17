@@ -1,19 +1,19 @@
 <mat-sidenav-container class="hub-shell" [class.no-drawer]="!showDrawer()">
   @if (showDrawer()) {
-    <mat-sidenav
-      [mode]="compact() ? 'over' : 'side'"
-      [opened]="!compact() || state.isMobileDrawerOpen()"
-      aria-label="Project and chat navigation"
-      (openedChange)="onDrawerChange($event)"
-    >
-      <hub-navigation (closeRequested)="closeDrawer()" />
-    </mat-sidenav>
+  <mat-sidenav
+    [mode]="compact() ? 'over' : 'side'"
+    [opened]="!compact() || state.isMobileDrawerOpen()"
+    aria-label="Project and chat navigation"
+    (openedChange)="onDrawerChange($event)"
+  >
+    <hub-navigation (closeRequested)="closeDrawer()" />
+  </mat-sidenav>
   }
 
   <mat-sidenav-content>
     @if (!showDrawer()) {
-      <mat-toolbar class="top-bar">
-        <div class="top-bar-inner">
+    <mat-toolbar class="top-bar">
+      <div class="top-bar-inner">
         <a class="brand" routerLink="/" aria-label="Batey home">
           <span class="brand-mark"><mat-icon>hub</mat-icon></span>
           <span class="brand-name">Batey</span>
@@ -36,8 +36,8 @@
         >
           <mat-icon>{{ theme.icon() }}</mat-icon>
         </button>
-        </div>
-      </mat-toolbar>
+      </div>
+    </mat-toolbar>
     }
 
     <main class="page-content"><router-outlet /></main>

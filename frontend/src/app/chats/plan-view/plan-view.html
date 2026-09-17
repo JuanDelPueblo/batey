@@ -1,18 +1,18 @@
 @if (entries().length) {
-  <mat-card class="plan">
-    <div class="plan-header">
-      <mat-icon>format_list_bulleted</mat-icon>
-      <span class="plan-title">{{ heading() }}</span>
-    </div>
-    <mat-card-content>
-      <ul>
-        @for (entry of entries(); track $index) {
-          <li [class.completed]="entry.status === 'completed'">
-            <mat-icon>{{ statusIcon(entry.status) }}</mat-icon>
-            <span>{{ entry.content }}</span>
-          </li>
-        }
-      </ul>
-    </mat-card-content>
-  </mat-card>
+<mat-card class="plan">
+  <div class="plan-header">
+    <mat-icon>format_list_bulleted</mat-icon>
+    <span class="plan-title">{{ heading() }}</span>
+  </div>
+  <mat-card-content>
+    <ul>
+      @for (entry of entries(); track $index) {
+      <li [class.completed]="entry.status === 'completed'">
+        <mat-icon>{{ statusIcon(entry.status) }}</mat-icon>
+        <span>{{ entry.content }}</span>
+      </li>
+      }
+    </ul>
+  </mat-card-content>
+</mat-card>
 }

@@ -1,12 +1,42 @@
-:host { display: block; }
-mat-dialog-content { display: flex; flex-direction: column; gap: 12px; min-width: min(560px, calc(100vw - 48px)); }
-mat-form-field { width: 100%; }
-.error { padding: 12px 16px; border-radius: var(--mat-sys-corner-medium); background: var(--mat-sys-error-container); color: var(--mat-sys-on-error-container); }
-.secret-editor { display: flex; flex-direction: column; gap: 8px; }
-.secret-editor > strong { font: var(--mat-sys-title-small); }
-.secret-editor p { margin: 0; color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-body-small); }
-.secret-row { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(7rem, auto) minmax(10rem, 1fr) auto; gap: 8px; align-items: center; }
-.secret-name, .secret-value {
+:host {
+  display: block;
+}
+mat-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: min(560px, calc(100vw - 48px));
+}
+mat-form-field {
+  width: 100%;
+}
+.error {
+  padding: 12px 16px;
+  border-radius: var(--mat-sys-corner-medium);
+  background: var(--mat-sys-error-container);
+  color: var(--mat-sys-on-error-container);
+}
+.secret-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.secret-editor > strong {
+  font: var(--mat-sys-title-small);
+}
+.secret-editor p {
+  margin: 0;
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-body-small);
+}
+.secret-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(7rem, auto) minmax(10rem, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.secret-name,
+.secret-value {
   min-width: 0;
   padding: 10px 12px;
   border: 1px solid var(--mat-sys-outline);
@@ -15,9 +45,20 @@ mat-form-field { width: 100%; }
   color: var(--mat-sys-on-surface);
   font: var(--mat-sys-body-medium);
 }
-.secret-name:focus-visible, .secret-value:focus-visible { outline: 2px solid var(--mat-sys-primary); outline-offset: 1px; }
-.secret-value:disabled { opacity: 0.6; }
+.secret-name:focus-visible,
+.secret-value:focus-visible {
+  outline: 2px solid var(--mat-sys-primary);
+  outline-offset: 1px;
+}
+.secret-value:disabled {
+  opacity: 0.6;
+}
 @media (max-width: 599px) {
-  .secret-row { grid-template-columns: 1fr auto; }
-  .secret-name, .secret-action { grid-column: 1 / -1; }
+  .secret-row {
+    grid-template-columns: 1fr auto;
+  }
+  .secret-name,
+  .secret-action {
+    grid-column: 1 / -1;
+  }
 }

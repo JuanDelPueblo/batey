@@ -17,116 +17,117 @@
 
 <div class="drawer-body">
   @if (state.activeProject(); as project) {
-    <button
-      mat-button
-      type="button"
-      class="project-switcher"
-      [matMenuTriggerFor]="projectMenu"
-      aria-label="Switch project"
-    >
-      <span class="project-switcher-content">
-        <span class="switcher-icon"><mat-icon>folder</mat-icon></span>
-        <span class="switcher-text">
-          <span class="switcher-name">{{ project.name }}</span>
-          <span class="switcher-path" [title]="project.path">{{ project.path }}</span>
-        </span>
-        <mat-icon iconPositionEnd class="switcher-caret">unfold_more</mat-icon>
+  <button
+    mat-button
+    type="button"
+    class="project-switcher"
+    [matMenuTriggerFor]="projectMenu"
+    aria-label="Switch project"
+  >
+    <span class="project-switcher-content">
+      <span class="switcher-icon"><mat-icon>folder</mat-icon></span>
+      <span class="switcher-text">
+        <span class="switcher-name">{{ project.name }}</span>
+        <span class="switcher-path" [title]="project.path">{{ project.path }}</span>
       </span>
+      <mat-icon iconPositionEnd class="switcher-caret">unfold_more</mat-icon>
+    </span>
+  </button>
+
+  <mat-menu #projectMenu="matMenu" class="hub-project-menu" [overlapTrigger]="false">
+    <div class="menu-heading" role="presentation">Projects</div>
+    @for (item of state.projects(); track item.id) {
+    <button
+      mat-menu-item
+      type="button"
+      class="project-menu-item"
+      [class.current]="item.id === project.id"
+      (click)="openProject(item.id)"
+    >
+      <mat-icon>{{ item.id === project.id ? 'folder_open' : 'folder' }}</mat-icon>
+      <span>{{ item.name }}</span>
     </button>
-
-    <mat-menu #projectMenu="matMenu" class="hub-project-menu" [overlapTrigger]="false">
-      <div class="menu-heading" role="presentation">Projects</div>
-      @for (item of state.projects(); track item.id) {
-        <button
-          mat-menu-item
-          type="button"
-          class="project-menu-item"
-          [class.current]="item.id === project.id"
-          (click)="openProject(item.id)"
-        >
-          <mat-icon>{{ item.id === project.id ? 'folder_open' : 'folder' }}</mat-icon>
-          <span>{{ item.name }}</span>
-        </button>
-      }
-      <mat-divider />
-      <button mat-menu-item type="button" (click)="goHome()">
-        <mat-icon>grid_view</mat-icon><span>All projects</span>
-      </button>
-      <button mat-menu-item type="button" (click)="newProject()">
-        <mat-icon>create_new_folder</mat-icon><span>New project</span>
-      </button>
-    </mat-menu>
-
-    @if (showNewChat()) {
-      <hub-new-chat-button class="drawer-new-chat" [projectId]="project.id" />
     }
+    <mat-divider />
+    <button mat-menu-item type="button" (click)="goHome()">
+      <mat-icon>grid_view</mat-icon><span>All projects</span>
+    </button>
+    <button mat-menu-item type="button" (click)="newProject()">
+      <mat-icon>create_new_folder</mat-icon><span>New project</span>
+    </button>
+  </mat-menu>
 
-    <div class="list-subheader">
-      <span id="chats-heading">Chats</span>
-      <span class="count">{{ visibleChats().length }}</span>
-      <span class="subheader-spacer"></span>
+  @if (showNewChat()) {
+  <hub-new-chat-button class="drawer-new-chat" [projectId]="project.id" />
+  }
+
+  <div class="list-subheader">
+    <span id="chats-heading">Chats</span>
+    <span class="count">{{ visibleChats().length }}</span>
+    <span class="subheader-spacer"></span>
+    <button
+      mat-icon-button
+      class="archive-toggle"
+      [class.on]="state.showArchived()"
+      [matTooltip]="state.showArchived() ? 'Hide archived chats' : 'Show archived chats'"
+      [attr.aria-pressed]="state.showArchived()"
+      aria-label="Show archived chats"
+      (click)="state.setShowArchived(!state.showArchived())"
+    >
+      <mat-icon>inventory_2</mat-icon>
+    </button>
+  </div>
+
+  <mat-nav-list aria-labelledby="chats-heading">
+    @for (chat of visibleChats(); track chat.id) {
+    <a
+      mat-list-item
+      lines="2"
+      [routerLink]="['/projects', chat.project_id, 'chats', chat.id]"
+      routerLinkActive="selected"
+      (click)="closeRequested.emit()"
+      [attr.aria-label]="chatAriaLabel(chat)"
+    >
+      <span matListItemTitle class="chat-title">{{ chat.title || 'Untitled chat' }}</span>
+      <span matListItemLine class="chat-meta-line">
+        <span class="chat-meta">
+          <span class="agent-badge">{{ agentLabel(chat.agent) }}</span>
+          <hub-chat-status-badge
+            [status]="activityFor(chat)"
+            [turnStartedAt]="turnStartedAtFor(chat)"
+          />
+          @if (chat.archived) { <span class="archived-tag">Archived</span> }
+        </span>
+      </span>
       <button
         mat-icon-button
-        class="archive-toggle"
-        [class.on]="state.showArchived()"
-        [matTooltip]="state.showArchived() ? 'Hide archived chats' : 'Show archived chats'"
-        [attr.aria-pressed]="state.showArchived()"
-        aria-label="Show archived chats"
-        (click)="state.setShowArchived(!state.showArchived())"
+        matListItemMeta
+        type="button"
+        class="chat-actions-button"
+        [matMenuTriggerFor]="chatActions"
+        [attr.aria-label]="'Actions for ' + (chat.title || 'Untitled chat')"
+        matTooltip="Chat actions"
+        (click)="$event.preventDefault(); $event.stopPropagation()"
       >
-        <mat-icon>inventory_2</mat-icon>
+        <mat-icon>more_vert</mat-icon>
       </button>
-    </div>
-
-    <mat-nav-list aria-labelledby="chats-heading">
-      @for (chat of visibleChats(); track chat.id) {
-        <a
-          mat-list-item
-          lines="2"
-          [routerLink]="['/projects', chat.project_id, 'chats', chat.id]"
-          routerLinkActive="selected"
-          (click)="closeRequested.emit()"
-          [attr.aria-label]="chatAriaLabel(chat)"
-        >
-          <span matListItemTitle class="chat-title">{{ chat.title || 'Untitled chat' }}</span>
-          <span matListItemLine class="chat-meta-line">
-            <span class="chat-meta">
-              <span class="agent-badge">{{ agentLabel(chat.agent) }}</span>
-              <hub-chat-status-badge [status]="activityFor(chat)" [turnStartedAt]="turnStartedAtFor(chat)" />
-              @if (chat.archived) { <span class="archived-tag">Archived</span> }
-            </span>
-          </span>
-          <button
-            mat-icon-button
-            matListItemMeta
-            type="button"
-            class="chat-actions-button"
-            [matMenuTriggerFor]="chatActions"
-            [attr.aria-label]="'Actions for ' + (chat.title || 'Untitled chat')"
-            matTooltip="Chat actions"
-            (click)="$event.preventDefault(); $event.stopPropagation()"
-          >
-            <mat-icon>more_vert</mat-icon>
-          </button>
-        </a>
-        <mat-menu #chatActions="matMenu">
-          <button mat-menu-item type="button" (click)="renameChat(chat)">
-            <mat-icon>edit</mat-icon><span>Rename chat</span>
-          </button>
-          <button mat-menu-item type="button" (click)="archiveChat(chat)">
-            <mat-icon>{{ chat.archived ? 'unarchive' : 'archive' }}</mat-icon>
-            <span>{{ chat.archived ? 'Unarchive chat' : 'Archive chat' }}</span>
-          </button>
-          <button mat-menu-item type="button" (click)="removeChat(chat)">
-            <mat-icon class="destructive-icon">delete</mat-icon><span>Delete chat</span>
-          </button>
-        </mat-menu>
-      } @empty {
-        <p class="drawer-empty">
-          {{ state.showArchived() ? 'No archived chats.' : 'No chats yet.' }}
-        </p>
-      }
-    </mat-nav-list>
+    </a>
+    <mat-menu #chatActions="matMenu">
+      <button mat-menu-item type="button" (click)="renameChat(chat)">
+        <mat-icon>edit</mat-icon><span>Rename chat</span>
+      </button>
+      <button mat-menu-item type="button" (click)="archiveChat(chat)">
+        <mat-icon>{{ chat.archived ? 'unarchive' : 'archive' }}</mat-icon>
+        <span>{{ chat.archived ? 'Unarchive chat' : 'Archive chat' }}</span>
+      </button>
+      <button mat-menu-item type="button" (click)="removeChat(chat)">
+        <mat-icon class="destructive-icon">delete</mat-icon><span>Delete chat</span>
+      </button>
+    </mat-menu>
+    } @empty {
+    <p class="drawer-empty">{{ state.showArchived() ? 'No archived chats.' : 'No chats yet.' }}</p>
+    }
+  </mat-nav-list>
   }
 </div>
 

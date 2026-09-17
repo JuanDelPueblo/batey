@@ -1,0 +1,3 @@
+# Angular CLI output is generated and is not source linting input.
+dist/
+.angular/

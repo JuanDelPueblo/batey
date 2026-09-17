@@ -1,20 +1,31 @@
-@for (block of blocks(); track $index) {
-  @switch (block.type) {
-    @case ('text') { <div class="rich-text"><hub-markdown [content]="block.text" /></div> }
-    @case ('image') { <img class="rich-image" [src]="mediaUrl(block)" [alt]="block.uri || 'Attached image'" /> }
-    @case ('audio') { <audio class="rich-audio" controls [src]="mediaUrl(block)">Audio attachment</audio> }
-    @case ('resource_link') {
-      <div class="resource-link"><mat-icon>link</mat-icon><div><strong>{{ block.title || block.name }}</strong>
-        @if (block.description) { <span>{{ block.description }}</span> }
-        @if (safeLink(block.uri); as href) { <a [href]="href" target="_blank" rel="noopener noreferrer" [attr.aria-label]="'Open resource ' + block.name">Open resource</a> }
-        @else { <small>Resource link unavailable for direct opening</small> }
-      </div></div>
-    }
-    @case ('resource') {
-      <section class="resource"><div class="resource-meta"><mat-icon>description</mat-icon>{{ resourceMeta(block) }}</div>
-        @if (resourceText(block); as text) { <pre>{{ text }}</pre> }
-        @else { <p>Binary resource retained as metadata; it is not executed or opened automatically.</p> }
-      </section>
-    }
+@for (block of blocks(); track $index) { @switch (block.type) { @case ('text') {
+<div class="rich-text"><hub-markdown [content]="block.text" /></div>
+} @case ('image') {
+<img class="rich-image" [src]="mediaUrl(block)" [alt]="block.uri || 'Attached image'" /> } @case
+('audio') { <audio class="rich-audio" controls [src]="mediaUrl(block)">Audio attachment</audio> }
+@case ('resource_link') {
+<div class="resource-link">
+  <mat-icon>link</mat-icon>
+  <div>
+    <strong>{{ block.title || block.name }}</strong> @if (block.description) {
+    <span>{{ block.description }}</span> } @if (safeLink(block.uri); as href) {
+    <a
+      [href]="href"
+      target="_blank"
+      rel="noopener noreferrer"
+      [attr.aria-label]="'Open resource ' + block.name"
+      >Open resource</a
+    >
+    } @else { <small>Resource link unavailable for direct opening</small> }
+  </div>
+</div>
+} @case ('resource') {
+<section class="resource">
+  <div class="resource-meta"><mat-icon>description</mat-icon>{{ resourceMeta(block) }}</div>
+  @if (resourceText(block); as text) {
+  <pre>{{ text }}</pre>
+  } @else {
+  <p>Binary resource retained as metadata; it is not executed or opened automatically.</p>
   }
-}
+</section>
+} } }

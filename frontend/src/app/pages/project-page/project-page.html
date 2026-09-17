@@ -1,82 +1,81 @@
 @if (project(); as current) {
-  <section class="project-page">
-    <header class="page-header">
-      <div class="header-title">
-        <div class="title-text">
-          <h1>{{ current.name }}</h1>
-          <code [title]="current.path">{{ current.path }}</code>
-        </div>
+<section class="project-page">
+  <header class="page-header">
+    <div class="header-title">
+      <div class="title-text">
+        <h1>{{ current.name }}</h1>
+        <code [title]="current.path">{{ current.path }}</code>
       </div>
-      <div class="header-actions">
-        <hub-new-chat-button [projectId]="current.id" />
-        <button
-          mat-icon-button
-          [matMenuTriggerFor]="projectActions"
-          aria-label="Project actions"
-        >
-          <mat-icon>more_vert</mat-icon>
-        </button>
-        <mat-menu #projectActions="matMenu">
-          <button mat-menu-item type="button" (click)="edit(current)">
-            <mat-icon>edit</mat-icon>
-            <span>Edit project</span>
-          </button>
-          <button mat-menu-item type="button" (click)="remove(current)">
-            <mat-icon class="destructive-icon">delete</mat-icon>
-            <span>Delete project</span>
-          </button>
-        </mat-menu>
-      </div>
-    </header>
-
-    <div class="section-bar">
-      <h2>Chats</h2>
-      <span class="count">{{ visibleChats().length }}</span>
-      <span class="section-spacer"></span>
-      <button
-        mat-button
-        class="archive-filter"
-        [class.on]="state.showArchived()"
-        (click)="state.setShowArchived(!state.showArchived())"
-        [attr.aria-pressed]="state.showArchived()"
-      >
-        <mat-icon>{{ state.showArchived() ? 'inventory_2' : 'archive' }}</mat-icon>
-        <span>{{ state.showArchived() ? 'Showing archived' : 'Show archived' }}</span>
-      </button>
     </div>
+    <div class="header-actions">
+      <hub-new-chat-button [projectId]="current.id" />
+      <button mat-icon-button [matMenuTriggerFor]="projectActions" aria-label="Project actions">
+        <mat-icon>more_vert</mat-icon>
+      </button>
+      <mat-menu #projectActions="matMenu">
+        <button mat-menu-item type="button" (click)="edit(current)">
+          <mat-icon>edit</mat-icon>
+          <span>Edit project</span>
+        </button>
+        <button mat-menu-item type="button" (click)="remove(current)">
+          <mat-icon class="destructive-icon">delete</mat-icon>
+          <span>Delete project</span>
+        </button>
+      </mat-menu>
+    </div>
+  </header>
 
-    @if (visibleChats().length) {
-      <div class="chat-grid">
-        @for (chat of visibleChats(); track chat.id) {
-          <mat-card appearance="outlined" class="chat-card">
-            <a
-              [routerLink]="['/projects', current.id, 'chats', chat.id]"
-              [attr.aria-label]="chatAriaLabel(chat)"
-            >
-              <div class="chat-top">
-                <span class="agent-badge">{{ agentLabel(chat.agent) }}</span>
-                <hub-chat-status-badge [status]="activityFor(chat)" [turnStartedAt]="state.chatTurnStartedAt(chat.id)" />
-                @if (chat.archived) { <span class="archived-tag">Archived</span> }
-              </div>
-              <h3 class="chat-title">{{ chat.title || 'Untitled chat' }}</h3>
-            </a>
-          </mat-card>
-        }
-      </div>
-    } @else {
-      <div class="empty-chat">
-        <mat-icon>forum</mat-icon>
-        <h3>{{ state.showArchived() ? 'No archived chats' : 'No chats in this project yet' }}</h3>
-        <p>Start a chat and pick the ACP agent that runs it.</p>
-        @if (!state.showArchived()) { <hub-new-chat-button [projectId]="current.id" /> }
-      </div>
+  <div class="section-bar">
+    <h2>Chats</h2>
+    <span class="count">{{ visibleChats().length }}</span>
+    <span class="section-spacer"></span>
+    <button
+      mat-button
+      class="archive-filter"
+      [class.on]="state.showArchived()"
+      (click)="state.setShowArchived(!state.showArchived())"
+      [attr.aria-pressed]="state.showArchived()"
+    >
+      <mat-icon>{{ state.showArchived() ? 'inventory_2' : 'archive' }}</mat-icon>
+      <span>{{ state.showArchived() ? 'Showing archived' : 'Show archived' }}</span>
+    </button>
+  </div>
+
+  @if (visibleChats().length) {
+  <div class="chat-grid">
+    @for (chat of visibleChats(); track chat.id) {
+    <mat-card appearance="outlined" class="chat-card">
+      <a
+        [routerLink]="['/projects', current.id, 'chats', chat.id]"
+        [attr.aria-label]="chatAriaLabel(chat)"
+      >
+        <div class="chat-top">
+          <span class="agent-badge">{{ agentLabel(chat.agent) }}</span>
+          <hub-chat-status-badge
+            [status]="activityFor(chat)"
+            [turnStartedAt]="state.chatTurnStartedAt(chat.id)"
+          />
+          @if (chat.archived) { <span class="archived-tag">Archived</span> }
+        </div>
+        <h3 class="chat-title">{{ chat.title || 'Untitled chat' }}</h3>
+      </a>
+    </mat-card>
     }
-  </section>
+  </div>
+  } @else {
+  <div class="empty-chat">
+    <mat-icon>forum</mat-icon>
+    <h3>{{ state.showArchived() ? 'No archived chats' : 'No chats in this project yet' }}</h3>
+    <p>Start a chat and pick the ACP agent that runs it.</p>
+    @if (!state.showArchived()) { <hub-new-chat-button [projectId]="current.id" /> }
+  </div>
+  }
+</section>
 } @else {
-  <section class="missing">
-    <mat-icon>folder_off</mat-icon>
-    <h1>Project not found</h1>
-    <p>This project was deleted, or the address is not correct.</p>
-    <a mat-flat-button routerLink="/">Back to projects</a>
-  </section>
+<section class="missing">
+  <mat-icon>folder_off</mat-icon>
+  <h1>Project not found</h1>
+  <p>This project was deleted, or the address is not correct.</p>
+  <a mat-flat-button routerLink="/">Back to projects</a>
+</section>
 }

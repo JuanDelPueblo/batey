@@ -6,47 +6,41 @@
   </p>
 
   @if (data.resumed) {
-    <p class="hint" role="note">
-      Reconnected to the running authentication flow. Only the retained recent output is shown;
-      Batey does not fabricate earlier terminal output.
-    </p>
+  <p class="hint" role="note">
+    Reconnected to the running authentication flow. Only the retained recent output is shown; Batey
+    does not fabricate earlier terminal output.
+  </p>
+  } @if (errorMessage()) {
+  <div class="error" role="alert">{{ errorMessage() }}</div>
   }
 
-  @if (errorMessage()) { <div class="error" role="alert">{{ errorMessage() }}</div> }
-
   <div class="terminal-shell" [class.disconnected]="!connected()" (click)="focusTerminal()">
-    <div
-      #terminal
-      class="terminal"
-      role="region"
-      aria-label="Authentication terminal"
-    ></div>
+    <div #terminal class="terminal" role="region" aria-label="Authentication terminal"></div>
   </div>
 
   <div class="status" role="status" aria-live="polite">
-    @switch (flowState()) {
-      @case ('running') { <mat-spinner diameter="16" /> <span>Running. Focus the terminal and type.</span> }
-      @case ('succeeded') { <mat-icon>check_circle</mat-icon> <span>Authentication completed.</span> }
-      @case ('failed') {
-        <mat-icon>error</mat-icon>
-        <span>Authentication failed{{ reason() ? ': ' + reason() : (exitCode() !== null ? ' (exit code ' + exitCode() + ')' : '') }}.</span>
-      }
-      @case ('cancelled') {
-        <mat-icon>cancel</mat-icon>
-        <span>Authentication was cancelled{{ reason() ? ': ' + reason() : '' }}.</span>
-      }
-      @case ('timed_out') {
-        <mat-icon>schedule</mat-icon>
-        <span>Authentication timed out{{ reason() ? ': ' + reason() : '' }}.</span>
-      }
-    }
+    @switch (flowState()) { @case ('running') { <mat-spinner diameter="16" />
+    <span>Running. Focus the terminal and type.</span> } @case ('succeeded') {
+    <mat-icon>check_circle</mat-icon> <span>Authentication completed.</span> } @case ('failed') {
+    <mat-icon>error</mat-icon>
+    <span
+      >Authentication failed{{ reason() ? ': ' + reason() : (exitCode() !== null ? ' (exit code ' +
+      exitCode() + ')' : '') }}.</span
+    >
+    } @case ('cancelled') {
+    <mat-icon>cancel</mat-icon>
+    <span>Authentication was cancelled{{ reason() ? ': ' + reason() : '' }}.</span>
+    } @case ('timed_out') {
+    <mat-icon>schedule</mat-icon>
+    <span>Authentication timed out{{ reason() ? ': ' + reason() : '' }}.</span>
+    } }
   </div>
 </mat-dialog-content>
 
 <mat-dialog-actions align="end">
   @if (running) {
-    <button mat-button type="button" (click)="cancel()">Cancel</button>
+  <button mat-button type="button" (click)="cancel()">Cancel</button>
   } @else {
-    <button mat-flat-button type="button" (click)="dialogRef.close()">Close</button>
+  <button mat-flat-button type="button" (click)="dialogRef.close()">Close</button>
   }
 </mat-dialog-actions>

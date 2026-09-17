@@ -1,8 +1,29 @@
-mat-dialog-content { display: flex; flex-direction: column; gap: 12px; min-width: min(640px, calc(100vw - 32px)); max-width: 900px; }
-.hint { color: var(--mat-sys-on-surface-variant); margin: 0; }
-.error { padding: 12px 16px; border-radius: var(--mat-sys-corner-medium); background: var(--mat-sys-error-container); color: var(--mat-sys-on-error-container); }
-.terminal-shell { border-radius: var(--mat-sys-corner-medium); background: #14151a; overflow: hidden; padding: 4px; }
-.terminal-shell.disconnected { opacity: 0.7; }
+mat-dialog-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: min(640px, calc(100vw - 32px));
+  max-width: 900px;
+}
+.hint {
+  color: var(--mat-sys-on-surface-variant);
+  margin: 0;
+}
+.error {
+  padding: 12px 16px;
+  border-radius: var(--mat-sys-corner-medium);
+  background: var(--mat-sys-error-container);
+  color: var(--mat-sys-on-error-container);
+}
+.terminal-shell {
+  border-radius: var(--mat-sys-corner-medium);
+  background: #14151a;
+  overflow: hidden;
+  padding: 4px;
+}
+.terminal-shell.disconnected {
+  opacity: 0.7;
+}
 .terminal {
   margin: 0;
   height: min(52vh, 420px);
@@ -10,9 +31,23 @@ mat-dialog-content { display: flex; flex-direction: column; gap: 12px; min-width
   outline: none;
   overscroll-behavior: contain;
 }
-.status { display: flex; align-items: center; gap: 8px; min-height: 24px; color: var(--mat-sys-on-surface-variant); }
-.status mat-icon { font-size: 18px; width: 18px; height: 18px; }
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  color: var(--mat-sys-on-surface-variant);
+}
+.status mat-icon {
+  font-size: 18px;
+  width: 18px;
+  height: 18px;
+}
 @media (max-width: 599px) {
-  mat-dialog-content { min-width: 0; }
-  .terminal { height: min(46vh, 320px); }
+  mat-dialog-content {
+    min-width: 0;
+  }
+  .terminal {
+    height: min(46vh, 320px);
+  }
 }

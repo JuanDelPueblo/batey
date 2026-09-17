@@ -14,58 +14,60 @@
     </div>
   </header>
 
-  @if (actionError()) { <div class="banner error" role="alert">{{ actionError() }}</div> }
-  @if (notice()) { <div class="banner notice" role="status">{{ notice() }}</div> }
-  @if (state.agentError(); as catalogError) { <div class="banner error" role="alert">{{ catalogError }}</div> }
-
-  @if (state.agentsLoading() && state.agents().length === 0) {
-    <mat-progress-bar mode="indeterminate" aria-label="Loading agents" />
+  @if (actionError()) {
+  <div class="banner error" role="alert">{{ actionError() }}</div>
+  } @if (notice()) {
+  <div class="banner notice" role="status">{{ notice() }}</div>
+  } @if (state.agentError(); as catalogError) {
+  <div class="banner error" role="alert">{{ catalogError }}</div>
+  } @if (state.agentsLoading() && state.agents().length === 0) {
+  <mat-progress-bar mode="indeterminate" aria-label="Loading agents" />
   }
 
   <section class="installed" aria-label="Installed agents">
     <h2>Installed <span class="count">{{ state.agents().length }}</span></h2>
     @if (state.agents().length === 0) {
-      <p class="empty">
-        No agents are installed yet.
-        <a routerLink="/agents/registry">Get one from the ACP Registry</a>.
-      </p>
+    <p class="empty">
+      No agents are installed yet.
+      <a routerLink="/agents/registry">Get one from the ACP Registry</a>.
+    </p>
     } @else {
-      <div class="cards">
-        @for (agent of state.agents(); track agent.id) {
-          <hub-agent-card
-            [agent]="agent"
-            [targeted]="targetAgentId() === agent.id"
-            [auth]="authFor(agent.id)"
-            [authLoading]="authLoadingFor(agent.id)"
-            [authError]="authErrorFor(agent.id)"
-            [protocolFlow]="protocolFlowFor(agent.id)"
-            [protocolElicitations]="
+    <div class="cards">
+      @for (agent of state.agents(); track agent.id) {
+      <hub-agent-card
+        [agent]="agent"
+        [targeted]="targetAgentId() === agent.id"
+        [auth]="authFor(agent.id)"
+        [authLoading]="authLoadingFor(agent.id)"
+        [authError]="authErrorFor(agent.id)"
+        [protocolFlow]="protocolFlowFor(agent.id)"
+        [protocolElicitations]="
               protocolFlowFor(agent.id) ? protocolElicitationsFor(protocolFlowFor(agent.id)!.flow_id) : []
             "
-            [protocolInteraction]="
+        [protocolInteraction]="
               protocolFlowFor(agent.id) ? protocolInteractionFor(protocolFlowFor(agent.id)!.flow_id) : null
             "
-            [protocolLoading]="protocolLoadingFor(agent.id)"
-            [terminalFlow]="terminalFlowFor(agent.id)"
-            (authenticate)="authenticate(agent, $event)"
-            (terminal)="openTerminalAuth(agent, $event)"
-            (logout)="logout(agent)"
-            (clearCredentials)="clearCredentials(agent)"
-            (cancelProtocol)="cancelProtocol(agent)"
-            (dismissProtocol)="dismissProtocol(agent)"
-            (respondElicitation)="respondProtocolElicitation(agent, $event)"
-            (relayCallback)="relayProtocolCallback(agent, $event)"
-            (resumeTerminal)="resumeTerminalAuth(agent, $event)"
-            (cancelTerminal)="cancelTerminalAuth(agent)"
-            (edit)="editCustom(agent)"
-            (remove)="removeCustom(agent)"
-            (update)="update(agent)"
-            (uninstall)="uninstall(agent)"
-            (environment)="editEnvironment(agent)"
-            (retryAuth)="reloadAuth(agent)"
-          />
-        }
-      </div>
+        [protocolLoading]="protocolLoadingFor(agent.id)"
+        [terminalFlow]="terminalFlowFor(agent.id)"
+        (authenticate)="authenticate(agent, $event)"
+        (terminal)="openTerminalAuth(agent, $event)"
+        (logout)="logout(agent)"
+        (clearCredentials)="clearCredentials(agent)"
+        (cancelProtocol)="cancelProtocol(agent)"
+        (dismissProtocol)="dismissProtocol(agent)"
+        (respondElicitation)="respondProtocolElicitation(agent, $event)"
+        (relayCallback)="relayProtocolCallback(agent, $event)"
+        (resumeTerminal)="resumeTerminalAuth(agent, $event)"
+        (cancelTerminal)="cancelTerminalAuth(agent)"
+        (edit)="editCustom(agent)"
+        (remove)="removeCustom(agent)"
+        (update)="update(agent)"
+        (uninstall)="uninstall(agent)"
+        (environment)="editEnvironment(agent)"
+        (retryAuth)="reloadAuth(agent)"
+      />
+      }
+    </div>
     }
   </section>
 </div>

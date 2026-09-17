@@ -4,7 +4,14 @@
     <span>Terminal tasks</span>
   </h2>
   <div class="header-actions">
-    <button mat-icon-button type="button" aria-label="Refresh tasks" matTooltip="Refresh tasks" (click)="loadTasks()" [disabled]="loading()">
+    <button
+      mat-icon-button
+      type="button"
+      aria-label="Refresh tasks"
+      matTooltip="Refresh tasks"
+      (click)="loadTasks()"
+      [disabled]="loading()"
+    >
       <mat-icon>refresh</mat-icon>
     </button>
     <button mat-icon-button type="button" aria-label="Close terminal tasks dialog" mat-dialog-close>
@@ -15,119 +22,126 @@
 
 <mat-dialog-content class="dialog-body">
   @if (error()) {
-    <div class="task-error-banner" role="alert">
-      <mat-icon>error_outline</mat-icon>
-      <span>{{ error() }}</span>
-    </div>
-  }
-
-  @if (loading() && !tasks().length) {
-    <div class="tasks-loading">
-      <mat-spinner diameter="36"></mat-spinner>
-      <span>Loading tasks…</span>
-    </div>
+  <div class="task-error-banner" role="alert">
+    <mat-icon>error_outline</mat-icon>
+    <span>{{ error() }}</span>
+  </div>
+  } @if (loading() && !tasks().length) {
+  <div class="tasks-loading">
+    <mat-spinner diameter="36"></mat-spinner>
+    <span>Loading tasks…</span>
+  </div>
   } @else if (!tasks().length) {
-    <div class="tasks-empty">
-      <mat-icon>check_circle_outline</mat-icon>
-      <p>No terminal tasks recorded for this chat.</p>
-    </div>
+  <div class="tasks-empty">
+    <mat-icon>check_circle_outline</mat-icon>
+    <p>No terminal tasks recorded for this chat.</p>
+  </div>
   } @else {
-    <div class="tasks-container">
-      <section class="task-list-panel" aria-labelledby="task-list-heading">
-        <div class="task-list-heading" id="task-list-heading">
-          <span>Tasks</span>
-          <span class="task-count">{{ tasks().length }}</span>
+  <div class="tasks-container">
+    <section class="task-list-panel" aria-labelledby="task-list-heading">
+      <div class="task-list-heading" id="task-list-heading">
+        <span>Tasks</span>
+        <span class="task-count">{{ tasks().length }}</span>
+      </div>
+      <div class="task-list" aria-label="Terminal task list">
+        @for (task of tasks(); track task.id) {
+        <button
+          type="button"
+          class="task-item"
+          [class.selected]="selectedTaskId() === task.id"
+          [attr.aria-pressed]="selectedTaskId() === task.id"
+          [attr.aria-label]="task.command + ', ' + task.state + ', ' + taskDuration(task)"
+          (click)="selectTask(task.id)"
+        >
+          <div class="task-item-header">
+            <span class="task-state-badge" [class]="task.state">{{ task.state }}</span>
+            <span class="task-duration">{{ taskDuration(task) }}</span>
+          </div>
+          <div class="task-command" [title]="task.command">{{ task.command }}</div>
+        </button>
+        }
+      </div>
+    </section>
+
+    <section class="task-details" aria-label="Selected task details">
+      @if (selectedTaskDetails(); as details) {
+      <div class="details-header">
+        <div class="details-command-block">
+          <div class="section-label">Command</div>
+          <code class="command-text" [title]="details.command">{{ details.command }}</code>
         </div>
-        <div class="task-list" aria-label="Terminal task list">
-          @for (task of tasks(); track task.id) {
-            <button
-              type="button"
-              class="task-item"
-              [class.selected]="selectedTaskId() === task.id"
-              [attr.aria-pressed]="selectedTaskId() === task.id"
-              [attr.aria-label]="task.command + ', ' + task.state + ', ' + taskDuration(task)"
-              (click)="selectTask(task.id)"
-            >
-              <div class="task-item-header">
-                <span class="task-state-badge" [class]="task.state">{{ task.state }}</span>
-                <span class="task-duration">{{ taskDuration(task) }}</span>
-              </div>
-              <div class="task-command" [title]="task.command">{{ task.command }}</div>
-            </button>
+        <div class="details-status-actions">
+          <div class="details-status">
+            <span class="task-state-badge" [class]="details.state">{{ details.state }}</span>
+            <span class="details-duration">{{ taskDuration(details) }}</span>
+          </div>
+          @if (isTaskStoppable(details)) {
+          <button
+            mat-button
+            class="stop-task"
+            type="button"
+            aria-label="Stop task"
+            [disabled]="stopping()"
+            (click)="stopTask(details.id)"
+          >
+            <mat-icon>stop</mat-icon>
+            <span>{{ stopping() ? 'Stopping…' : 'Stop task' }}</span>
+          </button>
+          } @else if (details.state === 'running') {
+          <span
+            class="agent-managed-note"
+            matTooltip="This command runs inside the agent and cannot be stopped from here"
+            >Agent-managed</span
+          >
           }
         </div>
-      </section>
-
-      <section class="task-details" aria-label="Selected task details">
-        @if (selectedTaskDetails(); as details) {
-          <div class="details-header">
-            <div class="details-command-block">
-              <div class="section-label">Command</div>
-              <code class="command-text" [title]="details.command">{{ details.command }}</code>
-            </div>
-            <div class="details-status-actions">
-              <div class="details-status">
-                <span class="task-state-badge" [class]="details.state">{{ details.state }}</span>
-                <span class="details-duration">{{ taskDuration(details) }}</span>
-              </div>
-              @if (isTaskStoppable(details)) {
-                <button
-                  mat-button
-                  class="stop-task"
-                  type="button"
-                  aria-label="Stop task"
-                  [disabled]="stopping()"
-                  (click)="stopTask(details.id)"
-                >
-                  <mat-icon>stop</mat-icon>
-                  <span>{{ stopping() ? 'Stopping…' : 'Stop task' }}</span>
-                </button>
-              } @else if (details.state === 'running') {
-                <span class="agent-managed-note" matTooltip="This command runs inside the agent and cannot be stopped from here">Agent-managed</span>
-              }
-            </div>
-          </div>
-          <div class="details-meta">
-            <span class="detail-item">
-              <span class="detail-label">Working directory</span>
-              <code class="detail-value">{{ details.cwd }}</code>
-            </span>
-            <span class="detail-item">
-              <span class="detail-label">Started</span>
-              <time class="detail-value" [attr.datetime]="details.started_at">{{ formatDateTime(details.started_at) }}</time>
-            </span>
-            @if (details.exit_code != null) {
-              <span class="detail-item">
-                <span class="detail-label">Exit code</span>
-                <code class="detail-value">{{ details.exit_code }}</code>
-              </span>
-            }
-          </div>
-
-          <div class="output-section">
-            <div class="output-header">
-              <h3 class="output-title">Output</h3>
-              @if (details.truncated) {
-                <span class="truncation-badge" matTooltip="Output was truncated to the maximum buffer size">
-                  <mat-icon>warning</mat-icon> Truncated
-                </span>
-              }
-            </div>
-            @if (loadingDetails()) {
-              <div class="details-loading">
-                <mat-spinner diameter="24"></mat-spinner>
-              </div>
-            } @else {
-              <pre class="terminal-output">{{ details.output || '(No output recorded)' }}</pre>
-            }
-          </div>
-        } @else {
-          <div class="details-placeholder">
-            <mat-icon aria-hidden="true">touch_app</mat-icon>
-            <span>Select a task to view output</span>
-          </div>
+      </div>
+      <div class="details-meta">
+        <span class="detail-item">
+          <span class="detail-label">Working directory</span>
+          <code class="detail-value">{{ details.cwd }}</code>
+        </span>
+        <span class="detail-item">
+          <span class="detail-label">Started</span>
+          <time class="detail-value" [attr.datetime]="details.started_at"
+            >{{ formatDateTime(details.started_at) }}</time
+          >
+        </span>
+        @if (details.exit_code != null) {
+        <span class="detail-item">
+          <span class="detail-label">Exit code</span>
+          <code class="detail-value">{{ details.exit_code }}</code>
+        </span>
         }
-      </section>
-    </div>
+      </div>
+
+      <div class="output-section">
+        <div class="output-header">
+          <h3 class="output-title">Output</h3>
+          @if (details.truncated) {
+          <span
+            class="truncation-badge"
+            matTooltip="Output was truncated to the maximum buffer size"
+          >
+            <mat-icon>warning</mat-icon> Truncated
+          </span>
+          }
+        </div>
+        @if (loadingDetails()) {
+        <div class="details-loading">
+          <mat-spinner diameter="24"></mat-spinner>
+        </div>
+        } @else {
+        <pre class="terminal-output">{{ details.output || '(No output recorded)' }}</pre>
+        }
+      </div>
+      } @else {
+      <div class="details-placeholder">
+        <mat-icon aria-hidden="true">touch_app</mat-icon>
+        <span>Select a task to view output</span>
+      </div>
+      }
+    </section>
+  </div>
   }
 </mat-dialog-content>

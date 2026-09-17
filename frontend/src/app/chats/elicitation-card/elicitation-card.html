@@ -3,94 +3,141 @@
     <mat-icon mat-card-avatar>{{ isUrl() ? 'link' : 'edit_note' }}</mat-icon>
     <mat-card-title>{{ elicitation().message || 'Input needed' }}</mat-card-title>
     <mat-card-subtitle>
-      {{ isUrl() ? 'URL verification' : 'Form input' }}
-      @if (elicitation().toolCallId) { · tool {{ elicitation().toolCallId }} }
+      {{ isUrl() ? 'URL verification' : 'Form input' }} @if (elicitation().toolCallId) { · tool {{
+      elicitation().toolCallId }} }
     </mat-card-subtitle>
   </mat-card-header>
   <mat-card-content>
     @if (elicitation().responded) {
-      <p class="decision">Response recorded: {{ elicitation().decision }}</p>
-    } @else {
-      @if (isUrl()) {
-        <p class="url-warning">The agent asks you to visit this address out of band. Batey never opens or fetches it automatically.</p>
-        @if (elicitation().url; as url) {
-          <p class="url-line"><strong>Address:</strong> <span class="url">{{ url }}</span></p>
-          @if (host()) { <p class="url-line"><strong>Host:</strong> {{ host() }}</p> }
-          <p><a [href]="url" target="_blank" rel="noopener noreferrer">Open link manually</a></p>
-        }
-      } @else {
-        @for (field of fields(); track field.key) {
-          <div class="field">
-            @if (!field.supported) {
-              <p class="unsupported" role="alert">
-                <mat-icon aria-hidden="true">block</mat-icon>
-                <span>“{{ field.title }}” uses a field type Batey does not support{{ field.type ? ' (“' + field.type + '”)' : '' }}. It cannot be filled in here.</span>
-              </p>
-              @if (field.description) { <p class="hint">{{ field.description }}</p> }
-              @if (fieldError(field.key)) { <p class="error" role="alert">{{ fieldError(field.key) }}</p> }
-            } @else if (field.type === 'array') {
-              @if (field.enumOptions?.length) {
-                <mat-form-field appearance="outline">
-                  <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
-                  <mat-select multiple [ngModel]="($any(fieldValue(field.key)) ?? [])" (ngModelChange)="setFieldValue(field.key, $event)">
-                    @for (opt of field.enumOptions!; track opt) { <mat-option [value]="opt">{{ opt }}</mat-option> }
-                  </mat-select>
-                  @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> }
-                  @if (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
-                </mat-form-field>
-              } @else {
-                <mat-form-field appearance="outline">
-                  <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
-                  <input matInput type="text" [ngModel]="arrayText(field.key)" (ngModelChange)="setArrayText(field.key, $event)" placeholder="a, b, c" />
-                  @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> }
-                  @if (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
-                </mat-form-field>
-              }
-            } @else if (field.enumOptions?.length) {
-              <mat-form-field appearance="outline">
-                <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
-                <mat-select [ngModel]="fieldValue(field.key)" (ngModelChange)="setFieldValue(field.key, $event)">
-                  @for (opt of field.enumOptions!; track opt) { <mat-option [value]="opt">{{ opt }}</mat-option> }
-                </mat-select>
-                @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> }
-                @if (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
-              </mat-form-field>
-            } @else if (field.type === 'boolean') {
-              <mat-checkbox [ngModel]="!!fieldValue(field.key)" (ngModelChange)="setFieldValue(field.key, $event)">{{ field.title }}{{ field.required ? ' *' : '' }}</mat-checkbox>
-              @if (field.description) { <p class="hint">{{ field.description }}</p> }
-              @if (fieldError(field.key)) { <p class="error" role="alert">{{ fieldError(field.key) }}</p> }
-            } @else if (field.type === 'integer' || field.type === 'number') {
-              <mat-form-field appearance="outline">
-                <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
-                <input matInput type="number" [ngModel]="fieldValue(field.key)" (ngModelChange)="setFieldValue(field.key, $event)" />
-                @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> }
-                @if (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
-              </mat-form-field>
-            } @else if (field.type === 'string') {
-              <mat-form-field appearance="outline">
-                <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
-                <input matInput type="text" [ngModel]="fieldValue(field.key) ?? ''" (ngModelChange)="setFieldValue(field.key, $event)" />
-                @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> }
-                @if (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
-              </mat-form-field>
-            } @else {
-              <p class="unsupported" role="alert">
-                <mat-icon aria-hidden="true">block</mat-icon>
-                <span>“{{ field.title }}” uses a field type Batey does not support. It cannot be filled in here.</span>
-              </p>
-              @if (fieldError(field.key)) { <p class="error" role="alert">{{ fieldError(field.key) }}</p> }
-            }
-          </div>
-        }
-        @if (!fields().length) { <p class="hint">No form fields advertised.</p> }
-      }
+    <p class="decision">Response recorded: {{ elicitation().decision }}</p>
+    } @else { @if (isUrl()) {
+    <p class="url-warning">
+      The agent asks you to visit this address out of band. Batey never opens or fetches it
+      automatically.
+    </p>
+    @if (elicitation().url; as url) {
+    <p class="url-line"><strong>Address:</strong> <span class="url">{{ url }}</span></p>
+    @if (host()) {
+    <p class="url-line"><strong>Host:</strong> {{ host() }}</p>
     }
+    <p><a [href]="url" target="_blank" rel="noopener noreferrer">Open link manually</a></p>
+    } } @else { @for (field of fields(); track field.key) {
+    <div class="field">
+      @if (!field.supported) {
+      <p class="unsupported" role="alert">
+        <mat-icon aria-hidden="true">block</mat-icon>
+        <span
+          >“{{ field.title }}” uses a field type Batey does not support{{ field.type ? ' (“' +
+          field.type + '”)' : '' }}. It cannot be filled in here.</span
+        >
+      </p>
+      @if (field.description) {
+      <p class="hint">{{ field.description }}</p>
+      } @if (fieldError(field.key)) {
+      <p class="error" role="alert">{{ fieldError(field.key) }}</p>
+      } } @else if (field.type === 'array') { @if (field.enumOptions?.length) {
+      <mat-form-field appearance="outline">
+        <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
+        <mat-select
+          multiple
+          [ngModel]="($any(fieldValue(field.key)) ?? [])"
+          (ngModelChange)="setFieldValue(field.key, $event)"
+        >
+          @for (opt of field.enumOptions!; track opt) {
+          <mat-option [value]="opt">{{ opt }}</mat-option> }
+        </mat-select>
+        @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> } @if
+        (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
+      </mat-form-field>
+      } @else {
+      <mat-form-field appearance="outline">
+        <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
+        <input
+          matInput
+          type="text"
+          [ngModel]="arrayText(field.key)"
+          (ngModelChange)="setArrayText(field.key, $event)"
+          placeholder="a, b, c"
+        />
+        @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> } @if
+        (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
+      </mat-form-field>
+      } } @else if (field.enumOptions?.length) {
+      <mat-form-field appearance="outline">
+        <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
+        <mat-select
+          [ngModel]="fieldValue(field.key)"
+          (ngModelChange)="setFieldValue(field.key, $event)"
+        >
+          @for (opt of field.enumOptions!; track opt) {
+          <mat-option [value]="opt">{{ opt }}</mat-option> }
+        </mat-select>
+        @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> } @if
+        (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
+      </mat-form-field>
+      } @else if (field.type === 'boolean') {
+      <mat-checkbox
+        [ngModel]="!!fieldValue(field.key)"
+        (ngModelChange)="setFieldValue(field.key, $event)"
+        >{{ field.title }}{{ field.required ? ' *' : '' }}</mat-checkbox
+      >
+      @if (field.description) {
+      <p class="hint">{{ field.description }}</p>
+      } @if (fieldError(field.key)) {
+      <p class="error" role="alert">{{ fieldError(field.key) }}</p>
+      } } @else if (field.type === 'integer' || field.type === 'number') {
+      <mat-form-field appearance="outline">
+        <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
+        <input
+          matInput
+          type="number"
+          [ngModel]="fieldValue(field.key)"
+          (ngModelChange)="setFieldValue(field.key, $event)"
+        />
+        @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> } @if
+        (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
+      </mat-form-field>
+      } @else if (field.type === 'string') {
+      <mat-form-field appearance="outline">
+        <mat-label>{{ field.title }}{{ field.required ? ' *' : '' }}</mat-label>
+        <input
+          matInput
+          type="text"
+          [ngModel]="fieldValue(field.key) ?? ''"
+          (ngModelChange)="setFieldValue(field.key, $event)"
+        />
+        @if (field.description) { <mat-hint>{{ field.description }}</mat-hint> } @if
+        (fieldError(field.key)) { <mat-error>{{ fieldError(field.key) }}</mat-error> }
+      </mat-form-field>
+      } @else {
+      <p class="unsupported" role="alert">
+        <mat-icon aria-hidden="true">block</mat-icon>
+        <span
+          >“{{ field.title }}” uses a field type Batey does not support. It cannot be filled in
+          here.</span
+        >
+      </p>
+      @if (fieldError(field.key)) {
+      <p class="error" role="alert">{{ fieldError(field.key) }}</p>
+      } }
+    </div>
+    } @if (!fields().length) {
+    <p class="hint">No form fields advertised.</p>
+    } } }
   </mat-card-content>
   @if (!elicitation().responded) {
-    <mat-card-actions align="end">
-      <button mat-button type="button" (click)="cancel()" [disabled]="responding()">Cancel</button>
-      <button mat-button type="button" (click)="decline()" [disabled]="responding()">Decline</button>
-      <button mat-flat-button color="primary" type="button" (click)="accept()" [disabled]="responding() || (!isUrl() && !canAccept())">Accept</button>
-    </mat-card-actions>
+  <mat-card-actions align="end">
+    <button mat-button type="button" (click)="cancel()" [disabled]="responding()">Cancel</button>
+    <button mat-button type="button" (click)="decline()" [disabled]="responding()">Decline</button>
+    <button
+      mat-flat-button
+      color="primary"
+      type="button"
+      (click)="accept()"
+      [disabled]="responding() || (!isUrl() && !canAccept())"
+    >
+      Accept
+    </button>
+  </mat-card-actions>
   }
 </mat-card>

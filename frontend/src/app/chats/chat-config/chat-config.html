@@ -1,76 +1,193 @@
 @if (chat(); as chat) {
-  <section class="config" aria-labelledby="config-heading">
-    <h2 id="config-heading"><mat-icon>tune</mat-icon> Configuration & permissions</h2>
-    @if (errorMessage()) { <div class="error-box" role="alert">{{ errorMessage() }}</div> }
-    @if (chat.workspace; as workspace) {
-      <section class="workspace-section" aria-labelledby="workspace-heading">
-        <h3 id="workspace-heading"><mat-icon aria-hidden="true">account_tree</mat-icon> Workspace</h3>
-        <p>{{ workspace.mode === 'managed_worktree' ? 'This chat runs in its own Batey-managed Git worktree.' : 'This chat works directly in the project\'s checkout.' }}</p>
-        <dl class="workspace-details">
-          <div><dt>Mode</dt><dd>{{ workspace.mode === 'managed_worktree' ? 'Isolated worktree' : 'Project checkout' }}</dd></div>
-          <div><dt>Branch</dt><dd>{{ workspace.branch ?? '—' }}</dd></div>
-          @if (workspace.base_commit; as commit) { <div><dt>Starting commit</dt><dd [title]="commit">{{ commit.slice(0, 7) }}</dd></div> }
-        </dl>
-      </section>
-      <mat-divider />
-    }
-
-    @if (showModes() && modes(); as sessionModes) {
-      <div class="config-item"><mat-form-field appearance="outline"><mat-label>Session mode</mat-label><mat-select [value]="sessionModes.current_mode_id" (selectionChange)="changeMode($event.value)">@for (mode of sessionModes.available_modes; track mode.id) { <mat-option [value]="mode.id">{{ mode.name }}</mat-option> }</mat-select></mat-form-field><p>Legacy mode selector. Hidden when a mode config option already covers it.</p></div>
-      <mat-divider />
-    }
-
-    @if (!additionalOptions().length) { <p class="no-options">No additional agent configuration options advertised.</p> } @else {
-      @for (option of additionalOptions(); track option.id) {
-        @if (option.type === 'select') { <div class="config-item"><mat-form-field appearance="outline"><mat-label>{{ option.name }}</mat-label><mat-select [value]="option.currentValue" (selectionChange)="changeOption(option, $event.value)">@for (item of option.options ?? []; track $index) { @if (isGroup(item)) { <mat-optgroup [label]="item.group">@for (child of item.options; track $index) { <mat-option [value]="child.value">{{ child.name }}</mat-option> }</mat-optgroup> } @else { <mat-option [value]="item.value">{{ item.name }}</mat-option> } }</mat-select></mat-form-field>@if (option.description) { <p>{{ option.description }}</p> }</div> }
-        @else if (option.type === 'boolean') { <div class="boolean-item"><div><strong>{{ option.name }}</strong>@if (option.description) { <p>{{ option.description }}</p> }</div><mat-slide-toggle [checked]="!!option.currentValue" (change)="changeOption(option, $event.checked)" [attr.aria-label]="option.name" /></div> }
-        @else { <div class="config-item"><strong>{{ option.name }}</strong><div class="unsupported">{{ option.currentValue }} (type: {{ option.type }})</div></div> }
-      }
-    }
-    <mat-divider />
-
-    <section class="workspace-section" aria-labelledby="project-access-heading">
-      <h3 id="project-access-heading"><mat-icon aria-hidden="true">folder_shared</mat-icon> Other project access</h3>
-      <p>Allow this agent to work with files from other Batey projects.</p>
-      @if (!additionalRoots().length) { <p class="no-options">No other projects allowed.</p> }
-      @for (root of additionalRoots(); track root.project_id) {
-        <div class="access-row">
-          <span class="access-name">{{ projectName(root.project_id) }}</span>
-          <button mat-icon-button type="button" [attr.aria-label]="'Remove access to ' + projectName(root.project_id)" (click)="removeProjectAccess(root.project_id)"><mat-icon>close</mat-icon></button>
-        </div>
-      }
-      <div class="access-add">
-        <mat-form-field appearance="outline"><mat-label>Add project</mat-label><mat-select [value]="selectedProject()" (selectionChange)="projectSelected($event.value)">@for (project of projects(); track project.id) { @if (project.id !== chat.project_id && !additionalRoots().some(root => root.project_id === project.id)) { <mat-option [value]="project.id">{{ project.name }}</mat-option> } }</mat-select></mat-form-field>
-        <button mat-stroked-button type="button" [disabled]="!selectedProject()" (click)="addProjectAccess()"><mat-icon>add</mat-icon> Add project</button>
+<section class="config" aria-labelledby="config-heading">
+  <h2 id="config-heading"><mat-icon>tune</mat-icon> Configuration & permissions</h2>
+  @if (errorMessage()) {
+  <div class="error-box" role="alert">{{ errorMessage() }}</div>
+  } @if (chat.workspace; as workspace) {
+  <section class="workspace-section" aria-labelledby="workspace-heading">
+    <h3 id="workspace-heading"><mat-icon aria-hidden="true">account_tree</mat-icon> Workspace</h3>
+    <p>
+      {{ workspace.mode === 'managed_worktree' ? 'This chat runs in its own Batey-managed Git
+      worktree.' : 'This chat works directly in the project\'s checkout.' }}
+    </p>
+    <dl class="workspace-details">
+      <div>
+        <dt>Mode</dt>
+        <dd>
+          {{ workspace.mode === 'managed_worktree' ? 'Isolated worktree' : 'Project checkout' }}
+        </dd>
       </div>
-    </section>
-    <mat-divider />
-
-    <section class="workspace-section" aria-labelledby="mcp-heading">
-      <h3 id="mcp-heading"><mat-icon aria-hidden="true">extension</mat-icon> MCP servers</h3>
-      <p>Changes reconnect the idle agent immediately. Secrets stay redacted after saving.</p>
-      @if (!mcpServers().length) { <p class="no-options">No MCP servers configured.</p> }
-      @for (server of mcpServers(); track server.id; let first = $first; let last = $last) {
-        <div class="mcp-row">
-          <div class="mcp-summary">
-            <mat-icon aria-hidden="true">extension</mat-icon>
-            <div class="mcp-text">
-              <strong>{{ server.name }}</strong>
-              <span class="mcp-meta">
-                {{ transportLabel(server.transport) }}
-                @if (server.secrets.length) { · Secrets configured }
-              </span>
-            </div>
-          </div>
-          <div class="mcp-actions">
-            <button mat-icon-button type="button" matTooltip="Move up" [attr.aria-label]="'Move ' + server.name + ' up'" [disabled]="first" (click)="moveMcp(server.id, -1)"><mat-icon>arrow_upward</mat-icon></button>
-            <button mat-icon-button type="button" matTooltip="Move down" [attr.aria-label]="'Move ' + server.name + ' down'" [disabled]="last" (click)="moveMcp(server.id, 1)"><mat-icon>arrow_downward</mat-icon></button>
-            <button mat-icon-button type="button" matTooltip="Edit" [attr.aria-label]="'Edit ' + server.name" (click)="openMcpDialog(server)"><mat-icon>edit</mat-icon></button>
-            <button mat-icon-button type="button" matTooltip="Remove" [attr.aria-label]="'Remove ' + server.name" (click)="removeMcp(server.id)"><mat-icon>delete</mat-icon></button>
-          </div>
-        </div>
+      <div>
+        <dt>Branch</dt>
+        <dd>{{ workspace.branch ?? '—' }}</dd>
+      </div>
+      @if (workspace.base_commit; as commit) {
+      <div>
+        <dt>Starting commit</dt>
+        <dd [title]="commit">{{ commit.slice(0, 7) }}</dd>
+      </div>
       }
-      <button mat-stroked-button type="button" (click)="openMcpDialog(null)"><mat-icon>add</mat-icon> Add server</button>
-    </section>
+    </dl>
   </section>
+  <mat-divider />
+  } @if (showModes() && modes(); as sessionModes) {
+  <div class="config-item">
+    <mat-form-field appearance="outline"
+      ><mat-label>Session mode</mat-label
+      ><mat-select
+        [value]="sessionModes.current_mode_id"
+        (selectionChange)="changeMode($event.value)"
+        >@for (mode of sessionModes.available_modes; track mode.id) {
+        <mat-option [value]="mode.id">{{ mode.name }}</mat-option> }</mat-select
+      ></mat-form-field
+    >
+    <p>Legacy mode selector. Hidden when a mode config option already covers it.</p>
+  </div>
+  <mat-divider />
+  } @if (!additionalOptions().length) {
+  <p class="no-options">No additional agent configuration options advertised.</p>
+  } @else { @for (option of additionalOptions(); track option.id) { @if (option.type === 'select') {
+  <div class="config-item">
+    <mat-form-field appearance="outline"
+      ><mat-label>{{ option.name }}</mat-label
+      ><mat-select
+        [value]="option.currentValue"
+        (selectionChange)="changeOption(option, $event.value)"
+        >@for (item of option.options ?? []; track $index) { @if (isGroup(item)) {
+        <mat-optgroup [label]="item.group"
+          >@for (child of item.options; track $index) {
+          <mat-option [value]="child.value">{{ child.name }}</mat-option> }</mat-optgroup
+        >
+        } @else { <mat-option [value]="item.value">{{ item.name }}</mat-option> } }</mat-select
+      ></mat-form-field
+    >@if (option.description) {
+    <p>{{ option.description }}</p>
+    }
+  </div>
+  } @else if (option.type === 'boolean') {
+  <div class="boolean-item">
+    <div>
+      <strong>{{ option.name }}</strong>@if (option.description) {
+      <p>{{ option.description }}</p>
+      }
+    </div>
+    <mat-slide-toggle
+      [checked]="!!option.currentValue"
+      (change)="changeOption(option, $event.checked)"
+      [attr.aria-label]="option.name"
+    />
+  </div>
+  } @else {
+  <div class="config-item">
+    <strong>{{ option.name }}</strong>
+    <div class="unsupported">{{ option.currentValue }} (type: {{ option.type }})</div>
+  </div>
+  } } }
+  <mat-divider />
+
+  <section class="workspace-section" aria-labelledby="project-access-heading">
+    <h3 id="project-access-heading">
+      <mat-icon aria-hidden="true">folder_shared</mat-icon> Other project access
+    </h3>
+    <p>Allow this agent to work with files from other Batey projects.</p>
+    @if (!additionalRoots().length) {
+    <p class="no-options">No other projects allowed.</p>
+    } @for (root of additionalRoots(); track root.project_id) {
+    <div class="access-row">
+      <span class="access-name">{{ projectName(root.project_id) }}</span>
+      <button
+        mat-icon-button
+        type="button"
+        [attr.aria-label]="'Remove access to ' + projectName(root.project_id)"
+        (click)="removeProjectAccess(root.project_id)"
+      >
+        <mat-icon>close</mat-icon>
+      </button>
+    </div>
+    }
+    <div class="access-add">
+      <mat-form-field appearance="outline"
+        ><mat-label>Add project</mat-label
+        ><mat-select [value]="selectedProject()" (selectionChange)="projectSelected($event.value)"
+          >@for (project of projects(); track project.id) { @if (project.id !== chat.project_id &&
+          !additionalRoots().some(root => root.project_id === project.id)) {
+          <mat-option [value]="project.id">{{ project.name }}</mat-option> } }</mat-select
+        ></mat-form-field
+      >
+      <button
+        mat-stroked-button
+        type="button"
+        [disabled]="!selectedProject()"
+        (click)="addProjectAccess()"
+      >
+        <mat-icon>add</mat-icon> Add project
+      </button>
+    </div>
+  </section>
+  <mat-divider />
+
+  <section class="workspace-section" aria-labelledby="mcp-heading">
+    <h3 id="mcp-heading"><mat-icon aria-hidden="true">extension</mat-icon> MCP servers</h3>
+    <p>Changes reconnect the idle agent immediately. Secrets stay redacted after saving.</p>
+    @if (!mcpServers().length) {
+    <p class="no-options">No MCP servers configured.</p>
+    } @for (server of mcpServers(); track server.id; let first = $first; let last = $last) {
+    <div class="mcp-row">
+      <div class="mcp-summary">
+        <mat-icon aria-hidden="true">extension</mat-icon>
+        <div class="mcp-text">
+          <strong>{{ server.name }}</strong>
+          <span class="mcp-meta">
+            {{ transportLabel(server.transport) }} @if (server.secrets.length) { · Secrets
+            configured }
+          </span>
+        </div>
+      </div>
+      <div class="mcp-actions">
+        <button
+          mat-icon-button
+          type="button"
+          matTooltip="Move up"
+          [attr.aria-label]="'Move ' + server.name + ' up'"
+          [disabled]="first"
+          (click)="moveMcp(server.id, -1)"
+        >
+          <mat-icon>arrow_upward</mat-icon>
+        </button>
+        <button
+          mat-icon-button
+          type="button"
+          matTooltip="Move down"
+          [attr.aria-label]="'Move ' + server.name + ' down'"
+          [disabled]="last"
+          (click)="moveMcp(server.id, 1)"
+        >
+          <mat-icon>arrow_downward</mat-icon>
+        </button>
+        <button
+          mat-icon-button
+          type="button"
+          matTooltip="Edit"
+          [attr.aria-label]="'Edit ' + server.name"
+          (click)="openMcpDialog(server)"
+        >
+          <mat-icon>edit</mat-icon>
+        </button>
+        <button
+          mat-icon-button
+          type="button"
+          matTooltip="Remove"
+          [attr.aria-label]="'Remove ' + server.name"
+          (click)="removeMcp(server.id)"
+        >
+          <mat-icon>delete</mat-icon>
+        </button>
+      </div>
+    </div>
+    }
+    <button mat-stroked-button type="button" (click)="openMcpDialog(null)">
+      <mat-icon>add</mat-icon> Add server
+    </button>
+  </section>
+</section>
 }

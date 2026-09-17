@@ -1,4 +1,6 @@
-:host { display: block; }
+:host {
+  display: block;
+}
 
 .dialog-header {
   display: flex;
@@ -55,7 +57,9 @@
   letter-spacing: var(--mat-sys-body-medium-tracking);
 }
 
-.tasks-empty p { margin: 0; }
+.tasks-empty p {
+  margin: 0;
+}
 
 .tasks-container {
   display: grid;
@@ -117,7 +121,9 @@
   text-align: left;
   cursor: pointer;
 
-  &:hover { background: var(--mat-sys-surface-container); }
+  &:hover {
+    background: var(--mat-sys-surface-container);
+  }
 
   &:focus-visible {
     outline: 2px solid var(--mat-sys-primary);
@@ -212,7 +218,9 @@
   border-bottom: 1px solid var(--mat-sys-outline-variant);
 }
 
-.details-command-block { min-width: 0; }
+.details-command-block {
+  min-width: 0;
+}
 
 .section-label,
 .detail-label {
@@ -284,7 +292,9 @@
   overflow-wrap: anywhere;
 }
 
-code.detail-value { font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Code', Consolas, monospace; }
+code.detail-value {
+  font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Code', Consolas, monospace;
+}
 
 .output-section {
   display: flex;
@@ -294,7 +304,10 @@ code.detail-value { font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Code'
   gap: 8px;
 }
 
-.output-header { justify-content: space-between; gap: 12px; }
+.output-header {
+  justify-content: space-between;
+  gap: 12px;
+}
 
 .output-title {
   margin: 0;
@@ -350,8 +363,12 @@ code.detail-value { font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Code'
 }
 
 @media (max-width: 600px) {
-  .dialog-header { padding-inline: 16px; }
-  .dialog-body { padding-inline: 16px; }
+  .dialog-header {
+    padding-inline: 16px;
+  }
+  .dialog-body {
+    padding-inline: 16px;
+  }
 
   .tasks-container {
     display: flex;
@@ -365,6 +382,10 @@ code.detail-value { font-family: ui-monospace, 'SFMono-Regular', 'Cascadia Code'
     flex: 0 0 auto;
   }
 
-  .task-details { min-height: 420px; }
-  .details-meta { grid-template-columns: 1fr; }
+  .task-details {
+    min-height: 420px;
+  }
+  .details-meta {
+    grid-template-columns: 1fr;
+  }
 }

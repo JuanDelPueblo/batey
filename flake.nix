@@ -48,6 +48,7 @@
               git
               sqlite
               direnv
+              binutils
             ];
 
             # The bundled SQLite of rusqlite compiles C sources.

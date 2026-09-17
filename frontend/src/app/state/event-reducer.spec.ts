@@ -178,6 +178,21 @@ describe('EventReducer', () => {
     expect(entries[0]['content']).toBeUndefined();
   });
 
+  it('normalizes equivalent JSON inside nested ACP content wrappers without retaining duplicate content', () => {
+    const reducer = new EventReducer();
+    const todos = [{ content: 'Run tests', status: 'completed' }];
+    const json = JSON.stringify(todos);
+    reducer.ingest(event(1, 'tool_call_update', {
+      id: 'todos', title: 'Tasks', kind: 'todo', status: 'completed', output: json,
+      content: [{ type: 'content', content: { type: 'text', text: json } }],
+    }));
+
+    const entries = (reducer.items()[0] as unknown as { entries: Array<Record<string, unknown>> }).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ taskList: { entries: todos }, output: null });
+    expect(entries[0]['content']).toBeUndefined();
+  });
+
   it('keeps unknown tool payloads on the existing fallback path', () => {
     const reducer = new EventReducer();
     reducer.ingest(event(1, 'tool_call', { id: 'unknown', title: 'Inspect metadata', status: 'in_progress' }));

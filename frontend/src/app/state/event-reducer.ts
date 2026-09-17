@@ -624,23 +624,20 @@ export class EventReducer {
         return value;
       }
     }
-    if (
-      Array.isArray(value) &&
-      value.length === 1 &&
-      value[0] &&
-      typeof value[0] === 'object' &&
-      (value[0] as { type?: unknown }).type === 'content'
-    ) {
-      return this.parseJsonValue((value[0] as { content?: unknown }).content);
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      const wrapper = value as { type?: unknown; content?: unknown; text?: unknown };
+      if (wrapper.type === 'content') return this.parseJsonValue(wrapper.content);
+      if (wrapper.type === 'text') return this.parseJsonValue(wrapper.text);
     }
     if (
       Array.isArray(value) &&
       value.length === 1 &&
       value[0] &&
       typeof value[0] === 'object' &&
-      (value[0] as { type?: unknown }).type === 'text'
+      ((value[0] as { type?: unknown }).type === 'content' ||
+        (value[0] as { type?: unknown }).type === 'text')
     ) {
-      return this.parseJsonValue((value[0] as { text?: unknown }).text);
+      return this.parseJsonValue(value[0]);
     }
     return value;
   }

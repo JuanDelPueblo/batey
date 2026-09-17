@@ -1,78 +1,153 @@
 <mat-drawer-container class="chat-layout" [hasBackdrop]="compact()">
-  <mat-drawer #configDrawer position="end" [mode]="compact() ? 'over' : 'side'" [opened]="configOpen()" (closed)="configOpen.set(false)" aria-label="Chat configuration">
-    <div class="config-header"><h2>Chat configuration</h2><button mat-icon-button type="button" aria-label="Close chat configuration" (click)="closeConfig(configDrawer)"><mat-icon>close</mat-icon></button></div>
-    <div class="config-body"><hub-chat-config [chat]="chat()" [options]="options()" [modes]="modes()" /></div>
+  <mat-drawer
+    #configDrawer
+    position="end"
+    [mode]="compact() ? 'over' : 'side'"
+    [opened]="configOpen()"
+    (closed)="configOpen.set(false)"
+    aria-label="Chat configuration"
+  >
+    <div class="config-header">
+      <h2>Chat configuration</h2>
+      <button
+        mat-icon-button
+        type="button"
+        aria-label="Close chat configuration"
+        (click)="closeConfig(configDrawer)"
+      >
+        <mat-icon>close</mat-icon>
+      </button>
+    </div>
+    <div class="config-body">
+      <hub-chat-config [chat]="chat()" [options]="options()" [modes]="modes()" />
+    </div>
   </mat-drawer>
   <mat-drawer-content class="chat-content">
-    <hub-chat-header [chat]="chat()" [usage]="usage()" (configRequested)="openConfig(configDrawer)" />
+    <hub-chat-header
+      [chat]="chat()"
+      [usage]="usage()"
+      (configRequested)="openConfig(configDrawer)"
+    />
     @if (!chat()) {
-      <section class="status-state"><mat-icon>chat</mat-icon><h1>No chat selected</h1><p>Choose a chat from the navigation.</p></section>
-    } @else {
-      @if (authRequired(); as required) {
-        <div class="status-banner auth-banner" role="alert">
-          <div class="banner-content">
-            <mat-icon>lock</mat-icon>
-            <div class="banner-text">
-              <strong>Authentication required</strong>
-              <span>
-                {{ required.message || ('Sign in to ' + (required.agent_name || required.agent_id || 'this agent') +
-                ' to continue. This chat and its history are preserved, and you can send again after signing in.') }}
-              </span>
-            </div>
-          </div>
-          <div class="banner-actions">
-            <a mat-flat-button type="button" [routerLink]="['/agents']" [queryParams]="{ agent: required.agent_id }">
-              Open agent authentication
-            </a>
-            <button mat-button type="button" (click)="dismissAuthRequired()">Dismiss</button>
-          </div>
+    <section class="status-state">
+      <mat-icon>chat</mat-icon>
+      <h1>No chat selected</h1>
+      <p>Choose a chat from the navigation.</p>
+    </section>
+    } @else { @if (authRequired(); as required) {
+    <div class="status-banner auth-banner" role="alert">
+      <div class="banner-content">
+        <mat-icon>lock</mat-icon>
+        <div class="banner-text">
+          <strong>Authentication required</strong>
+          <span>
+            {{ required.message || ('Sign in to ' + (required.agent_name || required.agent_id ||
+            'this agent') + ' to continue. This chat and its history are preserved, and you can send
+            again after signing in.') }}
+          </span>
         </div>
-      }
-      @if (connectError() && !authRequired()) {
-        <div class="status-banner error-banner" role="alert">
-          <div class="banner-content">
-            <mat-icon>{{ blockedEnvrc() ? 'lock' : 'error_outline' }}</mat-icon>
-            <div class="banner-text">
-              <strong>{{ blockedEnvrc() ? 'Workspace environment blocked' : 'Connection failed' }}</strong>
-              <span>{{ connectError() }}</span>
-            </div>
-          </div>
-          @if (blockedEnvrc()) {
-            <div class="banner-actions">
-              <button mat-button type="button" [disabled]="authorizingEnv()" (click)="authorizeEnvironment(false)">
-                <span>{{ authorizingEnv() ? 'Authorizing…' : 'Allow this workspace' }}</span>
-              </button>
-              <button mat-flat-button color="primary" type="button" [disabled]="authorizingEnv()" (click)="authorizeEnvironment(true)">
-                <span>{{ authorizingEnv() ? 'Authorizing…' : 'Remember for project' }}</span>
-              </button>
-            </div>
-          } @else if (rejectedConfig()) {
-            <button mat-flat-button type="button" (click)="resetConfig()">Reset {{ rejectedConfig() }} and retry</button>
-          } @else {
-            <button mat-flat-button type="button" (click)="retry()">Retry connection</button>
-          }
+      </div>
+      <div class="banner-actions">
+        <a
+          mat-flat-button
+          type="button"
+          [routerLink]="['/agents']"
+          [queryParams]="{ agent: required.agent_id }"
+        >
+          Open agent authentication
+        </a>
+        <button mat-button type="button" (click)="dismissAuthRequired()">Dismiss</button>
+      </div>
+    </div>
+    } @if (connectError() && !authRequired()) {
+    <div class="status-banner error-banner" role="alert">
+      <div class="banner-content">
+        <mat-icon>{{ blockedEnvrc() ? 'lock' : 'error_outline' }}</mat-icon>
+        <div class="banner-text">
+          <strong
+            >{{ blockedEnvrc() ? 'Workspace environment blocked' : 'Connection failed' }}</strong
+          >
+          <span>{{ connectError() }}</span>
         </div>
-      }
-      @if (historyError()) {
-        <div class="status-banner history-banner" role="status">
-          <div class="banner-content">
-            <mat-icon>history</mat-icon>
-            <div class="banner-text">
-              <strong>History page unavailable</strong>
-              <span>{{ historyError() }} New turns and live activity remain available.</span>
-            </div>
-          </div>
-          <button mat-flat-button type="button" (click)="retryHistory()">Retry history</button>
-        </div>
-      }
-      @if (historyLoading() && !items().length) {
-        <section class="status-state"><mat-spinner diameter="36" /><p>Loading recent chat history…</p></section>
-      } @else if (!items().length && !hasOlderHistory()) {
-        <section class="welcome"><mat-card><mat-card-content><div class="welcome-heading"><span class="avatar">{{ chat()!.agent[0] }}</span><div><h1>{{ chat()!.agent }} connected</h1><p>Configure agent options or send your first message to begin.</p></div></div><hub-chat-config [chat]="chat()" [options]="options()" [modes]="modes()" /></mat-card-content></mat-card></section>
+      </div>
+      @if (blockedEnvrc()) {
+      <div class="banner-actions">
+        <button
+          mat-button
+          type="button"
+          [disabled]="authorizingEnv()"
+          (click)="authorizeEnvironment(false)"
+        >
+          <span>{{ authorizingEnv() ? 'Authorizing…' : 'Allow this workspace' }}</span>
+        </button>
+        <button
+          mat-flat-button
+          color="primary"
+          type="button"
+          [disabled]="authorizingEnv()"
+          (click)="authorizeEnvironment(true)"
+        >
+          <span>{{ authorizingEnv() ? 'Authorizing…' : 'Remember for project' }}</span>
+        </button>
+      </div>
+      } @else if (rejectedConfig()) {
+      <button mat-flat-button type="button" (click)="resetConfig()">
+        Reset {{ rejectedConfig() }} and retry
+      </button>
       } @else {
-        <hub-event-stream [items]="items()" [chatId]="chatId()" [hasOlderHistory]="hasOlderHistory()" [historyLoading]="historyLoading()" [historyError]="historyError()" (olderRequested)="loadOlderHistory()" />
+      <button mat-flat-button type="button" (click)="retry()">Retry connection</button>
       }
-      <hub-chat-composer [chatId]="chatId()" [options]="options()" [commands]="commands()" [turnState]="chat()!.turn_state || 'IDLE'" [disabled]="chat()!.archived" />
+    </div>
+    } @if (historyError()) {
+    <div class="status-banner history-banner" role="status">
+      <div class="banner-content">
+        <mat-icon>history</mat-icon>
+        <div class="banner-text">
+          <strong>History page unavailable</strong>
+          <span>{{ historyError() }} New turns and live activity remain available.</span>
+        </div>
+      </div>
+      <button mat-flat-button type="button" (click)="retryHistory()">Retry history</button>
+    </div>
+    } @if (historyLoading() && !items().length) {
+    <section class="status-state">
+      <mat-spinner diameter="36" />
+      <p>Loading recent chat history…</p>
+    </section>
+    } @else if (!items().length && !hasOlderHistory()) {
+    <section class="welcome">
+      <mat-card
+        ><mat-card-content
+          ><div class="welcome-heading">
+            <span class="avatar">{{ chat()!.agent[0] }}</span>
+            <div>
+              <h1>{{ chat()!.agent }} connected</h1>
+              <p>Configure agent options or send your first message to begin.</p>
+            </div>
+          </div>
+          <hub-chat-config
+            [chat]="chat()"
+            [options]="options()"
+            [modes]="modes()" /></mat-card-content
+      ></mat-card>
+    </section>
+    } @else {
+    <hub-event-stream
+      [items]="items()"
+      [chatId]="chatId()"
+      [hasOlderHistory]="hasOlderHistory()"
+      [historyLoading]="historyLoading()"
+      [historyError]="historyError()"
+      (olderRequested)="loadOlderHistory()"
+    />
+    }
+    <hub-chat-composer
+      [chatId]="chatId()"
+      [options]="options()"
+      [commands]="commands()"
+      [turnState]="chat()!.turn_state || 'IDLE'"
+      [disabled]="chat()!.archived"
+    />
     }
   </mat-drawer-content>
 </mat-drawer-container>

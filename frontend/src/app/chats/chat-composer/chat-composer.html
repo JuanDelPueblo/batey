@@ -1,16 +1,39 @@
 <div class="composer-column">
   @if (showCommands()) {
-    <div #commandList class="command-list" [id]="commandListId()" role="listbox" aria-label="Slash command suggestions">
-      @for (command of filteredCommands(); track command.name) {
-        <button type="button" class="command-option" [id]="commandOptionId($index)" role="option" [class.active]="highlightedCommand() === command" [attr.aria-selected]="highlightedCommand() === command" [attr.data-command]="command.name" (click)="completeCommand(command)">
-          <span class="command-name">/{{ command.name }}</span><span class="command-desc">{{ command.description }}</span>
-          @if (command.input?.hint) { <span class="command-hint">{{ command.input!.hint }}</span> }
-        </button>
-      }
-    </div>
+  <div
+    #commandList
+    class="command-list"
+    [id]="commandListId()"
+    role="listbox"
+    aria-label="Slash command suggestions"
+  >
+    @for (command of filteredCommands(); track command.name) {
+    <button
+      type="button"
+      class="command-option"
+      [id]="commandOptionId($index)"
+      role="option"
+      [class.active]="highlightedCommand() === command"
+      [attr.aria-selected]="highlightedCommand() === command"
+      [attr.data-command]="command.name"
+      (click)="completeCommand(command)"
+    >
+      <span class="command-name">/{{ command.name }}</span
+      ><span class="command-desc">{{ command.description }}</span> @if (command.input?.hint) {
+      <span class="command-hint">{{ command.input!.hint }}</span> }
+    </button>
+    }
+  </div>
   }
   <form class="composer" (submit)="$event.preventDefault(); send()">
-    <input #attachmentInput class="attachment-input" type="file" [accept]="attachmentAccept" (change)="addAttachment($event)" aria-label="Choose attachment" />
+    <input
+      #attachmentInput
+      class="attachment-input"
+      type="file"
+      [accept]="attachmentAccept"
+      (change)="addAttachment($event)"
+      aria-label="Choose attachment"
+    />
     <textarea
       #messageInput
       class="message-input"
@@ -26,48 +49,106 @@
     ></textarea>
     <div class="composer-footer">
       <div class="selectors">
-        <button mat-icon-button type="button" aria-label="Attach file" matTooltip="Attach file" [disabled]="unavailable()" (click)="chooseAttachment(attachmentInput)"><mat-icon>attach_file</mat-icon></button>
+        <button
+          mat-icon-button
+          type="button"
+          aria-label="Attach file"
+          matTooltip="Attach file"
+          [disabled]="unavailable()"
+          (click)="chooseAttachment(attachmentInput)"
+        >
+          <mat-icon>attach_file</mat-icon>
+        </button>
         @if (modelOption(); as model) {
-          <button mat-button class="selector" type="button" [matMenuTriggerFor]="modelMenu" [disabled]="!canConfigure()" [attr.aria-label]="'Model: ' + optionLabel(model)">
-            <span>{{ optionLabel(model) }}</span><mat-icon>expand_more</mat-icon>
+        <button
+          mat-button
+          class="selector"
+          type="button"
+          [matMenuTriggerFor]="modelMenu"
+          [disabled]="!canConfigure()"
+          [attr.aria-label]="'Model: ' + optionLabel(model)"
+        >
+          <span>{{ optionLabel(model) }}</span><mat-icon>expand_more</mat-icon>
+        </button>
+        <mat-menu #modelMenu="matMenu">
+          @for (choice of model.options ?? []; track $index) { @if (isGroup(choice)) {
+          <div class="menu-heading">{{ choice.group }}</div>
+          @for (child of choice.options; track $index) {
+          <button mat-menu-item type="button" (click)="changeOption(model, child.value)">
+            {{ child.name }}
           </button>
-          <mat-menu #modelMenu="matMenu">
-            @for (choice of model.options ?? []; track $index) {
-              @if (isGroup(choice)) {
-                <div class="menu-heading">{{ choice.group }}</div>
-                @for (child of choice.options; track $index) {
-                  <button mat-menu-item type="button" (click)="changeOption(model, child.value)">{{ child.name }}</button>
-                }
-              } @else {
-                <button mat-menu-item type="button" (click)="changeOption(model, choice.value)">{{ choice.name }}</button>
-              }
-            }
-          </mat-menu>
-        }
-        @if (reasoningOption(); as reasoning) {
-          <button mat-button class="selector" type="button" [matMenuTriggerFor]="reasoningMenu" [disabled]="!canConfigure()" [attr.aria-label]="'Reasoning effort: ' + optionLabel(reasoning)">
-            <span>{{ reasoning.name }}: {{ optionLabel(reasoning) }}</span><mat-icon>expand_more</mat-icon>
+          } } @else {
+          <button mat-menu-item type="button" (click)="changeOption(model, choice.value)">
+            {{ choice.name }}
           </button>
-          <mat-menu #reasoningMenu="matMenu">
-            @for (choice of reasoning.options ?? []; track $index) {
-              @if (!isGroup(choice)) { <button mat-menu-item type="button" (click)="changeOption(reasoning, choice.value)">{{ choice.name }}</button> }
-            }
-          </mat-menu>
+          } }
+        </mat-menu>
+        } @if (reasoningOption(); as reasoning) {
+        <button
+          mat-button
+          class="selector"
+          type="button"
+          [matMenuTriggerFor]="reasoningMenu"
+          [disabled]="!canConfigure()"
+          [attr.aria-label]="'Reasoning effort: ' + optionLabel(reasoning)"
+        >
+          <span>{{ reasoning.name }}: {{ optionLabel(reasoning) }}</span
+          ><mat-icon>expand_more</mat-icon>
+        </button>
+        <mat-menu #reasoningMenu="matMenu">
+          @for (choice of reasoning.options ?? []; track $index) { @if (!isGroup(choice)) {
+          <button mat-menu-item type="button" (click)="changeOption(reasoning, choice.value)">
+            {{ choice.name }}
+          </button>
+          } }
+        </mat-menu>
         }
       </div>
 
       @if (prompting() || cancelling()) {
-        <button matFab class="action cancel" type="button" matTooltip="Cancel active turn" aria-label="Cancel active turn" (click)="cancel()" [disabled]="cancelling()">
-          @if (cancelling()) { <mat-spinner diameter="22" /> } @else { <mat-icon>stop</mat-icon> }
-        </button>
+      <button
+        matFab
+        class="action cancel"
+        type="button"
+        matTooltip="Cancel active turn"
+        aria-label="Cancel active turn"
+        (click)="cancel()"
+        [disabled]="cancelling()"
+      >
+        @if (cancelling()) { <mat-spinner diameter="22" /> } @else { <mat-icon>stop</mat-icon> }
+      </button>
       } @else {
-        <button matFab class="action" type="submit" matTooltip="Send message (Enter)" aria-label="Send message" [disabled]="!canSend()">
-          <mat-icon>arrow_upward</mat-icon>
-        </button>
+      <button
+        matFab
+        class="action"
+        type="submit"
+        matTooltip="Send message (Enter)"
+        aria-label="Send message"
+        [disabled]="!canSend()"
+      >
+        <mat-icon>arrow_upward</mat-icon>
+      </button>
       }
     </div>
   </form>
-  @if (attachments().length) { <div class="attachments" aria-label="Selected attachments">@for (attachment of attachments(); track $index) { <span>{{ attachmentLabel(attachment) }} <button mat-icon-button type="button" [attr.aria-label]="'Remove ' + attachmentLabel(attachment)" (click)="removeAttachment($index)"><mat-icon>close</mat-icon></button></span> }</div> }
-  @if (attachmentError(); as error) { <p class="attachment-error" role="alert">{{ error }}</p> }
+  @if (attachments().length) {
+  <div class="attachments" aria-label="Selected attachments">
+    @for (attachment of attachments(); track $index) {
+    <span
+      >{{ attachmentLabel(attachment) }}
+      <button
+        mat-icon-button
+        type="button"
+        [attr.aria-label]="'Remove ' + attachmentLabel(attachment)"
+        (click)="removeAttachment($index)"
+      >
+        <mat-icon>close</mat-icon>
+      </button></span
+    >
+    }
+  </div>
+  } @if (attachmentError(); as error) {
+  <p class="attachment-error" role="alert">{{ error }}</p>
+  }
   <p class="hint">Press Enter to send, Shift+Enter or Ctrl+J for a new line</p>
 </div>

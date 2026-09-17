@@ -1,36 +1,70 @@
 <section class="projects-page" aria-labelledby="projects-title">
   <div class="page-header">
-    <div><h1 id="projects-title">Projects</h1><p>Manage code repositories and active ACP agent sessions.</p></div>
-    <button mat-flat-button type="button" (click)="newProject()"><mat-icon>add</mat-icon> New project</button>
+    <div>
+      <h1 id="projects-title">Projects</h1>
+      <p>Manage code repositories and active ACP agent sessions.</p>
+    </div>
+    <button mat-flat-button type="button" (click)="newProject()">
+      <mat-icon>add</mat-icon> New project
+    </button>
   </div>
   @if (state.loadingProjects()) {
-    <div class="loading" role="status"><mat-spinner diameter="36" /><span>Loading projects…</span></div>
+  <div class="loading" role="status">
+    <mat-spinner diameter="36" /><span>Loading projects…</span>
+  </div>
   } @else if (state.projectsError()) {
-    <div class="error-box" role="alert">{{ state.projectsError() }}</div>
+  <div class="error-box" role="alert">{{ state.projectsError() }}</div>
   } @else if (state.projects().length === 0) {
-    <mat-card class="empty-card"><mat-icon>folder_open</mat-icon><h2>No projects yet</h2><p>Create a project from an existing server directory or clone a Git repository.</p><button mat-flat-button type="button" (click)="newProject()"><mat-icon>add</mat-icon> Create your first project</button></mat-card>
+  <mat-card class="empty-card"
+    ><mat-icon>folder_open</mat-icon>
+    <h2>No projects yet</h2>
+    <p>Create a project from an existing server directory or clone a Git repository.</p>
+    <button mat-flat-button type="button" (click)="newProject()">
+      <mat-icon>add</mat-icon> Create your first project
+    </button></mat-card
+  >
   } @else {
-    <div class="project-grid">
-      @for (project of state.projects(); track project.id) {
-        <mat-card appearance="outlined" class="project-card">
-          <a class="card-link" [routerLink]="['/projects', project.id]" [attr.aria-label]="'Open project ' + project.name">
-            <div class="project-icon"><mat-icon>folder</mat-icon></div>
-            <div class="card-heading">
-              <h2 class="project-name">{{ project.name }}</h2>
-              <span class="project-path" [title]="project.path">{{ project.path }}</span>
-            </div>
-          </a>
-          <button mat-icon-button [matMenuTriggerFor]="projectMenu" [matMenuTriggerData]="{ project }" [attr.aria-label]="'Actions for ' + project.name"><mat-icon>more_vert</mat-icon></button>
-          <div class="card-meta"><span><mat-icon>chat</mat-icon>{{ chatCount(project) }} chats</span><span>Updated {{ formatDate(project.updated_at) }}</span></div>
-        </mat-card>
-      }
-    </div>
+  <div class="project-grid">
+    @for (project of state.projects(); track project.id) {
+    <mat-card appearance="outlined" class="project-card">
+      <a
+        class="card-link"
+        [routerLink]="['/projects', project.id]"
+        [attr.aria-label]="'Open project ' + project.name"
+      >
+        <div class="project-icon"><mat-icon>folder</mat-icon></div>
+        <div class="card-heading">
+          <h2 class="project-name">{{ project.name }}</h2>
+          <span class="project-path" [title]="project.path">{{ project.path }}</span>
+        </div>
+      </a>
+      <button
+        mat-icon-button
+        [matMenuTriggerFor]="projectMenu"
+        [matMenuTriggerData]="{ project }"
+        [attr.aria-label]="'Actions for ' + project.name"
+      >
+        <mat-icon>more_vert</mat-icon>
+      </button>
+      <div class="card-meta">
+        <span><mat-icon>chat</mat-icon>{{ chatCount(project) }} chats</span
+        ><span>Updated {{ formatDate(project.updated_at) }}</span>
+      </div>
+    </mat-card>
+    }
+  </div>
   }
   <mat-menu #projectMenu="matMenu">
     <ng-template matMenuContent let-project="project">
-      <button mat-menu-item type="button" (click)="edit(project)"><mat-icon>edit</mat-icon><span>Edit project</span></button>
-      <button mat-menu-item type="button" (click)="remove(project)"><mat-icon class="destructive-icon">delete</mat-icon><span>Delete project</span></button>
+      <button mat-menu-item type="button" (click)="edit(project)">
+        <mat-icon>edit</mat-icon><span>Edit project</span>
+      </button>
+      <button mat-menu-item type="button" (click)="remove(project)">
+        <mat-icon class="destructive-icon">delete</mat-icon><span>Delete project</span>
+      </button>
     </ng-template>
   </mat-menu>
-  <button mat-fab extended class="mobile-fab" type="button" (click)="newProject()"><mat-icon>add</mat-icon> New project</button>
+  <button mat-fab extended class="mobile-fab" type="button" (click)="newProject()">
+    <mat-icon>add</mat-icon> New project
+  </button>
 </section>

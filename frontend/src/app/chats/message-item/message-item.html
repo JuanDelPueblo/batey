@@ -1,5 +1,24 @@
-@switch (item().type) {
-  @case ('user_message') { <div class="user-message"><div class="user-bubble">@if (user(item()).content?.length) { <hub-rich-content [blocks]="user(item()).content!" /> } @else { {{ user(item()).text }} }</div><time [attr.datetime]="user(item()).timestamp">{{ formatTime(user(item()).timestamp) }}</time></div> }
-  @case ('turn') { <article class="turn"><header><span class="avatar">{{ turn(item()).agent[0] || 'A' }}</span><strong>{{ turn(item()).agent }}</strong><time [attr.datetime]="turn(item()).timestamp">{{ formatTime(turn(item()).timestamp) }}</time>@if (turn(item()).status === 'in_progress') { <span class="thinking"><mat-spinner diameter="14" /> Thinking…</span> }</header><hub-turn-entries [entries]="turn(item()).entries" [chatId]="chatId()" /></article> }
-  @case ('error') { <div class="error-message" role="alert"><mat-icon>error</mat-icon><span>{{ error(item()).message }}</span></div> }
-}
+@switch (item().type) { @case ('user_message') {
+<div class="user-message">
+  <div class="user-bubble">
+    @if (user(item()).content?.length) { <hub-rich-content [blocks]="user(item()).content!" /> }
+    @else { {{ user(item()).text }} }
+  </div>
+  <time [attr.datetime]="user(item()).timestamp">{{ formatTime(user(item()).timestamp) }}</time>
+</div>
+} @case ('turn') {
+<article class="turn">
+  <header>
+    <span class="avatar">{{ turn(item()).agent[0] || 'A' }}</span
+    ><strong>{{ turn(item()).agent }}</strong
+    ><time [attr.datetime]="turn(item()).timestamp">{{ formatTime(turn(item()).timestamp) }}</time
+    >@if (turn(item()).status === 'in_progress') {
+    <span class="thinking"><mat-spinner diameter="14" /> Thinking…</span> }
+  </header>
+  <hub-turn-entries [entries]="turn(item()).entries" [chatId]="chatId()" />
+</article>
+} @case ('error') {
+<div class="error-message" role="alert">
+  <mat-icon>error</mat-icon><span>{{ error(item()).message }}</span>
+</div>
+} }

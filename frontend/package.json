@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "build": "ng build",
+    "format": "prettier --write \"src/**/*.html\" \"src/**/*.scss\"",
+    "format:check": "prettier --check \"src/**/*.html\" \"src/**/*.scss\"",
+    "lint": "npm run format:check && npm run lint:styles",
+    "lint:styles": "stylelint \"src/**/*.scss\"",
     "test": "ng test --watch=false",
     "start": "ng serve",
     "fake-backend": "node ../backend/fake/server.mjs",
@@ -32,6 +36,9 @@
     "@angular/cli": "22.1.8",
     "@angular/compiler-cli": "22.1.6",
     "jsdom": "^30.0.1",
+    "prettier": "^3.9.7",
+    "stylelint": "^17.15.0",
+    "stylelint-config-recommended-scss": "^17.0.1",
     "typescript": "6.0.3",
     "vitest": "^4.1.11"
   }

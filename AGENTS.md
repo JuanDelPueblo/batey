@@ -290,7 +290,7 @@ The standard final verification command for implementation tasks is:
 nix run .#verify
 ```
 
-It runs the canonical source-level suite with Nix-supplied tools. It covers Rust formatting, clippy, `cargo nextest run`, frontend tests, the frontend production build, and fake-backend tests. It works without entering `nix develop`.
+It runs the canonical source-level suite with Nix-supplied tools. It covers Rust formatting, clippy, `cargo nextest run`, frontend formatting and SCSS linting, frontend tests, the frontend production build, and fake-backend tests. It works without entering `nix develop`.
 
 Backend:
 
@@ -306,9 +306,15 @@ Frontend:
 
 ```sh
 cd frontend
+npm run format
+npm run format:check
+npm run lint:styles
 npm test
 npm run build
 ```
+
+`npm run format` rewrites Angular templates and SCSS with Prettier. `npm run
+format:check` and `npm run lint:styles` are also part of `nix run .#verify`.
 
 Packaging/release/deployment changes:
 

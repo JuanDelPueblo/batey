@@ -41,6 +41,12 @@ cargo nextest run --all-features
 stage "Frontend dependencies (npm ci)"
 npm ci --prefix frontend
 
+stage "Frontend formatting (npm run format:check)"
+npm run format:check --prefix frontend
+
+stage "Frontend style linting (npm run lint:styles)"
+npm run lint:styles --prefix frontend
+
 stage "Frontend tests (npm test)"
 npm test --prefix frontend
 

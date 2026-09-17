@@ -4,9 +4,13 @@
     <mat-label>Chat title</mat-label>
     <input matInput [formField]="renameForm.title" (keyup.enter)="save()" autocomplete="off" />
   </mat-form-field>
-  @if (error()) { <div class="error" role="alert">{{ error() }}</div> }
+  @if (error()) {
+  <div class="error" role="alert">{{ error() }}</div>
+  }
 </mat-dialog-content>
 <mat-dialog-actions align="end">
   <button mat-button type="button" (click)="dialogRef.close()" [disabled]="saving()">Cancel</button>
-  <button mat-flat-button type="button" (click)="save()" [disabled]="!title().trim() || saving()">Save</button>
+  <button mat-flat-button type="button" (click)="save()" [disabled]="!title().trim() || saving()">
+    Save
+  </button>
 </mat-dialog-actions>

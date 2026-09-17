@@ -1,24 +1,35 @@
 <div #viewport class="stream" (scroll)="onScroll()" aria-live="polite">
   <div class="stream-content">
     @if (hasOlderHistory()) {
-      <div class="history-control">
-        <button mat-stroked-button type="button" (click)="requestOlder()" [disabled]="historyLoading()">
-          <span class="history-control__content">
-            @if (historyLoading()) { <mat-spinner diameter="18" /> } @else { <mat-icon>history</mat-icon> }
-            <span>{{ historyLoading() ? 'Loading older history…' : 'Load older history' }}</span>
-          </span>
-        </button>
-      </div>
-    }
-    @for (item of items(); track item.id) {
-      <hub-message-item [item]="item" [chatId]="chatId()" />
+    <div class="history-control">
+      <button
+        mat-stroked-button
+        type="button"
+        (click)="requestOlder()"
+        [disabled]="historyLoading()"
+      >
+        <span class="history-control__content">
+          @if (historyLoading()) { <mat-spinner diameter="18" /> } @else {
+          <mat-icon>history</mat-icon> }
+          <span>{{ historyLoading() ? 'Loading older history…' : 'Load older history' }}</span>
+        </span>
+      </button>
+    </div>
+    } @for (item of items(); track item.id) {
+    <hub-message-item [item]="item" [chatId]="chatId()" />
     }
   </div>
 </div>
 @if (showScrollButton()) {
-  <div class="scroll-control">
-    <button matFab extended type="button" matTooltip="Scroll to latest message" (click)="scrollToBottom(true)">
-      <mat-icon>arrow_downward</mat-icon> Latest
-    </button>
-  </div>
+<div class="scroll-control">
+  <button
+    matFab
+    extended
+    type="button"
+    matTooltip="Scroll to latest message"
+    (click)="scrollToBottom(true)"
+  >
+    <mat-icon>arrow_downward</mat-icon> Latest
+  </button>
+</div>
 }

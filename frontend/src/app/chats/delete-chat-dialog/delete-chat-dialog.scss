@@ -1,5 +1,27 @@
-mat-dialog-content { display: flex; min-width: min(400px, calc(100vw - 48px)); max-width: 520px; flex-direction: column; gap: 8px; }
-.note { color: var(--mat-sys-on-surface-variant); }
-.error { padding: 12px 16px; border-radius: var(--mat-sys-corner-medium); background: var(--mat-sys-error-container); color: var(--mat-sys-on-error-container); white-space: pre-wrap; }
-.destructive { --mat-button-filled-container-color: var(--mat-sys-error); --mat-button-filled-label-text-color: var(--mat-sys-on-error); --mat-button-filled-state-layer-color: var(--mat-sys-on-error); }
-@media (max-width: 599px) { mat-dialog-content { min-width: 0; } }
+mat-dialog-content {
+  display: flex;
+  min-width: min(400px, calc(100vw - 48px));
+  max-width: 520px;
+  flex-direction: column;
+  gap: 8px;
+}
+.note {
+  color: var(--mat-sys-on-surface-variant);
+}
+.error {
+  padding: 12px 16px;
+  border-radius: var(--mat-sys-corner-medium);
+  background: var(--mat-sys-error-container);
+  color: var(--mat-sys-on-error-container);
+  white-space: pre-wrap;
+}
+.destructive {
+  --mat-button-filled-container-color: var(--mat-sys-error);
+  --mat-button-filled-label-text-color: var(--mat-sys-on-error);
+  --mat-button-filled-state-layer-color: var(--mat-sys-on-error);
+}
+@media (max-width: 599px) {
+  mat-dialog-content {
+    min-width: 0;
+  }
+}

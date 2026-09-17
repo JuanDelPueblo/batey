@@ -1,46 +1,51 @@
 <div class="picker">
   @if (error()) {
-    <div class="error-box" role="alert">{{ error() }}</div>
-  }
+  <div class="error-box" role="alert">{{ error() }}</div>
+  } @if (listing(); as current) {
+  <nav class="breadcrumbs" aria-label="Directory path">
+    @if (current.parent) {
+    <button
+      mat-button
+      type="button"
+      (click)="browseTo(current.parent!)"
+      aria-label="Go to parent directory"
+    >
+      <mat-icon>arrow_upward</mat-icon>
+    </button>
+    } @for (crumb of current.breadcrumbs; track crumb.path; let last = $last) {
+    <button mat-button type="button" class="crumb" (click)="browseTo(crumb.path)">
+      {{ crumb.name }}
+    </button>
+    @if (!last) { <span aria-hidden="true">/</span> } }
+  </nav>
 
-  @if (listing(); as current) {
-    <nav class="breadcrumbs" aria-label="Directory path">
-      @if (current.parent) {
-        <button mat-button type="button" (click)="browseTo(current.parent!)" aria-label="Go to parent directory">
-          <mat-icon>arrow_upward</mat-icon>
-        </button>
-      }
-      @for (crumb of current.breadcrumbs; track crumb.path; let last = $last) {
-        <button mat-button type="button" class="crumb" (click)="browseTo(crumb.path)">{{ crumb.name }}</button>
-        @if (!last) { <span aria-hidden="true">/</span> }
-      }
-    </nav>
-
-    <div class="directory-list">
-      @if (loading()) {
-        <mat-progress-bar mode="indeterminate" aria-label="Loading directories" />
-      }
-      <mat-action-list aria-label="Subdirectories">
-        @for (directory of current.directories; track directory.path) {
-          <button mat-list-item type="button" (click)="browseTo(directory.path)">
-            <mat-icon matListItemIcon>folder</mat-icon>
-            <span matListItemTitle>{{ directory.name }}</span>
-            <mat-icon matListItemMeta>chevron_right</mat-icon>
-          </button>
-        } @empty {
-          @if (!loading()) { <p class="empty">No subdirectories found</p> }
-        }
-      </mat-action-list>
-    </div>
-
-    <div class="picker-actions">
-      <span class="current-path" [title]="current.current">{{ current.current }}</span>
-      <button mat-flat-button type="button" (click)="selectCurrent()">
-        <mat-icon>check</mat-icon>
-        Select current folder
+  <div class="directory-list">
+    @if (loading()) {
+    <mat-progress-bar mode="indeterminate" aria-label="Loading directories" />
+    }
+    <mat-action-list aria-label="Subdirectories">
+      @for (directory of current.directories; track directory.path) {
+      <button mat-list-item type="button" (click)="browseTo(directory.path)">
+        <mat-icon matListItemIcon>folder</mat-icon>
+        <span matListItemTitle>{{ directory.name }}</span>
+        <mat-icon matListItemMeta>chevron_right</mat-icon>
       </button>
-    </div>
+      } @empty { @if (!loading()) {
+      <p class="empty">No subdirectories found</p>
+      } }
+    </mat-action-list>
+  </div>
+
+  <div class="picker-actions">
+    <span class="current-path" [title]="current.current">{{ current.current }}</span>
+    <button mat-flat-button type="button" (click)="selectCurrent()">
+      <mat-icon>check</mat-icon>
+      Select current folder
+    </button>
+  </div>
   } @else if (loading()) {
-    <div class="loading"><mat-progress-bar mode="indeterminate" aria-label="Loading directories" /></div>
+  <div class="loading">
+    <mat-progress-bar mode="indeterminate" aria-label="Loading directories" />
+  </div>
   }
 </div>

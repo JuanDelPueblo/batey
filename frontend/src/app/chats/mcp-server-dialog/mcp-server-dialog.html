@@ -1,6 +1,8 @@
 <h2 mat-dialog-title>{{ editing ? 'Edit MCP server' : 'Add MCP server' }}</h2>
 <mat-dialog-content>
-  @if (errorMessage()) { <div class="error" role="alert">{{ errorMessage() }}</div> }
+  @if (errorMessage()) {
+  <div class="error" role="alert">{{ errorMessage() }}</div>
+  }
 
   <mat-form-field appearance="outline">
     <mat-label>Name</mat-label>
@@ -17,61 +19,72 @@
   </mat-form-field>
 
   @if (showUrl()) {
-    <mat-form-field appearance="outline">
-      <mat-label>URL</mat-label>
-      <input matInput type="url" [value]="url()" (input)="url.set($any($event.target).value)" />
-    </mat-form-field>
-  }
+  <mat-form-field appearance="outline">
+    <mat-label>URL</mat-label>
+    <input matInput type="url" [value]="url()" (input)="url.set($any($event.target).value)" />
+  </mat-form-field>
+  } @if (showCommand()) {
+  <mat-form-field appearance="outline">
+    <mat-label>Absolute command</mat-label>
+    <input matInput [value]="command()" (input)="command.set($any($event.target).value)" />
+  </mat-form-field>
 
-  @if (showCommand()) {
-    <mat-form-field appearance="outline">
-      <mat-label>Absolute command</mat-label>
-      <input matInput [value]="command()" (input)="command.set($any($event.target).value)" />
-    </mat-form-field>
-
-    <mat-form-field appearance="outline">
-      <mat-label>Arguments (one per line)</mat-label>
-      <textarea matInput rows="3" [value]="argsText()" (input)="argsText.set($any($event.target).value)"></textarea>
-    </mat-form-field>
+  <mat-form-field appearance="outline">
+    <mat-label>Arguments (one per line)</mat-label>
+    <textarea
+      matInput
+      rows="3"
+      [value]="argsText()"
+      (input)="argsText.set($any($event.target).value)"
+    ></textarea>
+  </mat-form-field>
   }
 
   <div class="secret-editor">
     <strong>Secrets</strong>
-    <p>Values are never displayed. {{ editing ? 'Keep, replace, or remove each named field.' : 'Add any header or environment values the server needs.' }}</p>
+    <p>
+      Values are never displayed. {{ editing ? 'Keep, replace, or remove each named field.' : 'Add
+      any header or environment values the server needs.' }}
+    </p>
     @for (secret of secrets(); track $index; let index = $index) {
-      <div class="secret-row">
-        <input
-          class="secret-name"
-          [value]="secret.name"
-          [attr.aria-label]="'Secret name ' + (index + 1)"
-          placeholder="Name"
-          (input)="setSecret(index, 'name', $any($event.target).value)"
-        />
-        @if (editing) {
-          <mat-select
-            class="secret-action"
-            [value]="secret.action"
-            [attr.aria-label]="'Secret action ' + (index + 1)"
-            (selectionChange)="setSecret(index, 'action', $event.value)"
-          >
-            <mat-option value="keep">Keep</mat-option>
-            <mat-option value="replace">Replace</mat-option>
-            <mat-option value="remove">Remove</mat-option>
-          </mat-select>
-        }
-        <input
-          class="secret-value"
-          type="password"
-          [disabled]="editing && secret.action !== 'replace'"
-          [value]="secret.value"
-          [attr.aria-label]="'Secret value ' + (index + 1)"
-          placeholder="Value"
-          (input)="setSecret(index, 'value', $any($event.target).value)"
-        />
-        <button mat-icon-button type="button" [attr.aria-label]="'Remove secret ' + (index + 1)" (click)="removeSecret(index)">
-          <mat-icon>delete</mat-icon>
-        </button>
-      </div>
+    <div class="secret-row">
+      <input
+        class="secret-name"
+        [value]="secret.name"
+        [attr.aria-label]="'Secret name ' + (index + 1)"
+        placeholder="Name"
+        (input)="setSecret(index, 'name', $any($event.target).value)"
+      />
+      @if (editing) {
+      <mat-select
+        class="secret-action"
+        [value]="secret.action"
+        [attr.aria-label]="'Secret action ' + (index + 1)"
+        (selectionChange)="setSecret(index, 'action', $event.value)"
+      >
+        <mat-option value="keep">Keep</mat-option>
+        <mat-option value="replace">Replace</mat-option>
+        <mat-option value="remove">Remove</mat-option>
+      </mat-select>
+      }
+      <input
+        class="secret-value"
+        type="password"
+        [disabled]="editing && secret.action !== 'replace'"
+        [value]="secret.value"
+        [attr.aria-label]="'Secret value ' + (index + 1)"
+        placeholder="Value"
+        (input)="setSecret(index, 'value', $any($event.target).value)"
+      />
+      <button
+        mat-icon-button
+        type="button"
+        [attr.aria-label]="'Remove secret ' + (index + 1)"
+        (click)="removeSecret(index)"
+      >
+        <mat-icon>delete</mat-icon>
+      </button>
+    </div>
     }
     <button mat-button type="button" (click)="addSecret()">Add secret field</button>
   </div>

@@ -1,5 +1,21 @@
-:host { display: inline-flex; min-width: 0; }
-.new-chat-trigger { min-width: 0; width: 100%; padding-inline: 16px 8px; }
-.new-chat-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.new-chat-caret { margin-left: 0; opacity: .85; }
-.new-chat-trigger mat-spinner { --mat-progress-spinner-active-indicator-color: currentColor; }
+:host {
+  display: inline-flex;
+  min-width: 0;
+}
+.new-chat-trigger {
+  min-width: 0;
+  width: 100%;
+  padding-inline: 16px 8px;
+}
+.new-chat-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-chat-caret {
+  margin-left: 0;
+  opacity: 0.85;
+}
+.new-chat-trigger mat-spinner {
+  --mat-progress-spinner-active-indicator-color: currentColor;
+}

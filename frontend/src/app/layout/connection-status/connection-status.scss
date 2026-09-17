@@ -1,8 +1,41 @@
-:host { display: inline-flex; min-width: 0; }
-.status-chip { display: inline-flex; align-items: center; gap: 7px; height: 28px; padding-inline: 10px; border-radius: var(--mat-sys-corner-full); background: var(--mat-sys-surface-container-high); color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-label-medium); letter-spacing: var(--mat-sys-label-medium-tracking); text-transform: capitalize; }
-.status-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-dot { flex: 0 0 auto; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
-.status-chip.connected { color: var(--hub-status-running); background: var(--hub-status-running-container); }
-.status-chip.connecting { color: var(--hub-status-starting); }
+:host {
+  display: inline-flex;
+  min-width: 0;
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding-inline: 10px;
+  border-radius: var(--mat-sys-corner-full);
+  background: var(--mat-sys-surface-container-high);
+  color: var(--mat-sys-on-surface-variant);
+  font: var(--mat-sys-label-medium);
+  letter-spacing: var(--mat-sys-label-medium-tracking);
+  text-transform: capitalize;
+}
+.status-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.status-dot {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status-chip.connected {
+  color: var(--hub-status-running);
+  background: var(--hub-status-running-container);
+}
+.status-chip.connecting {
+  color: var(--hub-status-starting);
+}
 .status-chip.disconnected,
-.status-chip.error { color: var(--hub-status-dead); background: var(--hub-status-dead-container); }
+.status-chip.error {
+  color: var(--hub-status-dead);
+  background: var(--hub-status-dead-container);
+}

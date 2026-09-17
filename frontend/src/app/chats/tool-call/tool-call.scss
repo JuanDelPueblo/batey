@@ -7,7 +7,10 @@
   border: 1px solid var(--mat-sys-outline-variant);
   border-radius: var(--mat-sys-corner-small);
   background: var(--mat-sys-surface-container-lowest);
-  transition: background-color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    box-shadow 150ms ease;
   overflow: hidden;
   max-width: 100%;
   box-sizing: border-box;
@@ -75,7 +78,11 @@
 }
 
 .tool-summary {
-  font: 0.78rem/1.2 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    0.78rem/1.2 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   color: var(--mat-sys-on-surface-variant);
   white-space: nowrap;
   overflow: hidden;
@@ -257,7 +264,11 @@
 }
 
 .location {
-  font: 0.76rem/1.3 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    0.76rem/1.3 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   background: var(--mat-sys-surface-container);
   padding: 2px 6px;
   border-radius: var(--mat-sys-corner-small);
@@ -276,10 +287,13 @@
   border: 1px solid var(--mat-sys-outline-variant);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  word-break: break-word;
   max-width: 100%;
   box-sizing: border-box;
-  font: 0.8rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    0.8rem/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
 
   .status-failed & {
     border-color: var(--mat-sys-error);
@@ -332,8 +346,11 @@
   overflow-x: auto;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  word-break: break-word;
-  font: 0.8rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+  font:
+    0.8rem/1.4 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
   color: var(--mat-sys-on-surface);
 }
 
@@ -427,7 +444,11 @@
     background: var(--mat-sys-surface-container-low);
     border: 1px solid var(--mat-sys-outline-variant);
     border-radius: var(--mat-sys-corner-small);
-    font: 0.76rem/1.35 ui-monospace, SFMono-Regular, Consolas, monospace;
+    font:
+      0.76rem/1.35 ui-monospace,
+      SFMono-Regular,
+      Consolas,
+      monospace;
     overflow: auto;
     max-height: 200px;
     max-width: 100%;
@@ -442,7 +463,7 @@
   padding: 0;
   margin: -1px;
   overflow: hidden;
-  clip: rect(0, 0, 0, 0);
+  clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
 }

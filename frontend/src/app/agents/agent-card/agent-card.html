@@ -5,59 +5,62 @@
       <span class="id">{{ agent().id }}</span>
     </div>
     @if (available()) {
-      <span class="availability available">Available</span>
+    <span class="availability available">Available</span>
     } @else {
-      <span class="availability unavailable">Unavailable</span>
+    <span class="availability unavailable">Unavailable</span>
     }
   </header>
 
   @if (agent().display?.description) {
-    <p class="description">{{ agent().display?.description }}</p>
-  }
-
-  @if (!available() && agent().unavailable_reason) {
-    <p class="unavailable-reason" role="note">
-      <mat-icon inline>info</mat-icon> {{ agent().unavailable_reason }}
-    </p>
+  <p class="description">{{ agent().display?.description }}</p>
+  } @if (!available() && agent().unavailable_reason) {
+  <p class="unavailable-reason" role="note">
+    <mat-icon inline>info</mat-icon> {{ agent().unavailable_reason }}
+  </p>
   }
 
   <p class="provenance">
     <span>Source: {{ sourceLabel(agent().source) }}</span>
     <span aria-hidden="true">·</span>
-    @switch (mutability()) {
-      @case ('editable') { <span>Editable</span> }
-      @case ('registry_managed') { <span>Registry-managed</span> }
-      @default { <span>Read-only</span> }
-    }
+    @switch (mutability()) { @case ('editable') { <span>Editable</span> } @case ('registry_managed')
+    { <span>Registry-managed</span> } @default { <span>Read-only</span> } }
   </p>
 
   @if (agent().display || agent().usage_provider) {
-    <ul class="meta">
-      @if (agent().display?.version; as version) {
-        <li><span class="meta-label">Version</span><span class="meta-value">{{ version }}</span></li>
-      }
-      @if (agent().usage_provider; as provider) {
-        <li><span class="meta-label">Usage provider</span><span class="meta-value">{{ provider }}</span></li>
-      }
-      @if (agent().display?.license; as license) {
-        <li><span class="meta-label">License</span><span class="meta-value">{{ license }}</span></li>
-      }
-      @if (agent().display?.repository; as repo) {
-        <li>
-          <a class="meta-link" [href]="repo" target="_blank" rel="noopener noreferrer" [title]="repo">Repository</a>
-        </li>
-      }
-      @if (agent().display?.website; as site) {
-        <li>
-          <a class="meta-link" [href]="site" target="_blank" rel="noopener noreferrer" [title]="site">Website</a>
-        </li>
-      }
-      @if (agent().display?.license_url; as licenseUrl) {
-        <li>
-          <a class="meta-link" [href]="licenseUrl" target="_blank" rel="noopener noreferrer" [title]="licenseUrl">License text</a>
-        </li>
-      }
-    </ul>
+  <ul class="meta">
+    @if (agent().display?.version; as version) {
+    <li><span class="meta-label">Version</span><span class="meta-value">{{ version }}</span></li>
+    } @if (agent().usage_provider; as provider) {
+    <li>
+      <span class="meta-label">Usage provider</span><span class="meta-value">{{ provider }}</span>
+    </li>
+    } @if (agent().display?.license; as license) {
+    <li><span class="meta-label">License</span><span class="meta-value">{{ license }}</span></li>
+    } @if (agent().display?.repository; as repo) {
+    <li>
+      <a class="meta-link" [href]="repo" target="_blank" rel="noopener noreferrer" [title]="repo"
+        >Repository</a
+      >
+    </li>
+    } @if (agent().display?.website; as site) {
+    <li>
+      <a class="meta-link" [href]="site" target="_blank" rel="noopener noreferrer" [title]="site"
+        >Website</a
+      >
+    </li>
+    } @if (agent().display?.license_url; as licenseUrl) {
+    <li>
+      <a
+        class="meta-link"
+        [href]="licenseUrl"
+        target="_blank"
+        rel="noopener noreferrer"
+        [title]="licenseUrl"
+        >License text</a
+      >
+    </li>
+    }
+  </ul>
   }
 
   <section
@@ -70,253 +73,288 @@
     <div class="auth-heading">
       <h4>Sign-in</h4>
       @if (authStatusLabel(); as label) {
-        <p class="auth-status" [class.authenticated]="isAuthenticated()" [class.required]="!isAuthenticated()" role="status">
-          {{ label }}
-        </p>
-      }
-      @if (!neverChecked() && !authLoading()) {
-        <button
-          mat-icon-button
-          type="button"
-          (click)="retryAuth.emit()"
-          [matTooltip]="refreshTooltip()"
-          aria-label="Check sign-in status again"
-        >
-          <mat-icon>refresh</mat-icon>
-        </button>
+      <p
+        class="auth-status"
+        [class.authenticated]="isAuthenticated()"
+        [class.required]="!isAuthenticated()"
+        role="status"
+      >
+        {{ label }}
+      </p>
+      } @if (!neverChecked() && !authLoading()) {
+      <button
+        mat-icon-button
+        type="button"
+        (click)="retryAuth.emit()"
+        [matTooltip]="refreshTooltip()"
+        aria-label="Check sign-in status again"
+      >
+        <mat-icon>refresh</mat-icon>
+      </button>
       }
     </div>
 
     @if ((authLoading() || protocolLoading()) && !protocolFlow()) {
-      <div class="auth-row loading"><mat-spinner diameter="18" /> <span>Checking sign-in…</span></div>
-    } @else if (auth(); as state) {
-      @if (authError(); as error) {
-        <div class="auth-row error" role="alert">
-          <mat-icon inline>error_outline</mat-icon>
-          <span>{{ error }}</span>
-          <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
-        </div>
-      }
-      @if (protocolFlow(); as flow) {
-        <div class="protocol-flow" role="status">
-          @switch (flow.state) {
-            @case ('running') {
-              <div class="auth-row"><mat-spinner diameter="18" /> <span>Signing in…</span>
-                <button mat-button type="button" (click)="cancelProtocol.emit()">Cancel</button>
-              </div>
-            }
-            @case ('waiting_for_user') {
-              <div class="auth-row"><mat-spinner diameter="18" /> <span>Waiting for your action…</span>
-                <button mat-button type="button" (click)="cancelProtocol.emit()">Cancel</button>
-              </div>
-            }
-            @case ('succeeded') {
-              <div class="auth-row success"><span>Authentication finished. Status refreshed.</span>
-                <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
-              </div>
-            }
-            @case ('failed') {
-              <div class="auth-row error" role="alert">
-                <mat-icon inline>error_outline</mat-icon>
-                <span>{{ flow.reason || 'Authentication failed.' }}</span>
-                <button mat-button type="button" (click)="authenticate.emit(flow.method_id)">Retry</button>
-                <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
-              </div>
-            }
-            @case ('cancelled') {
-              <div class="auth-row neutral"><span>Authentication cancelled.</span>
-                <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
-              </div>
-            }
-            @case ('timed_out') {
-              <div class="auth-row error" role="alert">
-                <mat-icon inline>error_outline</mat-icon>
-                <span>{{ flow.reason || 'Authentication timed out.' }}</span>
-                <button mat-button type="button" (click)="authenticate.emit(flow.method_id)">Retry</button>
-                <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
-              </div>
-            }
-          }
-          @if (protocolInteraction(); as interaction) {
-            <div class="browser-interaction" role="group" aria-label="Browser sign-in">
-              <p class="auth-hint">Complete sign-in in your browser.</p>
-              <div class="browser-primary-action">
-                <a mat-flat-button [href]="interaction.url" target="_blank" rel="noopener noreferrer">
-                  <mat-icon>open_in_new</mat-icon>
-                  <span>Open sign-in page</span>
-                </a>
-              </div>
-              @if (interaction.manual_callback) {
-                <div class="callback-fallback">
-                  <span class="auth-hint">If browser redirection does not complete, paste the localhost callback address:</span>
-                  <div class="callback-row">
-                    <label class="callback-label">
-                      Final callback address
-                      <input
-                        type="url"
-                        autocomplete="off"
-                        spellcheck="false"
-                        placeholder="http://localhost:…"
-                        [value]="callbackDraft()"
-                        (input)="callbackDraft.set($any($event.target).value)"
-                      />
-                    </label>
-                    <button mat-stroked-button type="button" (click)="submitCallback()" [disabled]="!callbackDraft().trim()">
-                      Send callback
-                    </button>
-                  </div>
-                </div>
-              }
-            </div>
-          }
-          @if (protocolElicitations().length > 0) {
-            <div class="elicitations" role="group" aria-label="Sign-in action required">
-              @for (elicitation of protocolElicitations(); track elicitation.id) {
-                <div class="elicitation">
-                  <p class="elicitation-message">{{ elicitation.message || 'Input needed' }}</p>
-                  @if (elicitation.mode === 'url' && elicitation.url) {
-                    <p class="url-warning">The agent asks you to visit this address out of band. Batey never opens or fetches it automatically.</p>
-                    <p class="url-line"><strong>Address:</strong> <span class="url">{{ elicitation.url }}</span></p>
-                    @if (elicitationHost(elicitation.url)) {
-                      <p class="url-line"><strong>Host:</strong> {{ elicitationHost(elicitation.url) }}</p>
-                    }
-                    <p><a [href]="elicitation.url" target="_blank" rel="noopener noreferrer">Open link manually</a></p>
-                  } @else if (elicitation.mode === 'form') {
-                    <p class="auth-hint">The agent requests form input. Answer with Accept after you complete the external step, or Decline/Cancel.</p>
-                  } @else {
-                    <p class="auth-hint">Unsupported elicitation mode ({{ elicitation.mode }}). Cancel to stop waiting.</p>
-                  }
-                  <div class="elicitation-actions">
-                    <button mat-button type="button" (click)="respondElicitation.emit({ id: elicitation.id, action: 'cancel' })">Cancel</button>
-                    <button mat-button type="button" (click)="respondElicitation.emit({ id: elicitation.id, action: 'decline' })">Decline</button>
-                    <button mat-flat-button type="button" (click)="respondElicitation.emit({ id: elicitation.id, action: 'accept' })">Accept</button>
-                  </div>
-                </div>
-              }
-            </div>
-          } @else if (flow.state === 'waiting_for_user') {
-            <p class="auth-hint">Waiting for the agent. If nothing appears, Cancel and retry.</p>
-          }
-        </div>
-      }
-      @if (terminalFlow(); as tflow) {
-        @if (tflow.state === 'running') {
-          <div class="terminal-flow" role="status">
-            <div class="auth-row">
-              <mat-spinner diameter="18" />
-              <span>Authentication is still running in a terminal.</span>
-              <button mat-stroked-button type="button" (click)="resumeTerminal.emit(tflow.flow_id)">Resume terminal</button>
-              <button mat-button type="button" (click)="cancelTerminal.emit()">Cancel</button>
-            </div>
-          </div>
-        }
-      }
-      @if (showMethods()) {
-        <div class="auth-list">
-          @for (method of state.methods; track method.id) {
-            <div class="method">
-              <div class="method-text">
-                <span class="method-name">{{ method.name }}</span>
-                @if (methodTypeLabel(method); as typeLabel) {
-                  <span class="method-type">{{ typeLabel }}</span>
-                }
-                @if (method.description) { <span class="method-description">{{ method.description }}</span> }
-              </div>
-              <div class="method-action">
-                @if (!method.supported) {
-                  <button
-                    mat-stroked-button
-                    type="button"
-                    disabled
-                    matTooltip="This client cannot handle this authentication method"
-                  >
-                    Unsupported
-                  </button>
-                } @else {
-                  @switch (method.type) {
-                    @case ('agent') {
-                      <button mat-flat-button type="button" (click)="authenticate.emit(method.id)">Sign in</button>
-                    }
-                    @case ('terminal') {
-                      <button mat-stroked-button type="button" (click)="terminal.emit(method.id)">Open terminal</button>
-                    }
-                    @default {
-                      <button
-                        mat-stroked-button
-                        type="button"
-                        disabled
-                        matTooltip="This client cannot handle this authentication method"
-                      >
-                        Unsupported
-                      </button>
-                    }
-                  }
-                }
-              </div>
-            </div>
-          } @empty {
-            @if (neverChecked()) {
-              <p class="auth-hint">Sign-in status has not been checked yet.</p>
-              <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
-            } @else if (isDiscoveryStale()) {
-              <p class="auth-hint">Saved sign-in options may be out of date.</p>
-              <button mat-stroked-button type="button" (click)="retryAuth.emit()">Check sign-in options</button>
-            } @else if (!logoutSupported()) {
-              <p class="auth-hint">No sign-in options available.</p>
-            }
-          }
-          @if (showClear()) {
-            <div class="auth-clear">
-              <button mat-button type="button" (click)="clearCredentials.emit()">Clear saved sign-in</button>
-            </div>
-          }
-        </div>
-      } @else if (showLogout()) {
-        <div class="auth-list">
-          <div class="method logout">
-            <div class="method-text">
-              <span class="method-name">Log out</span>
-              <span class="method-description">End the observed signed-in session for this agent</span>
-            </div>
-            <div class="method-action">
-              <button mat-stroked-button type="button" (click)="logout.emit()">Log out</button>
-            </div>
-          </div>
-        </div>
-      }
-    } @else if (authError(); as error) {
+    <div class="auth-row loading"><mat-spinner diameter="18" /> <span>Checking sign-in…</span></div>
+    } @else if (auth(); as state) { @if (authError(); as error) {
+    <div class="auth-row error" role="alert">
+      <mat-icon inline>error_outline</mat-icon>
+      <span>{{ error }}</span>
+      <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
+    </div>
+    } @if (protocolFlow(); as flow) {
+    <div class="protocol-flow" role="status">
+      @switch (flow.state) { @case ('running') {
+      <div class="auth-row">
+        <mat-spinner diameter="18" /> <span>Signing in…</span>
+        <button mat-button type="button" (click)="cancelProtocol.emit()">Cancel</button>
+      </div>
+      } @case ('waiting_for_user') {
+      <div class="auth-row">
+        <mat-spinner diameter="18" /> <span>Waiting for your action…</span>
+        <button mat-button type="button" (click)="cancelProtocol.emit()">Cancel</button>
+      </div>
+      } @case ('succeeded') {
+      <div class="auth-row success">
+        <span>Authentication finished. Status refreshed.</span>
+        <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
+      </div>
+      } @case ('failed') {
       <div class="auth-row error" role="alert">
         <mat-icon inline>error_outline</mat-icon>
-        <span>{{ error }}</span>
-        <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
+        <span>{{ flow.reason || 'Authentication failed.' }}</span>
+        <button mat-button type="button" (click)="authenticate.emit(flow.method_id)">Retry</button>
+        <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
       </div>
+      } @case ('cancelled') {
+      <div class="auth-row neutral">
+        <span>Authentication cancelled.</span>
+        <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
+      </div>
+      } @case ('timed_out') {
+      <div class="auth-row error" role="alert">
+        <mat-icon inline>error_outline</mat-icon>
+        <span>{{ flow.reason || 'Authentication timed out.' }}</span>
+        <button mat-button type="button" (click)="authenticate.emit(flow.method_id)">Retry</button>
+        <button mat-button type="button" (click)="dismissProtocol.emit()">Dismiss</button>
+      </div>
+      } } @if (protocolInteraction(); as interaction) {
+      <div class="browser-interaction" role="group" aria-label="Browser sign-in">
+        <p class="auth-hint">Complete sign-in in your browser.</p>
+        <div class="browser-primary-action">
+          <a mat-flat-button [href]="interaction.url" target="_blank" rel="noopener noreferrer">
+            <mat-icon>open_in_new</mat-icon>
+            <span>Open sign-in page</span>
+          </a>
+        </div>
+        @if (interaction.manual_callback) {
+        <div class="callback-fallback">
+          <span class="auth-hint"
+            >If browser redirection does not complete, paste the localhost callback address:</span
+          >
+          <div class="callback-row">
+            <label class="callback-label">
+              Final callback address
+              <input
+                type="url"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="http://localhost:…"
+                [value]="callbackDraft()"
+                (input)="callbackDraft.set($any($event.target).value)"
+              />
+            </label>
+            <button
+              mat-stroked-button
+              type="button"
+              (click)="submitCallback()"
+              [disabled]="!callbackDraft().trim()"
+            >
+              Send callback
+            </button>
+          </div>
+        </div>
+        }
+      </div>
+      } @if (protocolElicitations().length > 0) {
+      <div class="elicitations" role="group" aria-label="Sign-in action required">
+        @for (elicitation of protocolElicitations(); track elicitation.id) {
+        <div class="elicitation">
+          <p class="elicitation-message">{{ elicitation.message || 'Input needed' }}</p>
+          @if (elicitation.mode === 'url' && elicitation.url) {
+          <p class="url-warning">
+            The agent asks you to visit this address out of band. Batey never opens or fetches it
+            automatically.
+          </p>
+          <p class="url-line">
+            <strong>Address:</strong> <span class="url">{{ elicitation.url }}</span>
+          </p>
+          @if (elicitationHost(elicitation.url)) {
+          <p class="url-line"><strong>Host:</strong> {{ elicitationHost(elicitation.url) }}</p>
+          }
+          <p>
+            <a [href]="elicitation.url" target="_blank" rel="noopener noreferrer"
+              >Open link manually</a
+            >
+          </p>
+          } @else if (elicitation.mode === 'form') {
+          <p class="auth-hint">
+            The agent requests form input. Answer with Accept after you complete the external step,
+            or Decline/Cancel.
+          </p>
+          } @else {
+          <p class="auth-hint">
+            Unsupported elicitation mode ({{ elicitation.mode }}). Cancel to stop waiting.
+          </p>
+          }
+          <div class="elicitation-actions">
+            <button
+              mat-button
+              type="button"
+              (click)="respondElicitation.emit({ id: elicitation.id, action: 'cancel' })"
+            >
+              Cancel
+            </button>
+            <button
+              mat-button
+              type="button"
+              (click)="respondElicitation.emit({ id: elicitation.id, action: 'decline' })"
+            >
+              Decline
+            </button>
+            <button
+              mat-flat-button
+              type="button"
+              (click)="respondElicitation.emit({ id: elicitation.id, action: 'accept' })"
+            >
+              Accept
+            </button>
+          </div>
+        </div>
+        }
+      </div>
+      } @else if (flow.state === 'waiting_for_user') {
+      <p class="auth-hint">Waiting for the agent. If nothing appears, Cancel and retry.</p>
+      }
+    </div>
+    } @if (terminalFlow(); as tflow) { @if (tflow.state === 'running') {
+    <div class="terminal-flow" role="status">
+      <div class="auth-row">
+        <mat-spinner diameter="18" />
+        <span>Authentication is still running in a terminal.</span>
+        <button mat-stroked-button type="button" (click)="resumeTerminal.emit(tflow.flow_id)">
+          Resume terminal
+        </button>
+        <button mat-button type="button" (click)="cancelTerminal.emit()">Cancel</button>
+      </div>
+    </div>
+    } } @if (showMethods()) {
+    <div class="auth-list">
+      @for (method of state.methods; track method.id) {
+      <div class="method">
+        <div class="method-text">
+          <span class="method-name">{{ method.name }}</span>
+          @if (methodTypeLabel(method); as typeLabel) {
+          <span class="method-type">{{ typeLabel }}</span>
+          } @if (method.description) {
+          <span class="method-description">{{ method.description }}</span> }
+        </div>
+        <div class="method-action">
+          @if (!method.supported) {
+          <button
+            mat-stroked-button
+            type="button"
+            disabled
+            matTooltip="This client cannot handle this authentication method"
+          >
+            Unsupported
+          </button>
+          } @else { @switch (method.type) { @case ('agent') {
+          <button mat-flat-button type="button" (click)="authenticate.emit(method.id)">
+            Sign in
+          </button>
+          } @case ('terminal') {
+          <button mat-stroked-button type="button" (click)="terminal.emit(method.id)">
+            Open terminal
+          </button>
+          } @default {
+          <button
+            mat-stroked-button
+            type="button"
+            disabled
+            matTooltip="This client cannot handle this authentication method"
+          >
+            Unsupported
+          </button>
+          } } }
+        </div>
+      </div>
+      } @empty { @if (neverChecked()) {
+      <p class="auth-hint">Sign-in status has not been checked yet.</p>
+      <button mat-stroked-button type="button" (click)="retryAuth.emit()">
+        Check sign-in options
+      </button>
+      } @else if (isDiscoveryStale()) {
+      <p class="auth-hint">Saved sign-in options may be out of date.</p>
+      <button mat-stroked-button type="button" (click)="retryAuth.emit()">
+        Check sign-in options
+      </button>
+      } @else if (!logoutSupported()) {
+      <p class="auth-hint">No sign-in options available.</p>
+      } } @if (showClear()) {
+      <div class="auth-clear">
+        <button mat-button type="button" (click)="clearCredentials.emit()">
+          Clear saved sign-in
+        </button>
+      </div>
+      }
+    </div>
+    } @else if (showLogout()) {
+    <div class="auth-list">
+      <div class="method logout">
+        <div class="method-text">
+          <span class="method-name">Log out</span>
+          <span class="method-description">End the observed signed-in session for this agent</span>
+        </div>
+        <div class="method-action">
+          <button mat-stroked-button type="button" (click)="logout.emit()">Log out</button>
+        </div>
+      </div>
+    </div>
+    } } @else if (authError(); as error) {
+    <div class="auth-row error" role="alert">
+      <mat-icon inline>error_outline</mat-icon>
+      <span>{{ error }}</span>
+      <button mat-button type="button" (click)="retryAuth.emit()">Retry</button>
+    </div>
     } @else {
-      <div class="auth-row loading">
-        <span class="auth-hint">Loading saved sign-in status…</span>
-      </div>
+    <div class="auth-row loading">
+      <span class="auth-hint">Loading saved sign-in status…</span>
+    </div>
     }
   </section>
 
   <footer class="card-actions" aria-label="Agent management">
     @if (canManageEnv()) {
-      <button mat-button type="button" (click)="environment.emit()"><mat-icon>key</mat-icon> Environment</button>
-    }
-    @switch (mutability()) {
-      @case ('editable') {
-        <button mat-button type="button" (click)="edit.emit()"><mat-icon>edit</mat-icon> Edit</button>
-        <button mat-button type="button" class="destructive-text" (click)="remove.emit()">
-          <mat-icon>delete</mat-icon> Remove
-        </button>
-      }
-      @case ('registry_managed') {
-        <button mat-button type="button" (click)="update.emit()"><mat-icon>update</mat-icon> Update</button>
-        <button mat-button type="button" class="destructive-text" (click)="uninstall.emit()">
-          <mat-icon>delete</mat-icon> Uninstall
-        </button>
-      }
-      @default {
-        <span class="readonly-note"><mat-icon inline>lock</mat-icon> Defined outside Batey. Change the source to edit it.</span>
-      }
-    }
+    <button mat-button type="button" (click)="environment.emit()">
+      <mat-icon>key</mat-icon> Environment
+    </button>
+    } @switch (mutability()) { @case ('editable') {
+    <button mat-button type="button" (click)="edit.emit()"><mat-icon>edit</mat-icon> Edit</button>
+    <button mat-button type="button" class="destructive-text" (click)="remove.emit()">
+      <mat-icon>delete</mat-icon> Remove
+    </button>
+    } @case ('registry_managed') {
+    <button mat-button type="button" (click)="update.emit()">
+      <mat-icon>update</mat-icon> Update
+    </button>
+    <button mat-button type="button" class="destructive-text" (click)="uninstall.emit()">
+      <mat-icon>delete</mat-icon> Uninstall
+    </button>
+    } @default {
+    <span class="readonly-note"
+      ><mat-icon inline>lock</mat-icon> Defined outside Batey. Change the source to edit it.</span
+    >
+    } }
   </footer>
 </article>

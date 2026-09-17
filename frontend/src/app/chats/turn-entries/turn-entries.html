@@ -1,27 +1,21 @@
-@for (entry of entries(); track entry.id) {
-  @switch (entry.type) {
-    @case ('message_chunk') {
-      @if (entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else { <div class="message-text"><hub-markdown [content]="entry.text" /></div> }
-    }
-    @case ('thought_chunk') {
-      <mat-expansion-panel class="thought">
-        <mat-expansion-panel-header>
-          <mat-panel-title><mat-icon>psychology</mat-icon><span>Thought process</span></mat-panel-title>
-        </mat-expansion-panel-header>
-        @if (entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else { <div class="thought-text"><hub-markdown [content]="entry.text" /></div> }
-      </mat-expansion-panel>
-    }
-    @case ('tool_call') {
-      <hub-tool-call [tool]="entry" />
-    }
-    @case ('plan') {
-      <hub-plan-view [entries]="entry.entries" />
-    }
-    @case ('permission_request') {
-      <hub-permission-card [permission]="entry" [chatId]="chatId()" />
-    }
-    @case ('elicitation_request') {
-      <hub-elicitation-card [elicitation]="entry" [chatId]="chatId()" />
-    }
+@for (entry of entries(); track entry.id) { @switch (entry.type) { @case ('message_chunk') { @if
+(entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else {
+<div class="message-text"><hub-markdown [content]="entry.text" /></div>
+} } @case ('thought_chunk') {
+<mat-expansion-panel class="thought">
+  <mat-expansion-panel-header>
+    <mat-panel-title><mat-icon>psychology</mat-icon><span>Thought process</span></mat-panel-title>
+  </mat-expansion-panel-header>
+  @if (entry.content?.length) { <hub-rich-content [blocks]="entry.content!" /> } @else {
+  <div class="thought-text"><hub-markdown [content]="entry.text" /></div>
   }
-}
+</mat-expansion-panel>
+} @case ('tool_call') {
+<hub-tool-call [tool]="entry" />
+} @case ('plan') {
+<hub-plan-view [entries]="entry.entries" />
+} @case ('permission_request') {
+<hub-permission-card [permission]="entry" [chatId]="chatId()" />
+} @case ('elicitation_request') {
+<hub-elicitation-card [elicitation]="entry" [chatId]="chatId()" />
+} } }

@@ -1,64 +1,82 @@
 <h2 mat-dialog-title>New chat</h2>
 <mat-dialog-content>
   @if (loading()) {
-    <div class="loading" role="status">Loading workspace options…</div>
-    <mat-progress-bar mode="indeterminate" aria-label="Loading workspace options" />
-  } @else {
-    @if (errorMessage()) { <div class="error-box" role="alert">{{ errorMessage() }}</div> }
-    <mat-form-field appearance="outline">
-      <mat-label>Agent</mat-label>
-      <mat-select [value]="selectedAgent()" (selectionChange)="selectedAgent.set($event.value)">
-        @for (agent of state.agents(); track agent.id) {
-          <mat-option [value]="agent.id" [disabled]="agent.availability !== 'available'">
-            {{ agent.display_name }}
-            @if (agent.availability !== 'available') { (unavailable) }
-          </mat-option>
-        }
-      </mat-select>
-    </mat-form-field>
-    @if (options()?.is_git) {
-      <mat-form-field appearance="outline">
-        <mat-label>Workspace mode</mat-label>
-        <mat-select [value]="selectedMode()" (selectionChange)="selectedMode.set($event.value)">
-          <mat-option value="managed_worktree">Isolated worktree</mat-option>
-          <mat-option value="project_checkout">Project checkout</mat-option>
-        </mat-select>
-        <mat-hint>{{ selectedMode() === 'managed_worktree' ? 'Gets its own Hub-managed branch and worktree.' : 'Works directly in the real checkout, shared with other direct chats.' }}</mat-hint>
-      </mat-form-field>
-      <mat-form-field appearance="outline">
-        <mat-label>Branch</mat-label>
-        <mat-select [value]="selectedBranch()" (selectionChange)="selectedBranch.set($event.value)">
-          @for (branch of options()?.branches ?? []; track branch.name) { <mat-option [value]="branch.name">{{ branch.name }}</mat-option> }
-        </mat-select>
-      </mat-form-field>
-      <div class="sync-row">
-        <button mat-stroked-button type="button" (click)="updateFromRemote()" [disabled]="syncing() || creating()">
-          @if (syncing()) {
-            <ng-container>
-              <mat-spinner diameter="18" />
-              Updating…
-            </ng-container>
-          } @else {
-            <ng-container>
-              <mat-icon>sync</mat-icon>
-              Update from remote
-            </ng-container>
-          }
-        </button>
-        @if (syncMessage()) { <span class="sync-status" role="status">{{ syncMessage() }}</span> }
-      </div>
-      @if (options()?.dirty && selectedMode() === 'managed_worktree') {
-        <p class="notice" role="note">This checkout has uncommitted changes. They are not included; the selected committed branch is the source.</p>
-      }
-      @if (selectedMode() === 'project_checkout') {
-        <p class="notice" role="note">Changing to another branch can fail if the checkout is dirty or in use.</p>
-      }
-    }
+  <div class="loading" role="status">Loading workspace options…</div>
+  <mat-progress-bar mode="indeterminate" aria-label="Loading workspace options" />
+  } @else { @if (errorMessage()) {
+  <div class="error-box" role="alert">{{ errorMessage() }}</div>
   }
+  <mat-form-field appearance="outline">
+    <mat-label>Agent</mat-label>
+    <mat-select [value]="selectedAgent()" (selectionChange)="selectedAgent.set($event.value)">
+      @for (agent of state.agents(); track agent.id) {
+      <mat-option [value]="agent.id" [disabled]="agent.availability !== 'available'">
+        {{ agent.display_name }} @if (agent.availability !== 'available') { (unavailable) }
+      </mat-option>
+      }
+    </mat-select>
+  </mat-form-field>
+  @if (options()?.is_git) {
+  <mat-form-field appearance="outline">
+    <mat-label>Workspace mode</mat-label>
+    <mat-select [value]="selectedMode()" (selectionChange)="selectedMode.set($event.value)">
+      <mat-option value="managed_worktree">Isolated worktree</mat-option>
+      <mat-option value="project_checkout">Project checkout</mat-option>
+    </mat-select>
+    <mat-hint
+      >{{ selectedMode() === 'managed_worktree' ? 'Gets its own Hub-managed branch and worktree.' :
+      'Works directly in the real checkout, shared with other direct chats.' }}</mat-hint
+    >
+  </mat-form-field>
+  <mat-form-field appearance="outline">
+    <mat-label>Branch</mat-label>
+    <mat-select [value]="selectedBranch()" (selectionChange)="selectedBranch.set($event.value)">
+      @for (branch of options()?.branches ?? []; track branch.name) {
+      <mat-option [value]="branch.name">{{ branch.name }}</mat-option> }
+    </mat-select>
+  </mat-form-field>
+  <div class="sync-row">
+    <button
+      mat-stroked-button
+      type="button"
+      (click)="updateFromRemote()"
+      [disabled]="syncing() || creating()"
+    >
+      @if (syncing()) {
+      <ng-container>
+        <mat-spinner diameter="18" />
+        Updating…
+      </ng-container>
+      } @else {
+      <ng-container>
+        <mat-icon>sync</mat-icon>
+        Update from remote
+      </ng-container>
+      }
+    </button>
+    @if (syncMessage()) { <span class="sync-status" role="status">{{ syncMessage() }}</span> }
+  </div>
+  @if (options()?.dirty && selectedMode() === 'managed_worktree') {
+  <p class="notice" role="note">
+    This checkout has uncommitted changes. They are not included; the selected committed branch is
+    the source.
+  </p>
+  } @if (selectedMode() === 'project_checkout') {
+  <p class="notice" role="note">
+    Changing to another branch can fail if the checkout is dirty or in use.
+  </p>
+  } } }
 </mat-dialog-content>
 <mat-dialog-actions align="end">
-  <button mat-button type="button" (click)="dialogRef.close()" [disabled]="creating()">Cancel</button>
-  <button mat-flat-button type="button" (click)="create()" [disabled]="loading() || creating() || syncing() || !selectedAgent() || (options()?.is_git && !selectedBranch())">
+  <button mat-button type="button" (click)="dialogRef.close()" [disabled]="creating()">
+    Cancel
+  </button>
+  <button
+    mat-flat-button
+    type="button"
+    (click)="create()"
+    [disabled]="loading() || creating() || syncing() || !selectedAgent() || (options()?.is_git && !selectedBranch())"
+  >
     @if (creating()) { Creating… } @else { Create chat }
   </button>
 </mat-dialog-actions>

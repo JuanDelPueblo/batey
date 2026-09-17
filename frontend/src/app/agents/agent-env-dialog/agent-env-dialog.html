@@ -1,6 +1,8 @@
 <h2 mat-dialog-title>Environment for {{ data.agent.display_name }}</h2>
 <mat-dialog-content>
-  @if (errorMessage()) { <div class="error" role="alert">{{ errorMessage() }}</div> }
+  @if (errorMessage()) {
+  <div class="error" role="alert">{{ errorMessage() }}</div>
+  }
 
   <p class="warning" role="note">
     Environment credentials are supplied directly to that ACP process. They stay private to this
@@ -14,50 +16,57 @@
 
   <div class="env-editor">
     @for (row of rows(); track $index; let index = $index) {
-      <div class="env-row">
-        <input
-          class="env-name"
-          [value]="row.name"
-          [disabled]="row.existing"
-          [attr.aria-label]="'Variable name ' + (index + 1)"
-          placeholder="NAME"
-          (input)="setRow(index, 'name', $any($event.target).value)"
-        />
-        @if (row.existing) {
-          <mat-select
-            class="env-action"
-            [value]="row.action"
-            [attr.aria-label]="'Variable action ' + (index + 1)"
-            (selectionChange)="setRow(index, 'action', $event.value)"
-          >
-            <mat-option value="keep">Keep</mat-option>
-            <mat-option value="replace">Replace</mat-option>
-            <mat-option value="remove">Remove</mat-option>
-          </mat-select>
-        }
-        <input
-          class="env-value"
-          type="password"
-          [disabled]="row.existing && row.action !== 'replace'"
-          [value]="row.value"
-          [attr.aria-label]="'Variable value ' + (index + 1)"
-          placeholder="Value"
-          autocomplete="off"
-          spellcheck="false"
-          (input)="setRow(index, 'value', $any($event.target).value)"
-        />
-        <button mat-icon-button type="button" [attr.aria-label]="'Remove variable ' + (index + 1)" (click)="removeRow(index)">
-          <mat-icon>delete</mat-icon>
-        </button>
-      </div>
+    <div class="env-row">
+      <input
+        class="env-name"
+        [value]="row.name"
+        [disabled]="row.existing"
+        [attr.aria-label]="'Variable name ' + (index + 1)"
+        placeholder="NAME"
+        (input)="setRow(index, 'name', $any($event.target).value)"
+      />
+      @if (row.existing) {
+      <mat-select
+        class="env-action"
+        [value]="row.action"
+        [attr.aria-label]="'Variable action ' + (index + 1)"
+        (selectionChange)="setRow(index, 'action', $event.value)"
+      >
+        <mat-option value="keep">Keep</mat-option>
+        <mat-option value="replace">Replace</mat-option>
+        <mat-option value="remove">Remove</mat-option>
+      </mat-select>
+      }
+      <input
+        class="env-value"
+        type="password"
+        [disabled]="row.existing && row.action !== 'replace'"
+        [value]="row.value"
+        [attr.aria-label]="'Variable value ' + (index + 1)"
+        placeholder="Value"
+        autocomplete="off"
+        spellcheck="false"
+        (input)="setRow(index, 'value', $any($event.target).value)"
+      />
+      <button
+        mat-icon-button
+        type="button"
+        [attr.aria-label]="'Remove variable ' + (index + 1)"
+        (click)="removeRow(index)"
+      >
+        <mat-icon>delete</mat-icon>
+      </button>
+    </div>
     } @empty {
-      <p class="empty">No private variables are configured for this agent.</p>
+    <p class="empty">No private variables are configured for this agent.</p>
     }
     <button mat-button type="button" (click)="addRow()">Add variable</button>
   </div>
 </mat-dialog-content>
 <mat-dialog-actions align="end">
-  <button mat-button type="button" (click)="dialogRef.close(false)" [disabled]="saving()">Cancel</button>
+  <button mat-button type="button" (click)="dialogRef.close(false)" [disabled]="saving()">
+    Cancel
+  </button>
   <button mat-flat-button type="button" (click)="save()" [disabled]="saving()">
     @if (saving()) { Saving… } @else { Save }
   </button>

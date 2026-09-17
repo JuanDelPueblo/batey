@@ -1,8 +1,30 @@
-.registry-page { display: flex; flex-direction: column; gap: 24px; padding: 24px; max-width: 1100px; margin: 0 auto; }
-.page-head { display: flex; align-items: flex-start; gap: 8px; }
-.page-head a { margin-top: 2px; }
-.head-text h1 { margin: 0 0 4px; font: var(--mat-sys-headline-small); }
-.head-text p { margin: 0; color: var(--mat-sys-on-surface-variant); }
+.registry-page {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 24px;
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.page-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.page-head a {
+  margin-top: 2px;
+}
+.head-text h1 {
+  margin: 0 0 4px;
+  font: var(--mat-sys-headline-small);
+}
+.head-text p {
+  margin: 0;
+  color: var(--mat-sys-on-surface-variant);
+}
 @media (max-width: 599px) {
-  .registry-page { padding: 16px; gap: 16px; }
+  .registry-page {
+    padding: 16px;
+    gap: 16px;
+  }
 }

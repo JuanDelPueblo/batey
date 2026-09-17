@@ -1,20 +1,33 @@
 <h2 mat-dialog-title>New project</h2>
 <mat-dialog-content>
-  @if (errorMessage()) { <div class="error-box" role="alert">{{ errorMessage() }}</div> }
+  @if (errorMessage()) {
+  <div class="error-box" role="alert">{{ errorMessage() }}</div>
+  }
   <mat-tab-group [selectedIndex]="modeIndex()" (selectedIndexChange)="modeIndex.set($event)">
     <mat-tab label="Existing folder">
       <div class="tab-content">
         <p class="help">Choose a directory already available on the server.</p>
-        <hub-folder-picker (folderBrowsed)="folderBrowsed($event)" (folderSelected)="folderSelected($event)" />
+        <hub-folder-picker
+          (folderBrowsed)="folderBrowsed($event)"
+          (folderSelected)="folderSelected($event)"
+        />
         @if (browsedPath() && browsedPath() !== selectedPath()) {
-          <div class="path-note">Browsing: <code>{{ browsedPath() }}</code><br />Select the current folder to use it.</div>
-        }
-        @if (selectedPath()) {
-          <div class="selected-path"><strong>Selected directory</strong><code>{{ selectedPath() }}</code></div>
-          <mat-form-field appearance="outline">
-            <mat-label>Project display name</mat-label>
-            <input matInput [formField]="projectForm.projectName" (input)="editProjectName()" autocomplete="off" />
-          </mat-form-field>
+        <div class="path-note">
+          Browsing: <code>{{ browsedPath() }}</code><br />Select the current folder to use it.
+        </div>
+        } @if (selectedPath()) {
+        <div class="selected-path">
+          <strong>Selected directory</strong><code>{{ selectedPath() }}</code>
+        </div>
+        <mat-form-field appearance="outline">
+          <mat-label>Project display name</mat-label>
+          <input
+            matInput
+            [formField]="projectForm.projectName"
+            (input)="editProjectName()"
+            autocomplete="off"
+          />
+        </mat-form-field>
         }
       </div>
     </mat-tab>
@@ -22,29 +35,59 @@
       <div class="tab-content">
         <mat-form-field appearance="outline">
           <mat-label>Git repository URL (HTTPS or SSH)</mat-label>
-          <input matInput [formField]="projectForm.repoUrl" placeholder="https://github.com/org/repo.git" autocomplete="off" />
+          <input
+            matInput
+            [formField]="projectForm.repoUrl"
+            placeholder="https://github.com/org/repo.git"
+            autocomplete="off"
+          />
           <mat-hint>Plain HTTP URLs are not accepted by the server.</mat-hint>
         </mat-form-field>
         <p class="field-label">Destination parent directory</p>
-        <hub-folder-picker (folderBrowsed)="cloneBrowsedPath.set($event.path)" (folderSelected)="cloneParentPath.set($event.path)" />
+        <hub-folder-picker
+          (folderBrowsed)="cloneBrowsedPath.set($event.path)"
+          (folderSelected)="cloneParentPath.set($event.path)"
+        />
         @if (cloneBrowsedPath() && cloneBrowsedPath() !== cloneParentPath()) {
-          <div class="path-note">Browsing: <code>{{ cloneBrowsedPath() }}</code><br />Select the current folder to use it.</div>
+        <div class="path-note">
+          Browsing: <code>{{ cloneBrowsedPath() }}</code><br />Select the current folder to use it.
+        </div>
+        } @if (cloneParentPath()) {
+        <div class="selected-path">
+          <strong>Parent path</strong><code>{{ cloneParentPath() }}</code>
+        </div>
         }
-        @if (cloneParentPath()) { <div class="selected-path"><strong>Parent path</strong><code>{{ cloneParentPath() }}</code></div> }
         <mat-form-field appearance="outline">
           <mat-label>Project / folder name (optional)</mat-label>
           <input matInput [formField]="projectForm.cloneProjectName" autocomplete="off" />
         </mat-form-field>
-        @if (cloning()) { <mat-progress-bar mode="indeterminate" aria-label="Cloning repository" /> }
+        @if (cloning()) {
+        <mat-progress-bar mode="indeterminate" aria-label="Cloning repository" /> }
       </div>
     </mat-tab>
   </mat-tab-group>
 </mat-dialog-content>
 <mat-dialog-actions align="end">
-  <button mat-button type="button" (click)="dialogRef.close()" [disabled]="cloning()">Cancel</button>
+  <button mat-button type="button" (click)="dialogRef.close()" [disabled]="cloning()">
+    Cancel
+  </button>
   @if (modeIndex() === 0) {
-    <button mat-flat-button type="button" (click)="createFromFolder()" [disabled]="!selectedPath() || !projectName().trim()">Create project</button>
+  <button
+    mat-flat-button
+    type="button"
+    (click)="createFromFolder()"
+    [disabled]="!selectedPath() || !projectName().trim()"
+  >
+    Create project
+  </button>
   } @else {
-    <button mat-flat-button type="button" (click)="cloneRepository()" [disabled]="!repoUrl().trim() || !cloneParentPath() || cloning()">Clone &amp; create</button>
+  <button
+    mat-flat-button
+    type="button"
+    (click)="cloneRepository()"
+    [disabled]="!repoUrl().trim() || !cloneParentPath() || cloning()"
+  >
+    Clone &amp; create
+  </button>
   }
 </mat-dialog-actions>

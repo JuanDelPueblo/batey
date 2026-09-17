@@ -244,7 +244,10 @@ describe('ToolCallComponent', () => {
       title: 'Read src/app.ts',
       kind: 'read',
       status: 'completed',
-      locations: [{ path: 'src/app.ts', line: 42 }],
+      locations: [
+        { path: 'src/app.ts', line: 42 },
+        { path: 'src/app.ts', line: 99 },
+      ],
       content: [{ type: 'text', text: 'Rich explanation' }],
     };
 
@@ -255,8 +258,10 @@ describe('ToolCallComponent', () => {
     headerBtn.click();
     fixture.detectChanges();
 
-    const locationEl = fixture.nativeElement.querySelector('.location');
-    expect(locationEl?.textContent).toContain('src/app.ts:42');
+    const locationEls = fixture.nativeElement.querySelectorAll('.location');
+    expect(locationEls.length).toBe(2);
+    expect(locationEls[0]?.textContent).toContain('src/app.ts:42');
+    expect(locationEls[1]?.textContent).toContain('src/app.ts:99');
 
     const richContent = fixture.nativeElement.querySelector('hub-rich-content');
     expect(richContent).not.toBeNull();

@@ -182,6 +182,10 @@
 
   .spin-icon {
     animation: hub-spin 1.2s linear infinite;
+
+    @media (prefers-reduced-motion: reduce) {
+      animation: none;
+    }
   }
 }
 

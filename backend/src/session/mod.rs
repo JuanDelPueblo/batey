@@ -256,8 +256,18 @@ impl AcpSession {
             anyhow::bail!("Cannot start agent in state {}", ps);
         }
 
-        self.set_states(ProcessState::Starting, TurnState::Idle)
-            .await?;
+        if let Err(error) = self
+            .set_states(ProcessState::Starting, TurnState::Idle)
+            .await
+        {
+            tracing::error!(
+                agent_id = %self.key.agent,
+                chat_id = %self.id,
+                %error,
+                "failed to persist session starting state"
+            );
+            return Err(error);
+        }
 
         // Additional roots are project identities, never browser paths. Revalidate
         // every one before process start; they intentionally never feed direnv.
@@ -352,7 +362,21 @@ impl AcpSession {
         {
             Ok(c) => c,
             Err(e) => {
-                self.set_states(ProcessState::Dead, TurnState::Idle).await?;
+                tracing::warn!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    error_category = %crate::acp::spawn_failure_category(&e),
+                    "ACP session process is unavailable"
+                );
+                if let Err(state_error) = self.set_states(ProcessState::Dead, TurnState::Idle).await
+                {
+                    tracing::error!(
+                        agent_id = %self.key.agent,
+                        chat_id = %self.id,
+                        %state_error,
+                        "failed to persist dead session state after spawn failure"
+                    );
+                }
                 return Err(e);
             }
         };
@@ -362,7 +386,7 @@ impl AcpSession {
         // tree sweep. Cleared on every failure path below.
         *self.child_root_pid.write().await = client.root_pid();
 
-        if let Err(e) = client.initialize(&self.key.cwd).await.map_err(|error| {
+        let initialize = client.initialize(&self.key.cwd).await.map_err(|error| {
             if error.is::<RequestTimedOut>() {
                 anyhow::anyhow!("ACP initialize timed out")
             } else {
@@ -371,12 +395,26 @@ impl AcpSession {
                 // identity so the Hub layer can say so.
                 crate::acp::map_auth_required(&self.key.agent, error)
             }
-        }) {
+        });
+        if let Err(e) = initialize {
+            tracing::warn!(
+                agent_id = %self.key.agent,
+                chat_id = %self.id,
+                pid = ?client.root_pid(),
+                error_category = %crate::acp::failure_category(&e),
+                "ACP initialization failed"
+            );
             client.shutdown().await;
             *self.child_root_pid.write().await = None;
             self.set_states(ProcessState::Dead, TurnState::Idle).await?;
             return Err(e);
         }
+        tracing::info!(
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
+            pid = ?client.root_pid(),
+            "ACP initialization succeeded"
+        );
 
         if !additional_roots.is_empty()
             && !crate::acp::supports_additional_directories(&*client.capabilities.read().await)
@@ -428,6 +466,7 @@ impl AcpSession {
             .await
             .as_ref()
             .map(|s| s.to_string());
+        let resumed = saved.is_some();
         let new_session = match client
             .open_session(
                 &self.key.cwd,
@@ -445,12 +484,26 @@ impl AcpSession {
             }) {
             Ok(s) => s,
             Err(e) => {
+                tracing::warn!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    resumed,
+                    error_category = %crate::acp::failure_category(&e),
+                    "ACP session create/resume failed"
+                );
                 client.shutdown().await;
                 *self.child_root_pid.write().await = None;
                 self.set_states(ProcessState::Dead, TurnState::Idle).await?;
                 return Err(e);
             }
         };
+        tracing::info!(
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
+            session_id = %new_session,
+            resumed,
+            "ACP session connected"
+        );
 
         *self.acp_session_id.write().await = Some(new_session.clone().into());
         if let Some(store) = &self.store {
@@ -458,6 +511,13 @@ impl AcpSession {
             if let Err(e) =
                 store.update_chat(&self.id, |c| c.acp_session_id = Some(new_session.clone()))
             {
+                tracing::error!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    session_id = %new_session,
+                    %e,
+                    "failed to persist ACP session identity"
+                );
                 client.shutdown().await;
                 self.set_states(ProcessState::Dead, TurnState::Idle).await?;
                 return Err(e.into());
@@ -538,6 +598,13 @@ impl AcpSession {
         *self.client.write().await = Some(Arc::new(client));
         self.set_states(ProcessState::Running, TurnState::Idle)
             .await?;
+
+        tracing::info!(
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
+            session_id = %new_session,
+            "session reconnect complete"
+        );
 
         Ok(())
     }
@@ -711,7 +778,15 @@ impl AcpSession {
             } else {
                 "error"
             };
-            let _ = self.finalize_failed_turn(error, stop_reason);
+            if let Err(persistence_error) = self.finalize_failed_turn(error, stop_reason) {
+                tracing::error!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    task_id = %user_message_id,
+                    %persistence_error,
+                    "failed to persist failed prompt state"
+                );
+            }
         }
         result
     }
@@ -737,6 +812,14 @@ impl AcpSession {
                 anyhow::bail!("No ACP session");
             }
         };
+
+        tracing::info!(
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
+            session_id = %sid,
+            task_id = %user_message_id,
+            "prompt started"
+        );
 
         let prompt_future = client.prompt(&sid, content, user_message_id);
         tokio::pin!(prompt_future);
@@ -779,6 +862,7 @@ impl AcpSession {
 
         match attempt {
             PromptAttempt::Completed(Ok(resp)) => {
+                let stop_reason = stop_reason_to_string(resp.stop_reason);
                 self.set_states(ProcessState::Running, TurnState::Idle)
                     .await?;
                 self.touch().await;
@@ -787,9 +871,25 @@ impl AcpSession {
                     return Err(error);
                 }
                 self.try_sync_acp_title(&client).await?;
+                tracing::info!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    session_id = %sid,
+                    task_id = %user_message_id,
+                    stop_reason = %stop_reason,
+                    "prompt completed"
+                );
                 Ok(self.collect_message_text(start_seq).await)
             }
             PromptAttempt::Completed(Err(err)) => {
+                tracing::warn!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    session_id = %sid,
+                    task_id = %user_message_id,
+                    error_category = %crate::acp::failure_category(&err),
+                    "prompt failed"
+                );
                 if self.client_disconnected().await {
                     self.mark_dead().await?;
                 } else {
@@ -802,6 +902,13 @@ impl AcpSession {
                 Err(crate::acp::map_auth_required(&self.key.agent, err))
             }
             PromptAttempt::TimedOut => {
+                tracing::warn!(
+                    agent_id = %self.key.agent,
+                    chat_id = %self.id,
+                    session_id = %sid,
+                    task_id = %user_message_id,
+                    "prompt timed out"
+                );
                 self.mark_dead().await?;
                 Err(PromptTimeout.into())
             }
@@ -857,8 +964,8 @@ impl AcpSession {
     pub async fn shutdown(&self) {
         let root_pid = *self.child_root_pid.read().await;
         tracing::info!(
-            agent = %self.key.agent,
-            session = %self.id,
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
             ?root_pid,
             "session shutdown begin"
         );
@@ -874,11 +981,16 @@ impl AcpSession {
             .set_states(ProcessState::Stopped, TurnState::Idle)
             .await
         {
-            tracing::error!(%error, "Failed to persist stopped session state");
+            tracing::error!(
+                agent_id = %self.key.agent,
+                chat_id = %self.id,
+                %error,
+                "failed to persist stopped session state"
+            );
         }
         tracing::info!(
-            agent = %self.key.agent,
-            session = %self.id,
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
             "session shutdown done"
         );
     }
@@ -895,6 +1007,11 @@ impl AcpSession {
     }
 
     pub async fn resume(&self) -> anyhow::Result<()> {
+        tracing::info!(
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
+            "session reconnect requested"
+        );
         let _guard = self
             .turn_guard
             .try_lock()
@@ -1014,7 +1131,23 @@ impl AcpSession {
             .await
             .clone()
             .ok_or_else(|| anyhow::anyhow!("No ACP session"))?;
-        client.cancel(&sid).await
+        tracing::info!(
+            agent_id = %self.key.agent,
+            chat_id = %self.id,
+            session_id = %sid,
+            "prompt cancellation requested"
+        );
+        let result = client.cancel(&sid).await;
+        if let Err(error) = &result {
+            tracing::warn!(
+                agent_id = %self.key.agent,
+                chat_id = %self.id,
+                session_id = %sid,
+                error_category = %crate::acp::failure_category(error),
+                "prompt cancellation failed"
+            );
+        }
+        result
     }
 
     pub async fn config_options(&self) -> serde_json::Value {

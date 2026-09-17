@@ -59,6 +59,13 @@ impl HubService {
             .map_err(ServiceError::Conflict)?;
 
         let initial_view = tracker.view();
+        tracing::info!(
+            operation_id = %initial_view.id,
+            agent_id = %initial_view.agent_id,
+            registry_id = %initial_view.registry_id,
+            operation = "install",
+            "ACP Registry install started"
+        );
         let hub = self.clone();
         tokio::spawn(async move {
             match hub
@@ -70,9 +77,28 @@ impl HubService {
                     hub.agent_auth.invalidate_agent(&summary.id);
                     hub.notify_metadata_changed();
                     tracker.succeed(None, None);
+                    let view = tracker.view();
+                    tracing::info!(
+                        operation_id = %view.id,
+                        agent_id = %view.agent_id,
+                        registry_id = %view.registry_id,
+                        operation = "install",
+                        stage = ?view.stage,
+                        "ACP Registry install completed"
+                    );
                 }
                 Err(error) => {
                     tracker.fail(error.to_string());
+                    let view = tracker.view();
+                    tracing::error!(
+                        operation_id = %view.id,
+                        agent_id = %view.agent_id,
+                        registry_id = %view.registry_id,
+                        operation = "install",
+                        stage = ?view.stage,
+                        %error,
+                        "ACP Registry install failed"
+                    );
                 }
             }
         });
@@ -96,6 +122,13 @@ impl HubService {
             .map_err(ServiceError::Conflict)?;
 
         let initial_view = tracker.view();
+        tracing::info!(
+            operation_id = %initial_view.id,
+            agent_id = %initial_view.agent_id,
+            registry_id = %initial_view.registry_id,
+            operation = "update",
+            "ACP Registry update started"
+        );
         let hub = self.clone();
         let agent_id = id.to_string();
         tokio::spawn(async move {
@@ -128,9 +161,29 @@ impl HubService {
                         Some(outcome.updated),
                         outcome.updated.then_some(outcome.to_version),
                     );
+                    let view = tracker.view();
+                    tracing::info!(
+                        operation_id = %view.id,
+                        agent_id = %view.agent_id,
+                        registry_id = %view.registry_id,
+                        operation = "update",
+                        stage = ?view.stage,
+                        updated = ?view.updated,
+                        "ACP Registry update completed"
+                    );
                 }
                 Err(error) => {
                     tracker.fail(error.to_string());
+                    let view = tracker.view();
+                    tracing::error!(
+                        operation_id = %view.id,
+                        agent_id = %view.agent_id,
+                        registry_id = %view.registry_id,
+                        operation = "update",
+                        stage = ?view.stage,
+                        %error,
+                        "ACP Registry update failed"
+                    );
                 }
             }
         });

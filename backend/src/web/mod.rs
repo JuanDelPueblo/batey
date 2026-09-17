@@ -63,8 +63,14 @@ impl WebServer {
 
         let ui_addr = ui_addr_for_bind(host, server_port);
         let ui_url = format!("http://{}", ui_addr);
-        tracing::info!("Web server bound to {}", listener.local_addr()?);
-        tracing::info!("Web server UI available at {}", ui_url);
+        let bind_address = listener.local_addr()?;
+        tracing::info!(bind_address = %bind_address, "web server bound");
+        tracing::info!(ui_url = %ui_url, "web server UI available");
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            bind_address = %bind_address,
+            "Batey startup complete"
+        );
 
         if options.open_browser {
             if let Err(e) = open_browser(&ui_url) {
@@ -307,7 +313,7 @@ async fn bind_listener(
                     ));
                 }
                 let next_port = port + 1;
-                tracing::warn!("Port {} is in use, trying {}", port, next_port);
+                tracing::warn!(port, next_port, "port is in use; trying next port");
                 port = next_port;
                 retries_left -= 1;
             }

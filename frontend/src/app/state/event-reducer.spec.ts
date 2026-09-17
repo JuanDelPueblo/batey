@@ -42,6 +42,22 @@ describe('EventReducer', () => {
     expect((reducer.items()[0] as { entries: Array<{ responded?: boolean; decision?: string }> }).entries[0]).toMatchObject({ responded: true, decision: 'allow-once' });
   });
 
+  it('suppresses only an exact duplicate representation of the same permission request', () => {
+    const reducer = new EventReducer();
+    const review = {
+      id: 'permission-1', method: 'execute_command', title: 'Review request',
+      description: 'Status: Pending\nAction: npm test\nRisk: Low\nAuthorization: Ask\nRationale: Verify.',
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+    };
+    reducer.ingest(event(1, 'permission_request', review));
+    reducer.ingest(event(2, 'permission_request', review));
+    reducer.ingest(event(3, 'permission_request', { ...review, id: 'permission-2' }));
+
+    const entries = (reducer.items()[0] as { entries: Array<{ requestId: string }> }).entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.requestId)).toEqual(['permission-1', 'permission-2']);
+  });
+
   it('resolves locally before the streamed confirmation without reopening a turn', () => {
     const reducer = new EventReducer();
     reducer.ingest(event(1, 'permission_request', {

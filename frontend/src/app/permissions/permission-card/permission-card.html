@@ -9,7 +9,18 @@
     </div>
   </div>
   <mat-card-content>
-    @if (isPlanApproval()) {
+    @if (review(); as structuredReview) {
+      @if (isResolved()) {
+        <mat-expansion-panel class="review-details">
+          <mat-expansion-panel-header>
+            <mat-panel-title>Review details</mat-panel-title>
+          </mat-expansion-panel-header>
+          <ng-container [ngTemplateOutlet]="reviewContent" [ngTemplateOutletContext]="{ $implicit: structuredReview }" />
+        </mat-expansion-panel>
+      } @else {
+        <ng-container [ngTemplateOutlet]="reviewContent" [ngTemplateOutletContext]="{ $implicit: structuredReview }" />
+      }
+    } @else if (isPlanApproval()) {
       <div class="plan-content">
         <hub-markdown [content]="permission().description" />
       </div>
@@ -53,3 +64,27 @@
     </mat-card-actions>
   }
 </mat-card>
+
+<ng-template #reviewContent let-review>
+  <section class="review" aria-label="Review details">
+    <dl class="review-facts">
+      <div><dt>Status</dt><dd>{{ review.status }}</dd></div>
+      <div><dt>Risk</dt><dd>{{ review.risk }}</dd></div>
+      <div><dt>Authorization</dt><dd>{{ review.authorization }}</dd></div>
+      <div><dt>Rationale</dt><dd>{{ review.rationale }}</dd></div>
+    </dl>
+    <mat-expansion-panel class="review-action">
+      <mat-expansion-panel-header>
+        <mat-panel-title>Requested action</mat-panel-title>
+        <mat-panel-description>{{ review.action }}</mat-panel-description>
+      </mat-expansion-panel-header>
+      <ng-template matExpansionPanelContent><pre>{{ review.action }}</pre></ng-template>
+    </mat-expansion-panel>
+    <mat-expansion-panel class="raw-review">
+      <mat-expansion-panel-header>
+        <mat-panel-title>Raw request</mat-panel-title>
+      </mat-expansion-panel-header>
+      <ng-template matExpansionPanelContent><pre>{{ permission().description }}</pre></ng-template>
+    </mat-expansion-panel>
+  </section>
+</ng-template>

@@ -1,6 +1,8 @@
 import { Component, computed, inject, input, signal } from '@angular/core';
+import { NgTemplateOutlet } from '@angular/common';
 import { MatButtonModule } from '@angular/material/button';
 import { MatCardModule } from '@angular/material/card';
+import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import { MatProgressSpinnerModule } from '@angular/material/progress-spinner';
 import type { TurnEntryPermission } from '../../core/api/types';
@@ -9,7 +11,7 @@ import { AppStateService } from '../../state/app-state.service';
 
 @Component({
   selector: 'hub-permission-card',
-  imports: [MatButtonModule, MatCardModule, MatIconModule, MatProgressSpinnerModule, MarkdownComponent],
+  imports: [NgTemplateOutlet, MatButtonModule, MatCardModule, MatExpansionModule, MatIconModule, MatProgressSpinnerModule, MarkdownComponent],
   templateUrl: './permission-card.html',
   styleUrl: './permission-card.scss',
 })
@@ -38,6 +40,7 @@ export class PermissionCardComponent {
   readonly displayDecision = computed(
     () => this.permission().decision || this.resolvedDecision() || 'Handled',
   );
+  readonly review = computed(() => parseStructuredReview(this.permission().description));
 
   optionScope(option: { kind: string }): string | null {
     switch (option.kind) {
@@ -72,4 +75,27 @@ export class PermissionCardComponent {
       this.selectedOptionId.set(null);
     }
   }
+}
+
+type ReviewField = 'status' | 'action' | 'risk' | 'authorization' | 'rationale';
+type StructuredReview = Record<ReviewField, string>;
+
+const reviewFields: readonly ReviewField[] = ['status', 'action', 'risk', 'authorization', 'rationale'];
+const reviewFieldPattern = /^(?:#{1,6}\s+|[-*]\s+)?(?:\*\*)?(Status|Action|Risk|Authorization|Rationale)(?:\*\*)?\s*:\s*(.*)$/i;
+
+/** Recognize only the complete, label-based review format; all other ACP text stays raw. */
+function parseStructuredReview(description: string): StructuredReview | null {
+  const values = new Map<ReviewField, string>();
+  let current: ReviewField | null = null;
+  for (const line of description.replace(/\r\n?/g, '\n').split('\n')) {
+    const match = line.match(reviewFieldPattern);
+    if (match) {
+      current = match[1].toLowerCase() as ReviewField;
+      values.set(current, match[2].trim());
+    } else if (current) {
+      values.set(current, `${values.get(current) ?? ''}\n${line}`.trimEnd());
+    }
+  }
+  if (!reviewFields.every((field) => values.has(field))) return null;
+  return Object.fromEntries(reviewFields.map((field) => [field, values.get(field) ?? ''])) as StructuredReview;
 }

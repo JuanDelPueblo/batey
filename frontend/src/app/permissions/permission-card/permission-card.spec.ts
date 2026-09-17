@@ -108,6 +108,62 @@ describe('PermissionCardComponent', () => {
     expect(responded).toEqual([{ chatId: 'chat-1', requestId: 'perm-2', optionId: 'allow' }]);
   });
 
+  it('renders a complete review as structured details without repeating its raw content', () => {
+    fixture.componentRef.setInput('permission', {
+      id: 5,
+      type: 'permission_request',
+      requestId: 'review-1',
+      method: 'execute_command',
+      title: 'Review request',
+      description: `Guardian Review\nStatus: Pending\nAction: nix run .#verify -- --a-command-that-is-deliberately-very-long\nRisk: Medium\nAuthorization: User approval required\nRationale: Verify the requested change.`,
+      options: [{ optionId: 'allow', name: 'Allow', kind: 'allow_once' }],
+      responded: false,
+    });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.review-facts')?.textContent).toContain('Medium');
+    expect(fixture.nativeElement.querySelector('.review-facts')?.textContent).toContain('User approval required');
+    expect(fixture.nativeElement.querySelector('.review-action')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.raw-review')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.raw-review pre')).toBeNull();
+    expect(fixture.nativeElement.querySelectorAll('button')).toHaveLength(1);
+  });
+
+  it('keeps non-review permission text as a faithful raw fallback', () => {
+    fixture.componentRef.setInput('permission', {
+      id: 6,
+      type: 'permission_request',
+      requestId: 'generic-1',
+      method: 'edit',
+      description: 'Apply this ordinary ACP edit request exactly as supplied.',
+      options: [],
+      responded: false,
+    });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.review')).toBeNull();
+    expect(fixture.nativeElement.querySelector('pre')?.textContent).toContain('Apply this ordinary ACP edit request exactly as supplied.');
+  });
+
+  it('collapses resolved structured reviews into a concise historical record', () => {
+    fixture.componentRef.setInput('permission', {
+      id: 7,
+      type: 'permission_request',
+      requestId: 'review-2',
+      method: 'execute_command',
+      description: 'Status: Approved\nAction: cargo test\nRisk: Low\nAuthorization: Allowed once\nRationale: Run focused tests.',
+      options: [],
+      responded: true,
+      decision: 'Allowed once',
+    });
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('.decision')?.textContent).toContain('Allowed once');
+    expect(fixture.nativeElement.querySelector('.review-details')).not.toBeNull();
+    expect(fixture.nativeElement.querySelector('.review-details pre')).toBeNull();
+    expect(fixture.nativeElement.querySelectorAll('button')).toHaveLength(0);
+  });
+
   it('locks every choice until the response succeeds', async () => {
     let resolveResponse!: () => void;
     respondPermission.mockImplementationOnce(() => new Promise<void>((resolve) => {

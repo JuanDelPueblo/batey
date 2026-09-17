@@ -1,5 +1,5 @@
 :host { display: block; }
-.tool { border: 1px solid var(--mat-sys-outline-variant); box-shadow: none; }
+.tool { border: 1px solid var(--mat-sys-outline-variant); box-shadow: none; max-width: 100%; box-sizing: border-box; }
 mat-panel-title, mat-panel-description { display: flex; align-items: center; gap: 8px; }
 mat-panel-title { flex: 1 1 auto; min-width: 0; }
 mat-panel-title mat-icon { flex: 0 0 24px; color: var(--mat-sys-primary); }
@@ -21,5 +21,171 @@ mat-panel-title mat-icon { flex: 0 0 24px; color: var(--mat-sys-primary); }
   border-left: 3px solid var(--mat-sys-secondary);
 }
 mat-panel-description { flex: 0 0 auto; justify-content: flex-end; margin-left: 16px; font: var(--mat-sys-label-medium); }
-pre { max-height: 260px; overflow: auto; margin: 0; padding: 14px; border-radius: var(--mat-sys-corner-small); background: var(--mat-sys-surface-container-lowest); white-space: pre-wrap; overflow-wrap: anywhere; font: .82rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace; }
 
+.terminal-view {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.terminal-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 14px;
+  background: var(--mat-sys-surface-container-low);
+  border: 1px solid var(--mat-sys-outline-variant);
+  border-radius: var(--mat-sys-corner-small);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.terminal-command-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.terminal-prompt {
+  flex: 0 0 auto;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-weight: 700;
+  color: var(--mat-sys-primary);
+  user-select: none;
+  line-height: 1.45;
+}
+
+.terminal-command {
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  font: .82rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  color: var(--mat-sys-on-surface);
+}
+
+.terminal-meta-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  font: var(--mat-sys-label-medium);
+}
+
+.terminal-cwd {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+  color: var(--mat-sys-on-surface-variant);
+
+  .meta-icon {
+    font-size: 16px;
+    width: 16px;
+    height: 16px;
+    flex: 0 0 16px;
+  }
+
+  .cwd-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: 0.8rem;
+  }
+}
+
+.terminal-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  font: var(--mat-sys-label-small);
+  font-weight: 500;
+  letter-spacing: 0.25px;
+
+  .status-icon {
+    font-size: 14px;
+    width: 14px;
+    height: 14px;
+  }
+
+  &.status-running {
+    color: var(--hub-status-starting);
+    background: var(--mat-sys-surface-container-highest);
+
+    .status-icon {
+      animation: spin 1.5s linear infinite;
+    }
+  }
+
+  &.status-success {
+    color: var(--hub-status-running);
+    background: var(--hub-status-running-container);
+  }
+
+  &.status-failed {
+    color: var(--hub-status-dead);
+    background: var(--hub-status-dead-container);
+  }
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-status-badge.status-running .status-icon {
+    animation: none;
+  }
+}
+
+pre {
+  max-height: 280px;
+  overflow: auto;
+  margin: 0;
+  padding: 14px;
+  border-radius: var(--mat-sys-corner-small);
+  background: var(--mat-sys-surface-container-lowest);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+  box-sizing: border-box;
+  font: .82rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.terminal-extra-details {
+  font: var(--mat-sys-label-medium);
+  color: var(--mat-sys-on-surface-variant);
+
+  summary {
+    cursor: pointer;
+    user-select: none;
+    padding: 4px 0;
+  }
+
+  .terminal-extra-json {
+    margin-top: 6px;
+    padding: 10px;
+    background: var(--mat-sys-surface-container-lowest);
+    border-radius: var(--mat-sys-corner-small);
+    font: .78rem/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+    overflow: auto;
+    max-height: 200px;
+    max-width: 100%;
+    box-sizing: border-box;
+  }
+}

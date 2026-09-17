@@ -3,6 +3,7 @@ import { MatExpansionModule } from '@angular/material/expansion';
 import { MatIconModule } from '@angular/material/icon';
 import type { RichContentBlock, TurnEntryTool } from '../../core/api/types';
 import { RichContentComponent } from '../rich-content/rich-content';
+import { parseTerminalPayload } from './terminal-payload';
 
 @Component({
   selector: 'hub-tool-call',
@@ -13,7 +14,18 @@ import { RichContentComponent } from '../rich-content/rich-content';
 export class ToolCallComponent {
   readonly tool = input.required<TurnEntryTool>();
 
+  readonly terminal = computed(() => {
+    return parseTerminalPayload(this.tool().output, {
+      toolStatus: this.tool().status,
+      toolTitle: this.tool().title,
+      toolKind: this.tool().kind,
+    });
+  });
+
   readonly icon = computed(() => {
+    if (this.terminal()) {
+      return 'terminal';
+    }
     const kind = (this.tool().kind || '').toLowerCase();
     switch (kind) {
       case 'read':
@@ -45,6 +57,24 @@ export class ToolCallComponent {
       return (nl >= 0 ? inner.slice(nl + 1) : inner).trimEnd();
     }
     return raw;
+  });
+
+  readonly hasUnrecognizedFields = computed(() => {
+    const fields = this.terminal()?.unrecognizedFields;
+    return !!fields && Object.keys(fields).length > 0;
+  });
+
+  readonly unrecognizedFieldsJson = computed(() => {
+    const fields = this.terminal()?.unrecognizedFields;
+    return fields ? JSON.stringify(fields, null, 2) : '';
+  });
+
+  readonly panelDescription = computed(() => {
+    const term = this.terminal();
+    if (term?.exitCode != null) {
+      return term.exitCode === 0 ? 'completed (exit 0)' : `failed (exit ${term.exitCode})`;
+    }
+    return this.tool().status;
   });
 
   readonly richContent = computed(() => {

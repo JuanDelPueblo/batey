@@ -212,11 +212,25 @@ impl AcpSession {
             _ => {}
         }
         let stop_reason = stop_reason_to_string(resp.stop_reason);
+        self.reconcile_observed_tasks().await?;
         self.event_log.append(
             &self.id,
             &self.key.agent,
             EventPayload::TurnComplete { stop_reason },
         )?;
+        Ok(())
+    }
+
+    /// Resolves observational Terminal Tasks left RUNNING once this chat's
+    /// turn has ended. An agent that never sends a closing tool-call update
+    /// for a finished command must not leave it shown as running forever;
+    /// see [`crate::tasks::TerminalTaskTracker::reconcile_turn_end`].
+    async fn reconcile_observed_tasks(&self) -> anyhow::Result<()> {
+        let changed = self.task_tracker.reconcile_turn_end(&self.id).await;
+        if !changed.is_empty() {
+            self.event_log
+                .append(&self.id, &self.key.agent, EventPayload::MetadataChanged {})?;
+        }
         Ok(())
     }
 
@@ -778,7 +792,7 @@ impl AcpSession {
             } else {
                 "error"
             };
-            if let Err(persistence_error) = self.finalize_failed_turn(error, stop_reason) {
+            if let Err(persistence_error) = self.finalize_failed_turn(error, stop_reason).await {
                 tracing::error!(
                     agent_id = %self.key.agent,
                     chat_id = %self.id,
@@ -915,7 +929,11 @@ impl AcpSession {
         }
     }
 
-    fn finalize_failed_turn(&self, error: &anyhow::Error, stop_reason: &str) -> anyhow::Result<()> {
+    async fn finalize_failed_turn(
+        &self,
+        error: &anyhow::Error,
+        stop_reason: &str,
+    ) -> anyhow::Result<()> {
         self.event_log.append(
             &self.id,
             &self.key.agent,
@@ -923,6 +941,7 @@ impl AcpSession {
                 message: error.to_string(),
             },
         )?;
+        self.reconcile_observed_tasks().await?;
         self.event_log.append(
             &self.id,
             &self.key.agent,

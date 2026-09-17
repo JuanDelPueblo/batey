@@ -1183,3 +1183,38 @@ async fn task_cleanup_on_chat_deletion() {
 
     sessions.shutdown_all().await;
 }
+
+#[tokio::test]
+async fn observed_terminal_task_reconciles_when_turn_ends_without_a_final_update() {
+    // Reproduces the reported bug: an agent reports a real command as
+    // running, then ends its turn without ever sending a closing tool-call
+    // update. Batey must not leave the Terminal Task shown as RUNNING once
+    // the turn (and thus the command) is known to be over.
+    let tmp = tempfile::tempdir().unwrap();
+    let (hub, sessions) = hub(tmp.path());
+    let log = sessions.event_log().clone();
+
+    let project = hub
+        .create_project("demo".into(), tmp.path().display().to_string())
+        .unwrap();
+    let chat = hub.create_chat(&project.id, "codex", None).await.unwrap();
+
+    hub.prompt_chat(&chat.chat.id, "tool-stuck-running".into())
+        .await
+        .unwrap();
+    await_turn(&log, &chat.chat.id).await;
+
+    let tasks = hub.list_chat_tasks(&chat.chat.id).await.unwrap();
+    assert_eq!(
+        tasks.len(),
+        1,
+        "expected the observed command to be tracked"
+    );
+    let task = &tasks[0];
+    assert_eq!(task.command, "cargo build");
+    assert!(!task.managed);
+    assert_eq!(task.state, batey::tasks::TaskState::Completed);
+    assert!(task.exit_code.is_none(), "no exit code was ever reported");
+
+    sessions.shutdown_all().await;
+}

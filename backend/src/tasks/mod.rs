@@ -301,15 +301,18 @@ impl ManagedTask {
         }
     }
 
-    /// Records an observational state transition. Terminal states are sticky:
-    /// a late running update never reopens a completed task. The completion
+    /// Records an observational state transition. Terminal states are fully
+    /// sticky: once a task is Completed, Failed, or Stopped, only a repeat of
+    /// that same outcome is accepted (for example a later exit code arriving
+    /// for an already-failed task); any different state, terminal or not, is
+    /// rejected. The check and the transition happen under one write-lock
+    /// critical section, so whichever terminal update reaches this method
+    /// first is authoritative even when a turn-end reconciliation pass races
+    /// a concurrent ToolCallUpdate for the same task. The completion
     /// timestamp is set once on the first terminal transition.
     pub async fn record_observed_state(&self, state: TaskState, exit_code: Option<i32>) -> bool {
         if self.managed {
             return false;
-        }
-        if let Some(code) = exit_code {
-            *self.exit_code.write().await = Some(code);
         }
         let mut state_guard = self.state.write().await;
         let current = *state_guard;
@@ -317,8 +320,11 @@ impl ManagedTask {
             current,
             TaskState::Completed | TaskState::Failed | TaskState::Stopped
         );
-        if is_terminal && state == TaskState::Running {
+        if is_terminal && state != current {
             return false;
+        }
+        if let Some(code) = exit_code {
+            *self.exit_code.write().await = Some(code);
         }
         if current == state && exit_code.is_none() {
             return false;
@@ -598,6 +604,42 @@ impl TerminalTaskTracker {
             }
         }
         count
+    }
+
+    /// Resolves observational tasks left running when their originating turn
+    /// completes. An agent that stops reporting tool-call lifecycle updates
+    /// once a command finishes must never leave it shown as RUNNING forever
+    /// (for example after the dialog is reopened once the turn is over).
+    /// Only the sticky `Completed` state is inferred here: a real failure or
+    /// cancellation must already have arrived through an explicit update and
+    /// is left untouched, and no exit code is invented. Managed (Batey-spawned)
+    /// tasks are never touched; their own process exit drives their state.
+    /// Returns the tasks that newly became terminal so the caller can emit
+    /// one metadata-changed event.
+    pub async fn reconcile_turn_end(&self, chat_id: &str) -> Vec<Arc<ManagedTask>> {
+        let tasks = {
+            let inner = self.inner.read().await;
+            inner.tasks_by_chat.get(chat_id).cloned()
+        };
+        let Some(tasks) = tasks else {
+            return Vec::new();
+        };
+        let mut changed = Vec::new();
+        for task in tasks.iter() {
+            if task.managed {
+                continue;
+            }
+            if *task.state.read().await != TaskState::Running {
+                continue;
+            }
+            if task.record_observed_state(TaskState::Completed, None).await {
+                changed.push(task.clone());
+            }
+        }
+        if !changed.is_empty() {
+            self.prune_chat_tasks(chat_id).await;
+        }
+        changed
     }
 
     pub async fn stop_chat_tasks(&self, chat_id: &str) {
@@ -1085,6 +1127,149 @@ mod tests {
             None,
         ));
         assert!(managed.stoppable());
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_turn_end_completes_stale_running_observed_tasks() {
+        // An agent whose final tool-call update for a finished command never
+        // arrives must not leave the task stuck RUNNING once its turn ends.
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-stale",
+                Some("cargo build"),
+                Some(&cwd),
+                Some("Compiling..."),
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+
+        let changed = tracker.reconcile_turn_end("c1").await;
+        assert_eq!(changed.len(), 1);
+        let details = tracker
+            .get_observed_task("c1", "tool-stale")
+            .await
+            .unwrap()
+            .details()
+            .await;
+        assert_eq!(details.state, TaskState::Completed);
+        // No exit code is invented for an unreported completion.
+        assert!(details.exit_code.is_none());
+        assert!(details.completed_at.is_some());
+
+        // A second reconciliation call is a no-op: nothing changed, and the
+        // sticky terminal state is preserved.
+        let changed_again = tracker.reconcile_turn_end("c1").await;
+        assert!(changed_again.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_reconcile_turn_end_leaves_failed_and_managed_tasks_alone() {
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        // A task that already received an explicit failure must be left as is.
+        tracker
+            .upsert_observed(
+                "c1",
+                "tool-failed",
+                Some("cargo check"),
+                Some(&cwd),
+                Some("error"),
+                Some(1),
+                TaskState::Failed,
+            )
+            .await
+            .unwrap();
+        // A Batey-managed (native) terminal task must never be touched by
+        // observational reconciliation; its own process exit drives it.
+        let managed = Arc::new(ManagedTask::new(
+            "managed-running".into(),
+            "c1".into(),
+            "sleep 30".into(),
+            cwd.clone(),
+            None,
+        ));
+        tracker.register_task(managed.clone()).await;
+
+        let changed = tracker.reconcile_turn_end("c1").await;
+        assert!(changed.is_empty());
+        assert_eq!(
+            tracker
+                .get_observed_task("c1", "tool-failed")
+                .await
+                .unwrap()
+                .details()
+                .await
+                .state,
+            TaskState::Failed
+        );
+        assert_eq!(*managed.state.read().await, TaskState::Running);
+    }
+
+    #[tokio::test]
+    async fn test_record_observed_state_terminal_transitions_are_fully_sticky() {
+        // Reconciliation reads the task's state, then separately calls
+        // record_observed_state; a concurrent ToolCallUpdate can land a real
+        // Failed transition in between. The terminal-state guard inside
+        // record_observed_state (not the caller's pre-check) must be what
+        // keeps the first terminal outcome authoritative, so it stays
+        // correct even when the two calls race.
+        let tracker = TerminalTaskTracker::new(10);
+        let cwd = PathBuf::from("/repo");
+        let (task, _) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-race",
+                Some("cargo build"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+
+        // The concurrent explicit failure lands first...
+        assert!(task.record_observed_state(TaskState::Failed, Some(1)).await);
+        // ...then a reconciliation pass (or any other Completed update)
+        // racing for the same task must not overwrite it.
+        assert!(!task.record_observed_state(TaskState::Completed, None).await);
+
+        let details = task.details().await;
+        assert_eq!(details.state, TaskState::Failed);
+        assert_eq!(details.exit_code, Some(1));
+
+        // The reverse order also holds: once Completed wins, a later Failed
+        // update must not flip it either.
+        let (other, _) = tracker
+            .upsert_observed(
+                "c1",
+                "tool-race-2",
+                Some("cargo build"),
+                Some(&cwd),
+                None,
+                None,
+                TaskState::Running,
+            )
+            .await
+            .unwrap();
+        assert!(
+            other
+                .record_observed_state(TaskState::Completed, Some(0))
+                .await
+        );
+        assert!(
+            !other
+                .record_observed_state(TaskState::Failed, Some(1))
+                .await
+        );
+        let other_details = other.details().await;
+        assert_eq!(other_details.state, TaskState::Completed);
+        assert_eq!(other_details.exit_code, Some(0));
     }
 
     #[tokio::test]

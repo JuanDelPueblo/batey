@@ -491,6 +491,16 @@ for line in sys.stdin:
                        {"type": "content", "content": {"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"}},
                    ])
             reply(id, {"stopReason": "end_turn"})
+        elif text == "tool-stuck-running":
+            # Reports a real command execution as running, then ends the
+            # turn without ever sending a closing tool-call update. Some
+            # agents never report a final status for a finished command;
+            # Batey must reconcile the observational task at turn end
+            # instead of leaving it shown as running forever.
+            update("tool_call", toolCallId="stuck-1", title="Terminal: cargo build",
+                   kind="execute", status="in_progress",
+                   rawInput={"command": "cargo build"})
+            reply(id, {"stopReason": "end_turn"})
         else:
             update("agent_message_chunk", content={"type": "text", "text": f"{current}:{count}:{model}"})
             reply(id, {"stopReason": "end_turn"})

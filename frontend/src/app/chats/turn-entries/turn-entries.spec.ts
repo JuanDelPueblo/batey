@@ -78,7 +78,7 @@ describe('TurnEntriesComponent', () => {
     expect(toolCalls[3].querySelector('.subagent-badge')?.textContent).toContain('Subagent');
   });
 
-  it('renders thought process and message chunks alongside tool calls', () => {
+  it('renders short reasoning inline alongside message chunks and tool calls', () => {
     const entries: TurnEntry[] = [
       {
         id: 1,
@@ -103,8 +103,29 @@ describe('TurnEntriesComponent', () => {
     fixture.componentRef.setInput('entries', entries);
     fixture.detectChanges();
 
-    expect(fixture.nativeElement.querySelector('.thought')).not.toBeNull();
+    const reasoning = fixture.nativeElement.querySelector('.reasoning-inline') as HTMLElement;
+    expect(reasoning).not.toBeNull();
+    expect(reasoning.getAttribute('aria-label')).toBe('Agent reasoning');
+    expect(reasoning.textContent).toContain('Examining project setup');
+    expect(fixture.nativeElement.querySelector('mat-expansion-panel')).toBeNull();
     expect(fixture.nativeElement.querySelector('hub-tool-call')).not.toBeNull();
     expect(fixture.nativeElement.querySelector('.message-text')?.textContent).toContain('Build succeeded.');
+  });
+
+  it('collapses long reasoning behind a compact disclosure without losing streamed text', () => {
+    const text = 'Inspecting the repository structure. '.repeat(12);
+    fixture.componentRef.setInput('entries', [{ id: 1, type: 'thought_chunk', text }]);
+    fixture.detectChanges();
+
+    const reasoning = fixture.nativeElement.querySelector('.reasoning-details') as HTMLDetailsElement;
+    expect(reasoning).not.toBeNull();
+    expect(reasoning.open).toBe(false);
+    expect(reasoning.querySelector('summary')?.textContent).toContain('Agent reasoning');
+    expect(reasoning.querySelector('.reasoning-preview')?.textContent).toContain('Inspecting the repository');
+
+    (reasoning.querySelector('summary') as HTMLElement).click();
+    fixture.detectChanges();
+    expect(reasoning.open).toBe(true);
+    expect(reasoning.querySelector('.reasoning-content')?.textContent).toContain(text);
   });
 });

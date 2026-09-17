@@ -11,6 +11,16 @@
 mat-card-content { padding-top: 12px; }
 pre { margin: 0; padding: 12px; overflow: auto; border-radius: var(--mat-sys-corner-small); background: color-mix(in srgb, var(--mat-sys-surface-container-lowest) 80%, transparent); white-space: pre-wrap; font: inherit; }
 .plan-content { padding: 8px 12px; border-radius: var(--mat-sys-corner-small); background: var(--mat-sys-surface-container-lowest); max-height: 480px; overflow-y: auto; }
+.review { display: grid; gap: 12px; }
+.review-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; margin: 0; }
+.review-facts > div { min-width: 0; }
+.review-facts dt { color: var(--mat-sys-on-surface-variant); font: var(--mat-sys-label-large); }
+.review-facts dd { margin: 2px 0 0; overflow-wrap: anywhere; font: var(--mat-sys-body-medium); }
+.review-action, .raw-review, .review-details { background: var(--mat-sys-surface-container-lowest); }
+.review-action mat-panel-description { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.review-action pre, .raw-review pre { max-height: 288px; }
+.review-details { margin: 0 -4px; }
+@media (max-width: 599px) { .review-facts { grid-template-columns: 1fr; } }
 mat-card-actions { gap: 8px; flex-wrap: wrap; }
 mat-card-actions.responding { opacity: .72; }
 button { display: inline-flex; align-items: center; gap: 8px; }

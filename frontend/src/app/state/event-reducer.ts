@@ -350,6 +350,15 @@ export class EventReducer {
       const requestId = this.stringValue(payload.id) ?? '';
       const localDecision = this.localPermissionResponses.get(requestId);
       const options = this.permissionOptions(payload.options);
+      const candidate = {
+        requestId,
+        method: this.stringValue(payload.method) ?? '',
+        description: this.stringValue(payload.description) ?? '',
+        title: this.stringValue(payload['title']),
+        kind: this.stringValue(payload['kind']),
+        options,
+      };
+      if (entries.some((entry) => this.isEquivalentPermission(entry, candidate))) return turn;
       return {
         ...turn,
         entries: [
@@ -357,12 +366,7 @@ export class EventReducer {
           {
             id: this.nextId++,
             type: 'permission_request',
-            requestId,
-            method: this.stringValue(payload.method) ?? '',
-            description: this.stringValue(payload.description) ?? '',
-            title: this.stringValue(payload['title']),
-            kind: this.stringValue(payload['kind']),
-            options,
+            ...candidate,
             responded: localDecision !== undefined,
             ...(localDecision !== undefined ? this.permissionPresentation(options, localDecision) : {}),
           },
@@ -401,6 +405,20 @@ export class EventReducer {
     }
 
     return turn;
+  }
+
+  /** Suppress only an exact representation of a request already in this turn. */
+  private isEquivalentPermission(
+    entry: TurnEntry,
+    candidate: Pick<Extract<TurnEntry, { type: 'permission_request' }>, 'requestId' | 'method' | 'description' | 'title' | 'kind' | 'options'>,
+  ): boolean {
+    return entry.type === 'permission_request'
+      && entry.requestId === candidate.requestId
+      && entry.method === candidate.method
+      && entry.description === candidate.description
+      && entry.title === candidate.title
+      && entry.kind === candidate.kind
+      && JSON.stringify(entry.options ?? []) === JSON.stringify(candidate.options);
   }
 
   /** Returns new entries with the first matching permission resolved, else null. */

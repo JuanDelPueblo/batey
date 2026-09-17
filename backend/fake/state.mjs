@@ -929,7 +929,7 @@ export class FakeState {
       error: null,
       started_at: new Date().toISOString(),
       completed_at: null,
-      to_version: entry.version,
+      to_version: null,
     };
     this.agentOperations.set(opId, op);
 
@@ -946,6 +946,7 @@ export class FakeState {
       const from = agent.display?.version ?? "0.0.0";
       if (from !== entry.version) {
         agent.display = { ...agent.display, version: entry.version };
+        op.to_version = entry.version;
         this.markAuthStale(id);
         this.metadataChanged();
       }

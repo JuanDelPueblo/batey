@@ -468,6 +468,20 @@ describe('fake backend seed history', () => {
     assert.equal(state.agent(installed.id), undefined);
   });
 
+  it('leaves the update version empty when the installed version is current', () => {
+    const state = new FakeState();
+    const installed = state.installRegistryAgent({ registry_id: 'native-agent' });
+    const operation = state.startUpdate(installed.id);
+
+    assert.equal(operation.to_version, null);
+    state.agentOperations.get(operation.id)._completeAction();
+    const completed = state.getAgentOperation(operation.id);
+    assert.equal(completed.state, 'succeeded');
+    assert.equal(completed.to_version, null);
+
+    state.removeAgent(installed.id);
+  });
+
   it('T145: tracks determinate and indeterminate agent operations with stage transitions', () => {
     const state = new FakeState();
 
@@ -1009,4 +1023,3 @@ describe('fake backend seed history', () => {
     assert.equal(acp.checked_at, null);
   });
 });
-

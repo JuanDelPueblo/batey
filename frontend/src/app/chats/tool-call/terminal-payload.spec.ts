@@ -176,6 +176,71 @@ describe('parseTerminalPayload', () => {
     });
   });
 
+  it('recognizes explicit execute payload when it contains a nonblank status key', () => {
+    const raw = JSON.stringify({
+      status: 'in_progress',
+    });
+
+    const parsed = parseTerminalPayload(raw, {
+      toolKind: 'execute',
+      toolTitle: 'Run tests',
+    });
+
+    expect(parsed).not.toBeNull();
+    expect(parsed?.state).toBe('running');
+    expect(parsed?.stateLabel).toBe('Running');
+    expect(parsed?.command).toBe('Run tests');
+  });
+
+  it('preserves NON_TERMINAL_KINDS guard before status key recognition', () => {
+    const raw = JSON.stringify({
+      status: 'in_progress',
+    });
+
+    expect(parseTerminalPayload(raw, { toolKind: 'read' })).toBeNull();
+    expect(parseTerminalPayload(raw, { toolKind: 'think' })).toBeNull();
+  });
+
+  it('deduplicates stderr substring only when combined output is selected', () => {
+    const combined = JSON.stringify({
+      combinedOutput: 'main output\nerror details',
+      stderr: 'error details',
+    });
+    const parsedCombined = parseTerminalPayload(combined, { toolKind: 'execute' });
+    expect(parsedCombined).not.toBeNull();
+    expect(parsedCombined?.output).toBe('main output\nerror details');
+    expect(parsedCombined?.unrecognizedFields).toBeUndefined();
+  });
+
+  it('appends stderr when stdout or output is selected even if it appears as a substring', () => {
+    const stdoutPayload = JSON.stringify({
+      stdout: 'error details',
+      stderr: 'error details',
+    });
+    const parsedStdout = parseTerminalPayload(stdoutPayload, { toolKind: 'execute' });
+    expect(parsedStdout).not.toBeNull();
+    expect(parsedStdout?.output).toBe('error details\nerror details');
+    expect(parsedStdout?.unrecognizedFields).toBeUndefined();
+
+    const outputPayload = JSON.stringify({
+      output: 'error details',
+      stderr: 'error details',
+    });
+    const parsedOutput = parseTerminalPayload(outputPayload, { toolKind: 'execute' });
+    expect(parsedOutput).not.toBeNull();
+    expect(parsedOutput?.output).toBe('error details\nerror details');
+    expect(parsedOutput?.unrecognizedFields).toBeUndefined();
+  });
+
+  it('recognizes payload containing only stderr', () => {
+    const raw = JSON.stringify({
+      stderr: 'process crashed',
+    });
+    const parsed = parseTerminalPayload(raw, { toolKind: 'execute' });
+    expect(parsed).not.toBeNull();
+    expect(parsed?.output).toBe('process crashed');
+  });
+
   it('returns null for non-terminal kinds such as read, edit, search', () => {
     const raw = JSON.stringify({
       command: 'echo fake',

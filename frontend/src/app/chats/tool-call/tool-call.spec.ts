@@ -622,4 +622,58 @@ describe('ToolCallComponent', () => {
     expect(extraDetails.textContent).toContain('exit_code');
     expect(extraDetails.textContent).toContain('1');
   });
+
+  it('computes panelDescription accurately across exit codes, missing exit codes, and non-terminal tools', () => {
+    // 1. Terminal with exitCode 0
+    fixture.componentRef.setInput('tool', {
+      id: 101,
+      type: 'tool_call',
+      toolCallId: 't-101',
+      title: 'Run test',
+      kind: 'execute',
+      status: 'completed',
+      output: JSON.stringify({ commandLine: 'run test', exitCode: 0 }),
+    });
+    fixture.detectChanges();
+    expect(component.panelDescription()).toBe('completed (exit 0)');
+
+    // 2. Terminal with exitCode 2
+    fixture.componentRef.setInput('tool', {
+      id: 102,
+      type: 'tool_call',
+      toolCallId: 't-102',
+      title: 'Run test',
+      kind: 'execute',
+      status: 'completed',
+      output: JSON.stringify({ commandLine: 'run test', exitCode: 2 }),
+    });
+    fixture.detectChanges();
+    expect(component.panelDescription()).toBe('failed (exit 2)');
+
+    // 3. Terminal with no exitCode (running)
+    fixture.componentRef.setInput('tool', {
+      id: 103,
+      type: 'tool_call',
+      toolCallId: 't-103',
+      title: 'Run dev server',
+      kind: 'execute',
+      status: 'in_progress',
+      output: JSON.stringify({ commandLine: 'npm run dev' }),
+    });
+    fixture.detectChanges();
+    expect(component.panelDescription()).toBe('running');
+
+    // 4. Non-terminal tool
+    fixture.componentRef.setInput('tool', {
+      id: 104,
+      type: 'tool_call',
+      toolCallId: 't-104',
+      title: 'Read file',
+      kind: 'read',
+      status: 'custom_status',
+      output: 'file content',
+    });
+    fixture.detectChanges();
+    expect(component.panelDescription()).toBe('custom_status');
+  });
 });

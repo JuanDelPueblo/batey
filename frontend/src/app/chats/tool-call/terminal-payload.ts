@@ -1,14 +1,14 @@
-export type TerminalExecutionState = 'running' | 'completed' | 'failed';
-
 export interface TerminalExecution {
   command?: string;
   workingDir?: string;
-  exitCode?: number | null;
+  exitCode: number | null;
   output?: string;
   state: TerminalExecutionState;
   stateLabel: string;
   unrecognizedFields?: Record<string, unknown>;
 }
+
+export type TerminalExecutionState = 'running' | 'completed' | 'failed';
 
 export interface ParseTerminalOptions {
   toolStatus?: string | null;
@@ -42,6 +42,7 @@ const OUTPUT_KEYS = [
   'formattedOutput',
   'output',
   'stdout',
+  'stderr',
 ] as const;
 const STATUS_KEYS = ['state', 'status', 'executionState', 'execution_state'] as const;
 
@@ -128,6 +129,9 @@ export function parseTerminalPayload(
     (k) => obj![k] !== undefined && obj![k] !== null,
   );
   const hasAnyOutputKey = OUTPUT_KEYS.some((k) => obj![k] !== undefined && obj![k] !== null);
+  const hasNonBlankStatusKey = STATUS_KEYS.some(
+    (k) => typeof obj![k] === 'string' && (obj![k] as string).trim().length > 0,
+  );
 
   const isExplicitExecuteKind = kind === 'execute' || kind === 'terminal';
   const looksLikeTerminal =
@@ -135,7 +139,7 @@ export function parseTerminalPayload(
     hasExitCodeKey ||
     hasSpecificOutputKey ||
     (hasWorkdirKey && (hasAnyOutputKey || isExplicitExecuteKind)) ||
-    (isExplicitExecuteKind && hasAnyOutputKey);
+    (isExplicitExecuteKind && (hasAnyOutputKey || hasNonBlankStatusKey));
 
   if (!looksLikeTerminal) {
     return null;
@@ -214,10 +218,12 @@ export function parseTerminalPayload(
 
   // 4. Extract output body
   let output: string | undefined;
+  let selectedOutputKey: (typeof OUTPUT_KEYS)[number] | undefined;
   for (const k of OUTPUT_KEYS) {
     const val = obj[k];
     if (val !== undefined && val !== null) {
       output = normalizeOutputValue(val);
+      selectedOutputKey = k;
       consumedKeys.add(k);
       break;
     }
@@ -225,6 +231,7 @@ export function parseTerminalPayload(
   if (output !== undefined) {
     // Check other output keys: deduplicate only if normalized string equals primary output
     for (const k of OUTPUT_KEYS) {
+      if (k === 'stderr') continue;
       if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
       const norm = normalizeOutputValue(obj[k]);
       if (norm === output) {
@@ -232,20 +239,28 @@ export function parseTerminalPayload(
       }
     }
   }
-  // Check stderr if stdout was used and stderr has additional content
+  // Check stderr handling
   if (obj['stderr'] !== undefined && obj['stderr'] !== null) {
-    if (typeof obj['stderr'] === 'string') {
-      const stderrStr = obj['stderr'];
+    const stderrStr = normalizeOutputValue(obj['stderr']);
+    if (selectedOutputKey !== 'stderr') {
       if (output !== undefined) {
-        if (!output.includes(stderrStr)) {
+        const isCombined =
+          selectedOutputKey === 'combinedOutput' ||
+          selectedOutputKey === 'combined_output' ||
+          selectedOutputKey === 'formatted_output' ||
+          selectedOutputKey === 'formattedOutput';
+        if (isCombined) {
+          if (!output.includes(stderrStr)) {
+            output = output ? `${output}\n${stderrStr}` : stderrStr;
+          }
+        } else {
           output = output ? `${output}\n${stderrStr}` : stderrStr;
         }
-        consumedKeys.add('stderr');
       } else {
         output = stderrStr;
-        consumedKeys.add('stderr');
       }
     }
+    consumedKeys.add('stderr');
   }
 
   // 5. Determine execution state and label
@@ -281,38 +296,28 @@ export function parseTerminalPayload(
     }
 
     const effectiveStatus = payloadStatus || toolStatus;
-    if (effectiveStatus === 'completed' || effectiveStatus === 'success') {
-      state = 'completed';
-      stateLabel = 'Completed';
-    } else if (effectiveStatus === 'failed' || effectiveStatus === 'error') {
+    if (effectiveStatus === 'in_progress' || effectiveStatus === 'running' || effectiveStatus === 'pending') {
+      state = 'running';
+      stateLabel = 'Running';
+    } else if (
+      effectiveStatus === 'failed' ||
+      effectiveStatus === 'error' ||
+      effectiveStatus === 'rejected' ||
+      effectiveStatus === 'cancelled'
+    ) {
       state = 'failed';
       stateLabel = 'Failed';
     } else {
-      state = 'running';
-      stateLabel = 'Running';
+      state = 'completed';
+      stateLabel = 'Success';
     }
   }
 
-  // Check any remaining status keys to see if they're redundant with the resolved state
-  for (const k of STATUS_KEYS) {
-    if (consumedKeys.has(k) || obj[k] === undefined || obj[k] === null) continue;
-    if (typeof obj[k] === 'string') {
-      const val = (obj[k] as string).toLowerCase().trim();
-      const isRedundant =
-        (state === 'completed' && (val === 'completed' || val === 'success')) ||
-        (state === 'failed' && (val === 'failed' || val === 'error')) ||
-        (state === 'running' && (val === 'running' || val === 'in_progress'));
-      if (isRedundant) {
-        consumedKeys.add(k);
-      }
-    }
-  }
-
-  // 6. Preserve all unconsumed keys (conflicting aliases or unrecognized properties)
+  // 6. Collect any unrecognized fields
   const unrecognizedFields: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(obj)) {
-    if (!consumedKeys.has(k)) {
-      unrecognizedFields[k] = v;
+  for (const [key, value] of Object.entries(obj)) {
+    if (!consumedKeys.has(key)) {
+      unrecognizedFields[key] = value;
     }
   }
 
@@ -323,6 +328,6 @@ export function parseTerminalPayload(
     output,
     state,
     stateLabel,
-    ...(Object.keys(unrecognizedFields).length > 0 ? { unrecognizedFields } : {}),
+    unrecognizedFields: Object.keys(unrecognizedFields).length > 0 ? unrecognizedFields : undefined,
   };
 }

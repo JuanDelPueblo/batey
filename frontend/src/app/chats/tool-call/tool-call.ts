@@ -59,6 +59,17 @@ export class ToolCallComponent {
     }
   });
 
+  readonly panelDescription = computed(() => {
+    const term = this.terminal();
+    if (term) {
+      if (term.exitCode != null) {
+        return term.exitCode === 0 ? 'completed (exit 0)' : `failed (exit ${term.exitCode})`;
+      }
+      return term.state;
+    }
+    return this.tool().status;
+  });
+
   readonly semanticKind = computed<string>(() => {
     if (this.terminal()) {
       return 'execute';

@@ -259,29 +259,53 @@ fn clean_title_command(title: Option<&str>) -> Option<String> {
     if title.is_empty() {
         return None;
     }
-    // Strip structured prefixes like "Terminal: <cmd>". Anything else must
-    // not be inferred as a command.
-    let stripped = ["terminal:", "run command:", "execute command:", "execute:"]
-        .iter()
-        .find_map(|prefix| {
-            if title.len() >= prefix.len() && title[..prefix.len()].eq_ignore_ascii_case(prefix) {
-                Some(title[prefix.len()..].trim())
-            } else {
-                None
-            }
-        })
-        .unwrap_or(title);
+    // Strip structured prefixes like "Terminal: <cmd>".
+    let mut stripped = title;
+    let mut prefixed = false;
+    for prefix in ["terminal:", "run command:", "execute command:", "execute:"] {
+        if stripped.len() >= prefix.len() && stripped[..prefix.len()].eq_ignore_ascii_case(prefix) {
+            stripped = stripped[prefix.len()..].trim();
+            prefixed = true;
+            break;
+        }
+    }
+    let stripped = stripped.trim();
     if stripped.is_empty() {
         return None;
     }
     if GENERIC_TITLES.contains(&stripped.to_lowercase().as_str()) {
         return None;
     }
-    // Only accept a title-derived command when it looks structured: either it
-    // carried an explicit prefix above, or it is a plausible command line.
-    // A bare generic word was already rejected; multi-word or path-like
-    // titles are accepted as a Codex-style fallback.
+    // An explicitly prefixed title is structured evidence of a command.
+    // Anything else must itself look like a command line; bare prose
+    // ("Run the tests", "Inspect the dashboard") is never inferred as one.
+    if !prefixed && !looks_like_command_line(stripped) {
+        return None;
+    }
     Some(stripped.to_string())
+}
+
+/// Whether text has command-line structure: a single line whose leading
+/// token looks like a program invocation rather than prose. Program names
+/// are lowercase by convention, so a capitalized leading word marks prose.
+fn looks_like_command_line(text: &str) -> bool {
+    if text.contains('\n') || text.contains('\r') {
+        return false;
+    }
+    let first = text.split_whitespace().next().unwrap_or("");
+    let mut chars = first.chars();
+    match chars.next() {
+        Some(c)
+            if c.is_ascii_lowercase()
+                || c.is_ascii_digit()
+                || matches!(c, '.' | '/' | '~' | '-' | '_' | '$') =>
+        {
+            first.chars().all(|c| {
+                c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/' | '+' | ':')
+            })
+        }
+        _ => false,
+    }
 }
 
 fn as_obj(val: Option<&Value>) -> Option<&serde_json::Map<String, Value>> {
@@ -639,6 +663,44 @@ mod tests {
             Some("completed"),
         );
         assert!(update.is_none());
+    }
+
+    #[test]
+    fn prose_title_without_structured_command_is_rejected() {
+        // An execute-kind tool whose only command signal is a prose title
+        // must not become a task; only prefixed or command-structured titles
+        // qualify as a fallback.
+        let prose = parse_observed_update(
+            "execute",
+            Some("Run the frontend test suite"),
+            None,
+            None,
+            None,
+            Some("in_progress"),
+        );
+        assert!(prose.is_none());
+
+        let prefixed = parse_observed_update(
+            "execute",
+            Some("Terminal: cargo test"),
+            None,
+            None,
+            None,
+            Some("in_progress"),
+        )
+        .expect("prefixed title stays a valid command fallback");
+        assert_eq!(prefixed.command.as_deref(), Some("cargo test"));
+
+        let command_line = parse_observed_update(
+            "execute",
+            Some("npm run dev"),
+            None,
+            None,
+            None,
+            Some("in_progress"),
+        )
+        .expect("command-structured title stays a valid fallback");
+        assert_eq!(command_line.command.as_deref(), Some("npm run dev"));
     }
 
     #[test]

@@ -1108,7 +1108,7 @@ mod tests {
         }
         // Retention keeps at most max completed tasks; running tasks are never
         // pruned.
-        assert!(tracker.list_chat_tasks("c1").await.len() <= 4);
+        assert_eq!(tracker.list_chat_tasks("c1").await.len(), 2);
         let running = tracker
             .upsert_observed(
                 "c1",

@@ -12,7 +12,7 @@ use std::{path::PathBuf, sync::Arc};
 
 /// The auth flow temporarily points `BROWSER` at this executable. Browser
 /// launchers append the URL as an argument; this tiny process forwards it to
-/// the flow's loopback listener and exits without opening a browser itself.
+/// the flow's loopback listener and opens it with the platform browser API.
 /// It is inert unless both private capture environment variables are present.
 fn run_browser_capture_helper() -> bool {
     let Ok(address) = std::env::var("BATEY_AUTH_BROWSER_CAPTURE_ADDR") else {
@@ -38,28 +38,44 @@ fn run_browser_capture_helper() -> bool {
     // The capture is already delivered to Batey, and opener diagnostics are
     // silenced so they cannot become authentication stderr.
     #[cfg(target_os = "windows")]
-    let mut opener = {
-        let mut command = std::process::Command::new("cmd");
-        command.args(["/C", "start", ""]).arg(url);
-        command
-    };
+    open_url_with_windows(&url);
     #[cfg(target_os = "macos")]
-    let mut opener = {
-        let mut command = std::process::Command::new("open");
-        command.arg(url);
-        command
-    };
+    open_url_with_command("open", &url);
     #[cfg(all(unix, not(target_os = "macos")))]
-    let mut opener = {
-        let mut command = std::process::Command::new("xdg-open");
-        command.arg(url);
-        command
-    };
-    let _ = opener
+    open_url_with_command("xdg-open", &url);
+    true
+}
+
+#[cfg(target_os = "windows")]
+fn open_url_with_windows(url: &str) {
+    use std::{os::windows::ffi::OsStrExt, ptr};
+    use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWNORMAL};
+
+    let wide_url: Vec<u16> = std::ffi::OsStr::new(url)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect();
+    // ShellExecuteW delegates directly to the user's registered browser and
+    // does not interpret the URL as command-line or shell syntax.
+    unsafe {
+        let _ = ShellExecuteW(
+            ptr::null_mut(),
+            ptr::null(),
+            wide_url.as_ptr(),
+            ptr::null(),
+            ptr::null(),
+            SW_SHOWNORMAL,
+        );
+    }
+}
+
+#[cfg(any(target_os = "macos", all(unix, not(target_os = "macos"))))]
+fn open_url_with_command(program: &str, url: &str) {
+    let _ = std::process::Command::new(program)
+        .arg(url)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
-    true
 }
 
 #[derive(Parser)]

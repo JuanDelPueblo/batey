@@ -1,5 +1,8 @@
 # Batey
 
+> [!NOTE]
+> I ended up discovering https://github.com/pingdotgg/t3code, which fulfills 99% of my use cases that this project had planned, therefore rendering this project mostly obsolete. I may still occasionally work on this project when I have nothing better to do, but progress will be stalled for a while.
+
 An uncomplicated hub to connect and manage all your ACP agents together.
 
 No more shuffling around various tmux sessions or relying on each agent's proprietary remote control interface. Batey allows you to drive agents such as Codex, Claude Code, and OpenCode across multiple projects at the same time through a beautiful Material 3 web page that you self-host. Agents can run in parallel using separate worktrees to prevent conflicts and maximize your usage quota across each LLM provider.

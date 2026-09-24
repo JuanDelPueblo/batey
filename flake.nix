@@ -2,7 +2,6 @@
   description = "Batey: persistent ACP project and chat supervisor";
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
   inputs.crane.url = "github:ipetkov/crane";
-  inputs.crane.inputs.nixpkgs.follows = "nixpkgs";
   outputs = { self, nixpkgs, crane }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" ];
